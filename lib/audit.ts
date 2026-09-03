@@ -43,15 +43,13 @@ export type AuditResult = {
 
 const MAX_PAGES = 8;
 const MAX_HTML_CHARS = 45000;
-// Prefer a lighter stable model for production throughput, then fall back to
-// stronger Flash models if Google is temporarily capacity constrained.
 const GEMINI_MODELS = [
   "gemini-3.5-flash-lite",
   "gemini-3.5-flash",
   "gemini-3.7-flash",
   "gemini-flash-latest",
 ];
-const SCREENSHOT_WIDTH = 1200;
+const SCREENSHOT_WIDTH = 1440;
 
 function stripTags(value: string) {
   return value
@@ -65,10 +63,15 @@ function stripTags(value: string) {
 }
 
 function makeScreenshotUrl(url: string) {
-  // Thum.io's path-based form does not accept an encoded URL: encoded slashes
-  // such as %2F are rejected by the API's Tomcat layer. Use its documented
-  // query-parameter form so the destination URL can be safely percent-encoded.
-  return `https://image.thum.io/get/width/${SCREENSHOT_WIDTH}/crop/1200/noanimate/?url=${encodeURIComponent(url)}`;
+  // Use base64url for the nested target URL. This avoids browser URL-parser
+  // errors when a target contains characters such as %, #, Unicode, or nested
+  // query strings, while the server still validates the decoded destination.
+  const encoded = Buffer.from(url, "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+  return `/api/screenshot?u=${encoded}`;
 }
 
 function absoluteSameDomainLinks(html: string, baseUrl: string) {
@@ -140,29 +143,22 @@ function fallbackFinding(
     title,
     description,
     recommendation,
-    screenrootTasks: [
-      "Review the rendered experience and validate the issue with representative user tasks.",
-    ],
-    devTasks: [
-      "Verify the implementation against the intended UX behavior and accessibility requirements.",
-    ],
+    screenrootTasks: ["Review the rendered experience and validate the issue with representative user tasks."],
+    devTasks: ["Verify the implementation against the intended UX behavior and accessibility requirements."],
     uxPerspective: {
       law,
       definition,
-      assessment:
-        "No definitive violation can be confirmed from markup alone; validate the rendered interface and user behavior.",
+      assessment: "No definitive violation can be confirmed from markup alone; validate the rendered interface and user behavior.",
     },
-    evidence: [
-      {
-        label: "Page overview",
-        detail: "Limited first-pass evidence",
-        marker: 1,
-        x: 5,
-        y: 5,
-        width: 90,
-        height: 20,
-      },
-    ],
+    evidence: [{
+      label: "Page overview",
+      detail: "Limited first-pass evidence",
+      marker: 1,
+      x: 5,
+      y: 5,
+      width: 90,
+      height: 20,
+    }],
   };
 }
 
@@ -170,26 +166,17 @@ function normaliseFinding(raw: any, index: number): Finding {
   const evidence = Array.isArray(raw?.evidence) ? raw.evidence : [];
   return {
     id: String(raw?.id || `finding-${index + 1}`),
-    severity:
-      raw?.severity === "high" || raw?.severity === "medium" ? raw.severity : "low",
+    severity: raw?.severity === "high" || raw?.severity === "medium" ? raw.severity : "low",
     category: String(raw?.category || "Overall UX"),
     title: String(raw?.title || "UX issue"),
     description: String(raw?.description || ""),
     recommendation: String(raw?.recommendation || "Validate and improve the experience."),
-    screenrootTasks: Array.isArray(raw?.screenrootTasks)
-      ? raw.screenrootTasks.map(String).slice(0, 5)
-      : [],
+    screenrootTasks: Array.isArray(raw?.screenrootTasks) ? raw.screenrootTasks.map(String).slice(0, 5) : [],
     devTasks: Array.isArray(raw?.devTasks) ? raw.devTasks.map(String).slice(0, 5) : [],
     uxPerspective: {
       law: String(raw?.uxPerspective?.law || "Evidence review"),
-      definition: String(
-        raw?.uxPerspective?.definition ||
-          "A UX principle or accessibility requirement used to interpret the evidence.",
-      ),
-      assessment: String(
-        raw?.uxPerspective?.assessment ||
-          "Potential issue; confirm through rendered inspection or user testing.",
-      ),
+      definition: String(raw?.uxPerspective?.definition || "A UX principle or accessibility requirement used to interpret the evidence."),
+      assessment: String(raw?.uxPerspective?.assessment || "Potential issue; confirm through rendered inspection or user testing."),
     },
     evidence: evidence.slice(0, 4).map((item: any, i: number) => ({
       label: String(item?.label || "Evidence"),
@@ -211,48 +198,27 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function requestGemini(
-  model: string,
-  apiKey: string,
-  prompt: string,
-): Promise<Response> {
+async function requestGemini(model: string, apiKey: string, prompt: string): Promise<Response> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
       {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-goog-api-key": apiKey,
-        },
+        headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
         body: JSON.stringify({
           contents: [{ role: "user", parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.2,
-            responseMimeType: "application/json",
-          },
+          generationConfig: { temperature: 0.2, responseMimeType: "application/json" },
         }),
         signal: AbortSignal.timeout(25000),
       },
     );
-
-    if (response.ok || !isRetryableGeminiStatus(response.status) || attempt === 1) {
-      return response;
-    }
-
-    // Capacity errors are commonly transient. Give the same model one short
-    // retry before moving to the next model in the fallback chain.
+    if (response.ok || !isRetryableGeminiStatus(response.status) || attempt === 1) return response;
     await sleep(700 * (attempt + 1));
   }
-
   throw new Error("Gemini request failed after retry.");
 }
 
-async function analyseWithGemini(
-  url: string,
-  title: string,
-  html: string,
-): Promise<{ score: number; summary: string; findings: Finding[] }> {
+async function analyseWithGemini(url: string, title: string, html: string): Promise<{ score: number; summary: string; findings: Finding[] }> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY is not configured.");
 
@@ -277,26 +243,18 @@ RENDERED HTML/TEXT:
 ${html.slice(0, MAX_HTML_CHARS)}`;
 
   let lastError = "unknown error";
-
   for (const model of GEMINI_MODELS) {
     try {
       const response = await requestGemini(model, apiKey, prompt);
       if (!response.ok) {
         const detail = await response.text().catch(() => "");
         lastError = `${model} returned ${response.status}${detail ? `: ${detail.slice(0, 180)}` : ""}`;
-        // 429/5xx capacity failures can use the next model. Other errors are
-        // configuration/request errors and should fail immediately with context.
         if (isRetryableGeminiStatus(response.status)) continue;
         throw new Error(lastError);
       }
-
       const data = await response.json();
-      const text =
-        data?.candidates?.[0]?.content?.parts
-          ?.map((part: any) => part.text || "")
-          .join("") || "";
+      const text = data?.candidates?.[0]?.content?.parts?.map((part: any) => part.text || "").join("") || "";
       const parsed = parseJson(text);
-
       return {
         score: Math.max(0, Math.min(100, Number(parsed.score) || 0)),
         summary: String(parsed.summary || ""),
@@ -304,12 +262,10 @@ ${html.slice(0, MAX_HTML_CHARS)}`;
       };
     } catch (error) {
       lastError = error instanceof Error ? error.message : "unknown error";
-      // Network timeouts can also be transient; try the next model.
       if (!/Gemini returned (400|401|403|404)/.test(lastError)) continue;
       throw new Error(lastError);
     }
   }
-
   throw new Error(`All Gemini models were temporarily unavailable. Last error: ${lastError}`);
 }
 
@@ -322,16 +278,13 @@ export async function createAudit(url: string): Promise<AuditResult> {
 
   while (cursor < Math.min(discovered.size, MAX_PAGES)) {
     const pageUrl = Array.from(discovered)[cursor++];
-
     try {
       const page = await fetchPage(pageUrl);
       if (cursor === 1) firstTitle = page.title;
-
       for (const link of absoluteSameDomainLinks(page.html, pageUrl)) {
         if (discovered.size >= MAX_PAGES) break;
         discovered.add(link);
       }
-
       let analysis;
       try {
         analysis = await analyseWithGemini(pageUrl, page.title, page.html);
@@ -339,28 +292,10 @@ export async function createAudit(url: string): Promise<AuditResult> {
         analysis = {
           score: 60,
           summary: `Gemini analysis was unavailable (${error instanceof Error ? error.message : "unknown error"}).`,
-          findings: [
-            fallbackFinding(
-              "Audit status",
-              "AI analysis unavailable",
-              "The page was fetched successfully, but AI analysis could not be completed.",
-              "Configure GEMINI_API_KEY and rerun the audit.",
-              "Evidence review",
-              "A finding should be supported by observable page evidence before it is treated as a confirmed issue.",
-            ),
-          ],
+          findings: [fallbackFinding("Audit status", "AI analysis unavailable", "The page was fetched successfully, but AI analysis could not be completed.", "Configure GEMINI_API_KEY and rerun the audit.", "Evidence review", "A finding should be supported by observable page evidence before it is treated as a confirmed issue.")],
         };
       }
-
-      pages.push({
-        url: pageUrl,
-        path: new URL(pageUrl).pathname || "/",
-        pageTitle: page.title,
-        score: analysis.score,
-        summary: analysis.summary,
-        screenshotUrl: makeScreenshotUrl(pageUrl),
-        findings: analysis.findings,
-      });
+      pages.push({ url: pageUrl, path: new URL(pageUrl).pathname || "/", pageTitle: page.title, score: analysis.score, summary: analysis.summary, screenshotUrl: makeScreenshotUrl(pageUrl), findings: analysis.findings });
     } catch (error) {
       pages.push({
         url: pageUrl,
@@ -369,27 +304,14 @@ export async function createAudit(url: string): Promise<AuditResult> {
         score: 0,
         summary: `Could not fetch this page: ${error instanceof Error ? error.message : "unknown error"}.`,
         screenshotUrl: makeScreenshotUrl(pageUrl),
-        findings: [
-          fallbackFinding(
-            "Crawl",
-            "Page could not be fetched",
-            "The crawler could not retrieve this page, so no UX conclusion is made.",
-            "Check the page availability and rerun the audit.",
-            "Evidence review",
-            "UX findings should be based on observable evidence from the page.",
-          ),
-        ],
+        findings: [fallbackFinding("Crawl", "Page could not be fetched", "The crawler could not retrieve this page, so no UX conclusion is made.", "Check the page availability and rerun the audit.", "Evidence review", "UX findings should be based on observable evidence from the page.")],
       });
     }
   }
 
   if (pages.length === 0) throw new Error("Unable to fetch the website.");
-
   const usable = pages.filter((page) => page.score > 0);
-  const score = Math.round(
-    usable.reduce((sum, page) => sum + page.score, 0) / Math.max(usable.length, 1),
-  );
-
+  const score = Math.round(usable.reduce((sum, page) => sum + page.score, 0) / Math.max(usable.length, 1));
   return {
     url,
     pageTitle: firstTitle,

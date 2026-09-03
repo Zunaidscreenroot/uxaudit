@@ -13,7 +13,8 @@ function isPrivateOrReservedIp(address: string) {
       a === 0 ||
       (a === 169 && b === 254) ||
       (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168 || a === 192 && b === 0 && address === "192.0.0.1") ||
+      (a === 192 && b === 168) ||
+      (a === 192 && b === 0 && address === "192.0.0.1") ||
       (a === 100 && b >= 64 && b <= 127)
     );
   }
@@ -59,7 +60,9 @@ async function validateTarget(rawUrl: string) {
   }
 
   const literalIp = net.isIP(hostname) ? hostname : null;
-  const addresses = literalIp ? [literalIp] : (await dns.lookup(hostname, { all: true })).map((entry) => entry.address);
+  const addresses = literalIp
+    ? [literalIp]
+    : (await dns.lookup(hostname, { all: true })).map((entry) => entry.address);
   if (!addresses.length || addresses.some(isPrivateOrReservedIp)) {
     throw new Error("Private or reserved network addresses are not supported.");
   }
@@ -67,9 +70,20 @@ async function validateTarget(rawUrl: string) {
   return target.toString();
 }
 
+function decodeBase64Url(value: string) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+  return Buffer.from(padded, "base64").toString("utf8");
+}
+
 export async function GET(request: Request) {
   try {
-    const rawUrl = new URL(request.url).searchParams.get("url")?.trim() ?? "";
+    const requestUrl = new URL(request.url);
+    const encodedTarget = requestUrl.searchParams.get("u")?.trim() ?? "";
+    const rawUrl = encodedTarget
+      ? decodeBase64Url(encodedTarget)
+      : requestUrl.searchParams.get("url")?.trim() ?? "";
+
     if (!rawUrl) return NextResponse.json({ error: "Missing website URL." }, { status: 400 });
 
     const target = await validateTarget(rawUrl);
@@ -78,7 +92,9 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "BROWSERLESS_API_TOKEN is not configured." }, { status: 503 });
     }
 
-    const endpoint = `https://production-sfo.browserless.io/screenshot?token=${encodeURIComponent(token)}`;
+    const endpoint = new URL("https://production-sfo.browserless.io/screenshot");
+    endpoint.searchParams.set("token", token);
+
     const response = await fetch(endpoint, {
       method: "POST",
       headers: {
@@ -90,8 +106,7 @@ export async function GET(request: Request) {
         options: {
           fullPage: true,
           type: "png",
-          viewport: { width: 1440, height: 900 },
-          deviceScaleFactor: 2,
+          viewport: { width: 1440, height: 900, deviceScaleFactor: 2 },
           waitForImages: true,
           timeout: 30000,
         },
@@ -103,13 +118,17 @@ export async function GET(request: Request) {
 
     if (!response.ok) {
       const detail = await response.text().catch(() => "");
-      console.error("Browserless screenshot failed", response.status, detail.slice(0, 500));
-      return NextResponse.json({ error: "Screenshot service could not render this page." }, { status: 502 });
+      console.error("Browserless screenshot failed", response.status, detail.slice(0, 1000));
+      return NextResponse.json(
+        { error: `Screenshot service returned HTTP ${response.status}.` },
+        { status: 502 },
+      );
     }
 
     const contentType = response.headers.get("content-type") ?? "";
     if (!contentType.toLowerCase().startsWith("image/")) {
-      console.error("Browserless returned unexpected content type", contentType);
+      const detail = await response.text().catch(() => "");
+      console.error("Browserless returned unexpected content type", contentType, detail.slice(0, 500));
       return NextResponse.json({ error: "Screenshot service returned an invalid image." }, { status: 502 });
     }
 
