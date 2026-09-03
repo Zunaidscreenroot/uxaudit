@@ -103,15 +103,10 @@ export async function GET(request: Request) {
       },
       body: JSON.stringify({
         url: target,
-        viewport: { width: 1440, height: 900, deviceScaleFactor: 2 },
         options: {
           fullPage: true,
           type: "png",
-          waitForImages: true,
-          timeout: 30000,
         },
-        scrollPage: true,
-        bestAttempt: true,
       }),
       signal: AbortSignal.timeout(45000),
     });
