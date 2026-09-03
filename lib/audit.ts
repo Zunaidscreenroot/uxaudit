@@ -18,134 +18,200 @@ export type Finding = {
   description: string;
   recommendation: string;
   screenrootTasks: string[];
+  devTasks: string[];
   uxPerspective: { law: string; definition: string; assessment: string };
   evidence: Evidence[];
 };
 
-export type AuditResult = {
+export type AuditPage = {
   url: string;
+  path: string;
+  pageTitle: string;
   score: number;
   summary: string;
-  pageTitle: string;
   screenshotUrl: string;
   findings: Finding[];
 };
 
-function countMatches(html: string, pattern: RegExp) {
-  return (html.match(pattern) ?? []).length;
-}
+export type AuditResult = {
+  url: string;
+  pageTitle: string;
+  score: number;
+  summary: string;
+  pages: AuditPage[];
+};
+
+const MAX_PAGES = 8;
+const MAX_HTML_CHARS = 45000;
+const GEMINI_MODEL = "gemini-2.5-flash";
 
 function stripTags(value: string) {
-  return value.replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
+  return value
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function escapeForPrompt(value: string) {
+  return value.slice(0, MAX_HTML_CHARS);
 }
 
 function makeScreenshotUrl(url: string) {
-  return `https://image.thum.io/get/width/1440/crop/1000/${encodeURIComponent(url)}`;
+  return `https://image.thum.io/get/width/1440/crop/1200/${encodeURIComponent(url)}`;
+}
+
+function absoluteSameDomainLinks(html: string, baseUrl: string) {
+  const base = new URL(baseUrl);
+  const links = new Set<string>();
+  for (const match of html.matchAll(/<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>/gi)) {
+    const href = match[1].trim();
+    if (!href || href.startsWith("#") || /^(mailto:|tel:|javascript:|data:)/i.test(href)) continue;
+    try {
+      const url = new URL(href, base);
+      url.hash = "";
+      if (url.protocol === "http:" || url.protocol === "https:") {
+        if (url.hostname === base.hostname) links.add(url.toString());
+      }
+    } catch { /* ignore malformed links */ }
+  }
+  return [...links];
+}
+
+async function fetchPage(url: string) {
+  const response = await fetch(url, {
+    headers: { "User-Agent": "ScreenRoot-UX-Audit/2.0" },
+    redirect: "follow",
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!response.ok) throw new Error(`Website returned ${response.status}`);
+  const html = await response.text();
+  const title = stripTags(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? url).slice(0, 120) || url;
+  return { html, title };
+}
+
+function parseJson(text: string) {
+  const cleaned = text.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start < 0 || end < start) throw new Error("Gemini returned invalid JSON.");
+  return JSON.parse(cleaned.slice(start, end + 1));
+}
+
+function fallbackFinding(category: string, title: string, description: string, recommendation: string, law: string, definition: string): Finding {
+  return {
+    id: `fallback-${Date.now()}`,
+    severity: "low",
+    category,
+    title,
+    description,
+    recommendation,
+    screenrootTasks: ["Review the rendered experience and validate the issue with representative user tasks."],
+    devTasks: ["Verify the implementation against the intended UX behavior and accessibility requirements."],
+    uxPerspective: { law, definition, assessment: "No definitive violation can be confirmed from markup alone; validate the rendered interface and user behavior." },
+    evidence: [{ label: "Page overview", detail: "Limited first-pass evidence", marker: 1, x: 5, y: 5, width: 90, height: 88 }],
+  };
+}
+
+function normaliseFinding(raw: any, index: number): Finding {
+  const evidence = Array.isArray(raw?.evidence) ? raw.evidence : [];
+  return {
+    id: String(raw?.id || `finding-${index + 1}`),
+    severity: raw?.severity === "high" || raw?.severity === "medium" ? raw.severity : "low",
+    category: String(raw?.category || "Overall UX"),
+    title: String(raw?.title || "UX issue"),
+    description: String(raw?.description || ""),
+    recommendation: String(raw?.recommendation || "Validate and improve the experience."),
+    screenrootTasks: Array.isArray(raw?.screenrootTasks) ? raw.screenrootTasks.map(String).slice(0, 5) : [],
+    devTasks: Array.isArray(raw?.devTasks) ? raw.devTasks.map(String).slice(0, 5) : [],
+    uxPerspective: {
+      law: String(raw?.uxPerspective?.law || "Evidence review"),
+      definition: String(raw?.uxPerspective?.definition || "A UX principle or accessibility requirement used to interpret the evidence."),
+      assessment: String(raw?.uxPerspective?.assessment || "Potential issue; confirm through rendered inspection or user testing."),
+    },
+    evidence: evidence.slice(0, 4).map((item: any, i: number) => ({
+      label: String(item?.label || "Evidence"), detail: String(item?.detail || ""), marker: Number(item?.marker || i + 1),
+      x: Math.max(0, Math.min(95, Number(item?.x ?? 5))), y: Math.max(0, Math.min(95, Number(item?.y ?? 5))),
+      width: Math.max(2, Math.min(95, Number(item?.width ?? 20))), height: Math.max(2, Math.min(95, Number(item?.height ?? 10))),
+    })),
+  };
+}
+
+async function analyseWithGemini(url: string, title: string, html: string): Promise<{ score: number; summary: string; findings: Finding[] }> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY is not configured.");
+
+  const prompt = `You are a senior UX auditor for ScreenRoot. Analyse one webpage using the supplied URL, title and HTML. Return ONLY valid JSON.
+
+Rules:
+- Evidence must be grounded in the supplied markup/text. Never invent visible UI.
+- Treat UX laws, heuristics and WCAG as interpretive frameworks, not proof. Use "Potential violation" language unless the supplied evidence directly establishes a requirement failure.
+- Prefer specific findings over generic advice. Identify the exact element/content pattern that supports each finding.
+- Use relevant laws such as Hick's Law, Fitts's Law, Jakob's Law, Miller's Law, Tesler's Law, Doherty Threshold, Peak-End Rule, Aesthetic-Usability Effect, Zeigarnik Effect, Von Restorff Effect, Gestalt principles, Nielsen heuristics, or WCAG when appropriate. Do not force a law when it does not fit.
+- Evidence coordinates are approximate percentage boxes on a 1440px-wide screenshot. Use x/y/width/height between 0 and 100 and keep them plausible for the referenced content. If exact location cannot be inferred, use a broad region.
+- Score from 0-100. Consider severity and breadth; do not give a perfect score merely because markup is sparse.
+- Return 3-8 high-value findings when evidence supports them; otherwise return fewer.
+
+JSON schema:
+{"score": number, "summary": string, "findings": [{"id": string, "severity":"high|medium|low", "category": string, "title": string, "description": string, "recommendation": string, "screenrootTasks": string[], "devTasks": string[], "uxPerspective":{"law":string,"definition":string,"assessment":string}, "evidence":[{"label":string,"detail":string,"marker":number,"x":number,"y":number,"width":number,"height":number}]}]}
+
+URL: ${url}
+TITLE: ${title}
+HTML/TEXT:
+${escapeForPrompt(html)}`;
+
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { temperature: 0.2, responseMimeType: "application/json" } }),
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!response.ok) throw new Error(`Gemini returned ${response.status}`);
+  const data = await response.json();
+  const text = data?.candidates?.[0]?.content?.parts?.map((part: any) => part.text || "").join("") || "";
+  const parsed = parseJson(text);
+  return { score: Math.max(0, Math.min(100, Number(parsed.score) || 0)), summary: String(parsed.summary || ""), findings: (Array.isArray(parsed.findings) ? parsed.findings : []).map(normaliseFinding) };
 }
 
 export async function createAudit(url: string): Promise<AuditResult> {
-  let html = "";
-  let pageTitle = url;
-  let fetchError = "";
+  const root = new URL(url);
+  let firstHtml = "";
+  let firstTitle = root.hostname;
+  const discovered = new Set<string>([root.toString()]);
+  const pages: AuditPage[] = [];
+  let cursor = 0;
 
-  try {
-    const response = await fetch(url, {
-      headers: { "User-Agent": "ScreenRoot-UX-Audit/1.0" },
-      redirect: "follow",
-      signal: AbortSignal.timeout(12000),
-    });
-    if (!response.ok) throw new Error(`Website returned ${response.status}`);
-    html = await response.text();
-    pageTitle = stripTags(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? url).slice(0, 120) || url;
-  } catch (error) {
-    fetchError = error instanceof Error ? error.message : "Unable to fetch the website.";
+  while (cursor < Math.min(discovered.size, MAX_PAGES)) {
+    const pageUrl = [...discovered][cursor++];
+    try {
+      const page = await fetchPage(pageUrl);
+      if (!firstHtml) { firstHtml = page.html; firstTitle = page.title; }
+      for (const link of absoluteSameDomainLinks(page.html, pageUrl)) {
+        if (discovered.size >= MAX_PAGES) break;
+        discovered.add(link);
+      }
+      let analysis;
+      try {
+        analysis = await analyseWithGemini(pageUrl, page.title, page.html);
+      } catch (error) {
+        analysis = {
+          score: 60,
+          summary: `Gemini analysis was unavailable for this page (${error instanceof Error ? error.message : "unknown error"}).`,
+          findings: [fallbackFinding("Audit status", "AI analysis unavailable", "The page was fetched successfully, but the AI analysis could not be completed.", "Configure GEMINI_API_KEY and rerun the audit.", "Evidence review", "A finding should be supported by observable page evidence before it is treated as a confirmed issue.")],
+        };
+      }
+      const path = new URL(pageUrl).pathname || "/";
+      pages.push({ url: pageUrl, path, pageTitle: page.title, score: analysis.score, summary: analysis.summary, screenshotUrl: makeScreenshotUrl(pageUrl), findings: analysis.findings });
+    } catch (error) {
+      pages.push({ url: pageUrl, path: new URL(pageUrl).pathname || "/", pageTitle: pageUrl, score: 0, summary: `Could not fetch this page: ${error instanceof Error ? error.message : "unknown error"}.`, screenshotUrl: makeScreenshotUrl(pageUrl), findings: [fallbackFinding("Crawl", "Page could not be fetched", "The crawler could not retrieve this page, so no UX conclusion is made.", "Check the page availability and rerun the audit.", "Evidence review", "UX findings should be based on observable evidence from the page.")] });
+    }
   }
 
-  const navLinks = countMatches(html, /<nav\b/gi) || countMatches(html, /<a\b[^>]*href/gi);
-  const headings = countMatches(html, /<h[1-6]\b/gi);
-  const buttons = countMatches(html, /<(button|a)\b[^>]*(class|role)=[^>]*(button|cta)/gi);
-  const forms = countMatches(html, /<form\b/gi);
-  const images = countMatches(html, /<img\b/gi);
-  const imagesWithoutAlt = countMatches(html, /<img\b(?![^>]*\balt\s*=)[^>]*>/gi);
-  const inputs = countMatches(html, /<input\b/gi);
-  const paragraphs = countMatches(html, /<p\b/gi);
-
-  const findings: Finding[] = [];
-
-  if (navLinks > 8) {
-    findings.push({
-      id: "navigation-choice-load", severity: "high", category: "Navigation and wayfinding",
-      title: "Navigation presents a high choice load",
-      description: `The page exposes approximately ${navLinks} navigation/link targets. A large choice set can make it harder to decide where to go next, especially when labels are similar.`,
-      recommendation: "Reduce competing top-level choices, group related destinations, and make the primary journey visually dominant.",
-      screenrootTasks: ["Review the information architecture and top-level navigation hierarchy.", "Consolidate overlapping destinations and rewrite labels around user tasks.", "Define one primary navigation path for the highest-value user journeys."],
-      uxPerspective: { law: "Hick's Law", definition: "The time and effort required to make a decision generally increases as the number of available choices increases.", assessment: "Potential violation: the detected number of link choices increases decision effort. Validate with task-based testing before treating this as a definitive usability failure." },
-      evidence: [{ label: "Navigation / links", detail: `${navLinks} link targets detected`, marker: 1, x: 6, y: 12, width: 88, height: 12 }],
-    });
-  }
-
-  if (buttons < 1) {
-    findings.push({
-      id: "primary-action-clarity", severity: "high", category: "Interaction and conversion",
-      title: "A clearly identifiable primary action was not detected",
-      description: "The fetched markup does not expose an obvious CTA/button pattern using common button semantics or naming.",
-      recommendation: "Establish a single dominant CTA for the page goal and use consistent styling and language for it.",
-      screenrootTasks: ["Define the primary user task and corresponding CTA.", "Create a clear visual hierarchy between primary and secondary actions.", "Test CTA comprehension without relying on surrounding explanatory copy."],
-      uxPerspective: { law: "Fitts's Law", definition: "The time to acquire a target is influenced by its size and distance; larger, well-positioned targets are generally easier and faster to select.", assessment: "Potential violation: a missing or weakly signalled primary target can increase interaction effort. Confirm against the rendered interface." },
-      evidence: [{ label: "Primary action", detail: "No common CTA/button pattern detected", marker: 2, x: 65, y: 30, width: 28, height: 12 }],
-    });
-  }
-
-  if (headings < 2 || paragraphs > 12) {
-    findings.push({
-      id: "content-scannability", severity: "medium", category: "Content hierarchy and scannability",
-      title: "Content hierarchy may not support fast scanning",
-      description: `The page contains ${headings} heading elements and approximately ${paragraphs} paragraph blocks. Dense content with weak structural breaks can increase scanning effort.`,
-      recommendation: "Use descriptive section headings, shorter content blocks, bullets, and progressive disclosure for secondary information.",
-      screenrootTasks: ["Create a content hierarchy around user questions and tasks.", "Break dense copy into scannable sections with descriptive headings.", "Prioritise the information users need before optional detail."],
-      uxPerspective: { law: "Jakob's Law", definition: "Users tend to expect interfaces to work in ways similar to interfaces they already know.", assessment: "Potential violation: unconventional or weakly signposted content structure can increase orientation effort. Review against established web patterns." },
-      evidence: [{ label: "Content structure", detail: `${headings} headings / ${paragraphs} paragraphs detected`, marker: 3, x: 7, y: 35, width: 86, height: 38 }],
-    });
-  }
-
-  if (images > 0 && imagesWithoutAlt > 0) {
-    findings.push({
-      id: "image-accessibility", severity: "medium", category: "Accessibility",
-      title: "Some images appear to lack alternative text",
-      description: `${imagesWithoutAlt} of approximately ${images} image elements do not expose an alt attribute in the fetched markup.`,
-      recommendation: "Add meaningful alternative text to informative images and use empty alt text for purely decorative imagery.",
-      screenrootTasks: ["Audit image purpose and classify informative versus decorative imagery.", "Add concise alt text that communicates the image's relevant meaning.", "Validate with keyboard and screen-reader testing."],
-      uxPerspective: { law: "WCAG 1.1.1 — Non-text Content", definition: "WCAG requires meaningful non-text content to have a text alternative that serves an equivalent purpose, with exceptions for decorative content.", assessment: "Potential accessibility failure: missing alt attributes can prevent users of assistive technology from understanding informative images." },
-      evidence: [{ label: "Images", detail: `${imagesWithoutAlt} image(s) without an alt attribute`, marker: 4, x: 8, y: 76, width: 84, height: 15 }],
-    });
-  }
-
-  if (forms > 0 && inputs > 4) {
-    findings.push({
-      id: "form-complexity", severity: "medium", category: "Forms and task flow",
-      title: "The form may create unnecessary interaction effort",
-      description: `The page contains ${forms} form(s) and approximately ${inputs} input controls. Long forms can increase completion effort when every field is presented at once.`,
-      recommendation: "Remove non-essential fields, group related questions, use sensible defaults, and expose inline validation and clear completion feedback.",
-      screenrootTasks: ["Audit every field against a clear business or user need.", "Group fields by task and consider progressive disclosure.", "Design validation, error, loading, and success states with engineering."],
-      uxPerspective: { law: "Tesler's Law", definition: "Every system has an irreducible amount of complexity; the goal is to manage where that complexity lives rather than simply adding more steps for users.", assessment: "Potential violation: exposing avoidable complexity in a form shifts system complexity onto the user." },
-      evidence: [{ label: "Form controls", detail: `${inputs} input controls detected`, marker: 5, x: 8, y: 50, width: 84, height: 22 }],
-    });
-  }
-
-  if (findings.length === 0) {
-    findings.push({
-      id: "baseline-review", severity: "low", category: "Overall UX",
-      title: "No major markup-level heuristic signal detected",
-      description: "The first-pass crawler did not find enough evidence to flag a major issue from the available HTML. Visual and task testing can reveal issues that markup alone cannot.",
-      recommendation: "Use the screenshot evidence and conduct task-based usability testing to validate the experience.",
-      screenrootTasks: ["Review the rendered experience across desktop and mobile breakpoints.", "Run representative user tasks and record friction points.", "Prioritise findings using user impact and implementation effort."],
-      uxPerspective: { law: "Jakob's Law", definition: "Users tend to expect interfaces to work in ways similar to interfaces they already know.", assessment: "No clear violation was detected from markup alone; visual comparison and user testing are still required." },
-      evidence: [{ label: "Page overview", detail: "First-pass markup review", marker: 1, x: 5, y: 5, width: 90, height: 88 }],
-    });
-  }
-
-  const score = Math.max(35, Math.min(98, 100 - findings.reduce((sum, finding) => sum + (finding.severity === "high" ? 16 : finding.severity === "medium" ? 9 : 3), 0)));
-  const summary = fetchError ? `The website could not be fully fetched (${fetchError}). The report is showing a limited fallback review.` : `First-pass analysis of ${pageTitle} found ${findings.length} UX signal${findings.length === 1 ? "" : "s"} across navigation, interaction, content, accessibility, and task flow.`;
-
-  return { url, score, summary, pageTitle, screenshotUrl: makeScreenshotUrl(url), findings };
+  if (!firstHtml && pages.length === 0) throw new Error("Unable to fetch the website.");
+  const usable = pages.filter((page) => page.score > 0);
+  const score = Math.round(usable.reduce((sum, page) => sum + page.score, 0) / Math.max(usable.length, 1));
+  return { url, pageTitle: firstTitle, score, summary: `Audited ${pages.length} same-domain page${pages.length === 1 ? "" : "s"}. Each page is analysed separately and capped at ${MAX_PAGES} pages per run.`, pages };
 }
