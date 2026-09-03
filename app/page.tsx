@@ -1,26 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import type { AuditResult, Finding } from "@/lib/audit";
-
-function EvidenceView({ finding }: { finding: Finding }) {
-  return (
-    <div className="evidencePanel">
-      <div className="evidenceImageWrap">
-        <img className="evidenceImage" src={"" + finding.evidence.length ? "" : ""} alt="" />
-        <div className="evidenceFallback">Screenshot evidence is shown above the finding report.</div>
-      </div>
-      <div className="evidenceList">
-        {finding.evidence.map((item) => (
-          <div className="evidenceItem" key={item.marker}>
-            <span className="marker">{item.marker}</span>
-            <div><strong>{item.label}</strong><p>{item.detail}</p></div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
+import type { AuditResult } from "@/lib/audit";
 
 export default function Home() {
   const [url, setUrl] = useState("");
@@ -40,6 +21,8 @@ export default function Home() {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally { setLoading(false); }
   }
+
+  const evidence = result?.findings.flatMap((finding) => finding.evidence.map((item) => ({ ...item, findingId: finding.id })) ) ?? [];
 
   return (
     <main className="shell">
@@ -62,18 +45,19 @@ export default function Home() {
 
           <div className="screenshotCard card">
             <div className="sectionHeader"><div><div className="muted">VISUAL EVIDENCE</div><h3>Page screenshot & issue markers</h3></div><span className="pill">Annotated evidence</span></div>
-            <div className="screenshotStage">
-              <img src={result.screenshotUrl} alt={`Screenshot of ${result.url}`} />
-              {result.findings.flatMap((f) => f.evidence).map((item) => (
-                <div key={item.marker} className="annotation" style={{ left: `${item.x}%`, top: `${item.y}%`, width: `${item.width}%`, height: `${item.height}%` }}>
-                  <span>{item.marker}</span>
-                </div>
-              ))}
+            <div className="visualEvidence">
+              <div className="screenshotStage">
+                <img src={result.screenshotUrl} alt={`Screenshot of ${result.url}`} />
+                {evidence.map((item, index) => <div key={`${item.findingId}-${item.marker}-${index}`} className="annotation" style={{ left: `${item.x}%`, top: `${item.y}%`, width: `${item.width}%`, height: `${item.height}%` }}><span>{index + 1}</span></div>)}
+              </div>
+              <div className="evidenceCallouts">
+                {evidence.map((item, index) => <div className="evidenceCallout" key={`${item.findingId}-callout-${item.marker}-${index}`}><span className="marker">{index + 1}</span><div><strong>{item.label}</strong><p>{item.detail}</p></div></div>)}
+              </div>
               <svg className="annotationLines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-                {result.findings.flatMap((f) => f.evidence).map((item) => <line key={item.marker} x1={item.x + item.width} y1={item.y + item.height / 2} x2="98" y2={12 + (item.marker - 1) * 16} />)}
+                {evidence.map((item, index) => <line key={`${item.findingId}-line-${item.marker}-${index}`} x1={(item.x + item.width) * 0.68} y1={item.y + item.height / 2} x2="99" y2={10 + index * (80 / Math.max(evidence.length, 1))} />)}
               </svg>
             </div>
-            <div className="evidenceLegend">Markers correspond to the evidence references inside each finding. Screenshot coordinates are indicative until DOM-level visual capture is added.</div>
+            <div className="evidenceLegend">Markers show where the crawler found evidence on the captured page. The connected callout explains what was detected and why it matters.</div>
           </div>
 
           <div className="summary"><div className="card scoreCard"><div className="muted">UX score</div><div className="metric">{result.score}/100</div><p>{result.summary}</p></div><div className="card"><div className="muted">High priority</div><div className="metric">{result.findings.filter((f) => f.severity === "high").length}</div></div><div className="card"><div className="muted">Medium priority</div><div className="metric">{result.findings.filter((f) => f.severity === "medium").length}</div></div><div className="card"><div className="muted">Findings</div><div className="metric">{result.findings.length}</div></div></div>
@@ -90,7 +74,7 @@ export default function Home() {
                     <section className="detailBlock lawBlock"><h4>UX perspective</h4><div className="lawName">{finding.uxPerspective.law}</div><p><strong>Definition:</strong> {finding.uxPerspective.definition}</p><p><strong>Assessment:</strong> {finding.uxPerspective.assessment}</p></section>
                   </div>
                   <p className="recommendation"><strong>Recommended change:</strong> {finding.recommendation}</p>
-                  <div className="findingEvidence"><h4>Evidence</h4>{finding.evidence.map((item) => <div className="evidenceItem" key={item.marker}><span className="marker">{item.marker}</span><div><strong>{item.label}</strong><p>{item.detail}</p></div></div>)}</div>
+                  <div className="findingEvidence"><h4>Evidence</h4>{finding.evidence.map((item, index) => <div className="evidenceItem" key={`${item.marker}-${index}`}><span className="marker">{item.marker}</span><div><strong>{item.label}</strong><p>{item.detail}</p></div></div>)}</div>
                 </div>
               </article>
             ))}
