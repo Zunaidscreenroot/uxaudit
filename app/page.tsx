@@ -34,7 +34,10 @@ export default function Home() {
   return (
     <main className="shell">
       <nav className="nav">
-        <div className="brand">UX Audit</div>
+        <div className="brandLockup">
+          <div className="brand">UX Audit</div>
+          <div className="brandByline">by ScreenRoot</div>
+        </div>
         <div className="navMeta">AI-assisted UX review</div>
       </nav>
 
@@ -65,7 +68,7 @@ export default function Home() {
       {result && (
         <section className="results" aria-live="polite">
           <div className="summary">
-            <div className="card">
+            <div className="card scoreCard">
               <div className="muted">UX score</div>
               <div className="metric">{result.score}/100</div>
               <p>{result.summary}</p>
@@ -82,7 +85,7 @@ export default function Home() {
                 <div>
                   <h3>{finding.title}</h3>
                   <p>{finding.description}</p>
-                  <p style={{ marginTop: 10 }}><strong>Recommendation:</strong> {finding.recommendation}</p>
+                  <p className="recommendation"><strong>Recommendation:</strong> {finding.recommendation}</p>
                 </div>
                 <div className="pill">{finding.category}</div>
               </article>
