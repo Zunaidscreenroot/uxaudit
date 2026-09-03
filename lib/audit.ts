@@ -65,7 +65,10 @@ function stripTags(value: string) {
 }
 
 function makeScreenshotUrl(url: string) {
-  return `https://image.thum.io/get/width/${SCREENSHOT_WIDTH}/crop/1200/noanimate/${encodeURIComponent(url)}`;
+  // Thum.io's path-based form does not accept an encoded URL: encoded slashes
+  // such as %2F are rejected by the API's Tomcat layer. Use its documented
+  // query-parameter form so the destination URL can be safely percent-encoded.
+  return `https://image.thum.io/get/width/${SCREENSHOT_WIDTH}/crop/1200/noanimate/?url=${encodeURIComponent(url)}`;
 }
 
 function absoluteSameDomainLinks(html: string, baseUrl: string) {
