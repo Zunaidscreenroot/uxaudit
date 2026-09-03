@@ -43,7 +43,14 @@ export type AuditResult = {
 
 const MAX_PAGES = 8;
 const MAX_HTML_CHARS = 45000;
-const GEMINI_MODEL = "gemini-flash-latest";
+// Prefer a lighter stable model for production throughput, then fall back to
+// stronger Flash models if Google is temporarily capacity constrained.
+const GEMINI_MODELS = [
+  "gemini-3.5-flash-lite",
+  "gemini-3.5-flash",
+  "gemini-3.7-flash",
+  "gemini-flash-latest",
+];
 const SCREENSHOT_WIDTH = 1200;
 
 function stripTags(value: string) {
@@ -58,9 +65,6 @@ function stripTags(value: string) {
 }
 
 function makeScreenshotUrl(url: string) {
-  // Use Thum.io's broadly available viewport screenshot API. The fullpage
-  // modifier requires Thum.io's paid Better plan and can otherwise return no image.
-  // A 1200x1200 browser viewport is more reliable and keeps report generation fast.
   return `https://image.thum.io/get/width/${SCREENSHOT_WIDTH}/crop/1200/noanimate/${encodeURIComponent(url)}`;
 }
 
@@ -196,6 +200,51 @@ function normaliseFinding(raw: any, index: number): Finding {
   };
 }
 
+function isRetryableGeminiStatus(status: number) {
+  return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function requestGemini(
+  model: string,
+  apiKey: string,
+  prompt: string,
+): Promise<Response> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-goog-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.2,
+            responseMimeType: "application/json",
+          },
+        }),
+        signal: AbortSignal.timeout(25000),
+      },
+    );
+
+    if (response.ok || !isRetryableGeminiStatus(response.status) || attempt === 1) {
+      return response;
+    }
+
+    // Capacity errors are commonly transient. Give the same model one short
+    // retry before moving to the next model in the fallback chain.
+    await sleep(700 * (attempt + 1));
+  }
+
+  throw new Error("Gemini request failed after retry.");
+}
+
 async function analyseWithGemini(
   url: string,
   title: string,
@@ -224,42 +273,41 @@ TITLE: ${title}
 RENDERED HTML/TEXT:
 ${html.slice(0, MAX_HTML_CHARS)}`;
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-goog-api-key": apiKey,
-      },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.2,
-          responseMimeType: "application/json",
-        },
-      }),
-      signal: AbortSignal.timeout(30000),
-    },
-  );
+  let lastError = "unknown error";
 
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    throw new Error(`Gemini returned ${response.status}${detail ? `: ${detail.slice(0, 180)}` : ""}`);
+  for (const model of GEMINI_MODELS) {
+    try {
+      const response = await requestGemini(model, apiKey, prompt);
+      if (!response.ok) {
+        const detail = await response.text().catch(() => "");
+        lastError = `${model} returned ${response.status}${detail ? `: ${detail.slice(0, 180)}` : ""}`;
+        // 429/5xx capacity failures can use the next model. Other errors are
+        // configuration/request errors and should fail immediately with context.
+        if (isRetryableGeminiStatus(response.status)) continue;
+        throw new Error(lastError);
+      }
+
+      const data = await response.json();
+      const text =
+        data?.candidates?.[0]?.content?.parts
+          ?.map((part: any) => part.text || "")
+          .join("") || "";
+      const parsed = parseJson(text);
+
+      return {
+        score: Math.max(0, Math.min(100, Number(parsed.score) || 0)),
+        summary: String(parsed.summary || ""),
+        findings: (Array.isArray(parsed.findings) ? parsed.findings : []).map(normaliseFinding),
+      };
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : "unknown error";
+      // Network timeouts can also be transient; try the next model.
+      if (!/Gemini returned (400|401|403|404)/.test(lastError)) continue;
+      throw new Error(lastError);
+    }
   }
 
-  const data = await response.json();
-  const text =
-    data?.candidates?.[0]?.content?.parts
-      ?.map((part: any) => part.text || "")
-      .join("") || "";
-  const parsed = parseJson(text);
-
-  return {
-    score: Math.max(0, Math.min(100, Number(parsed.score) || 0)),
-    summary: String(parsed.summary || ""),
-    findings: (Array.isArray(parsed.findings) ? parsed.findings : []).map(normaliseFinding),
-  };
+  throw new Error(`All Gemini models were temporarily unavailable. Last error: ${lastError}`);
 }
 
 export async function createAudit(url: string): Promise<AuditResult> {
