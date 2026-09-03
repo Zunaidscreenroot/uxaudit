@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { createAudit } from "@/lib/audit";
 
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
@@ -11,11 +14,18 @@ export async function POST(request: Request) {
     }
 
     const normalizedUrl = rawUrl.startsWith("http") ? rawUrl : `https://${rawUrl}`;
-    new URL(normalizedUrl);
+    const parsed = new URL(normalizedUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return NextResponse.json({ error: "Use an HTTP or HTTPS website URL." }, { status: 400 });
+    }
 
-    const result = await createAudit(normalizedUrl);
+    const result = await createAudit(parsed.toString());
     return NextResponse.json(result);
-  } catch {
-    return NextResponse.json({ error: "Please enter a valid website URL." }, { status: 400 });
+  } catch (error) {
+    console.error("UX audit failed", error);
+    return NextResponse.json(
+      { error: "The audit could not be completed. Check the URL and try again." },
+      { status: 500 },
+    );
   }
 }
