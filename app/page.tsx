@@ -1,14 +1,22 @@
 "use client";
 
 import { FormEvent, useMemo, useState } from "react";
-import type { AuditPage, AuditResult } from "@/lib/audit";
+import type { AuditPage, AuditResult, Finding } from "@/lib/audit";
 
-function screenshotSrc(url: string) {
-  const encoded = btoa(unescape(encodeURIComponent(url)))
+function base64Url(value: string) {
+  return btoa(unescape(encodeURIComponent(value)))
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/g, "");
-  return `/api/screenshot?u=${encoded}`;
+}
+
+function previewSrc(page: AuditPage) {
+  const findings = base64Url(JSON.stringify(page.findings));
+  return `/api/preview?u=${base64Url(page.url)}&a=${findings}`;
+}
+
+function severityCount(findings: Finding[], severity: "high" | "medium") {
+  return findings.filter((finding) => finding.severity === severity).length;
 }
 
 export default function Home() {
@@ -16,17 +24,18 @@ export default function Home() {
   const [result, setResult] = useState<AuditResult | null>(null);
   const [selected, setSelected] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
   const [error, setError] = useState("");
-  const [screenshotError, setScreenshotError] = useState(false);
   const page = result?.pages[selected] as AuditPage | undefined;
 
   async function runAudit(event: FormEvent) {
     event.preventDefault();
     setLoading(true);
     setError("");
+    setPreviewError("");
     setResult(null);
     setSelected(0);
-    setScreenshotError(false);
     try {
       const response = await fetch("/api/audit", {
         method: "POST",
@@ -36,6 +45,7 @@ export default function Home() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "Audit failed.");
       setResult(data);
+      setPreviewLoading(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
@@ -47,9 +57,9 @@ export default function Home() {
     () => page?.findings.flatMap((finding) => finding.evidence.map((item) => ({ ...item, findingId: finding.id }))) ?? [],
     [page],
   );
-  const high = page?.findings.filter((f) => f.severity === "high").length ?? 0;
-  const medium = page?.findings.filter((f) => f.severity === "medium").length ?? 0;
-  const screenshotUrl = page ? screenshotSrc(page.url) : "";
+  const high = page ? severityCount(page.findings, "high") : 0;
+  const medium = page ? severityCount(page.findings, "medium") : 0;
+  const src = page ? previewSrc(page) : "";
 
   return (
     <main className="shell">
@@ -75,27 +85,24 @@ export default function Home() {
           </div>
           <p className="reportSummary">{result.summary}</p>
           <div className="pageTabs" role="tablist" aria-label="Audited pages">
-            {result.pages.map((item, index) => <button key={item.url} className={`pageTab ${selected === index ? "active" : ""}`} role="tab" aria-selected={selected === index} onClick={() => { setSelected(index); setScreenshotError(false); }}><span>{item.path === "/" ? "Home" : item.pageTitle || item.path}</span><small>{item.score}/100</small></button>)}
+            {result.pages.map((item, index) => <button key={item.url} className={`pageTab ${selected === index ? "active" : ""}`} role="tab" aria-selected={selected === index} onClick={() => { setSelected(index); setPreviewError(""); setPreviewLoading(true); }}><span>{item.path === "/" ? "Home" : item.pageTitle || item.path}</span><small>{item.score}/100</small></button>)}
           </div>
           <div className="pageHeader">
             <div><div className="muted">PAGE {selected + 1} OF {result.pages.length}</div><h2>{page.pageTitle}</h2><a href={page.url} target="_blank" rel="noreferrer">{page.path}</a></div>
             <div className="pageScore"><span>Page UX score</span><strong>{page.score}</strong><small>/100</small></div>
           </div>
           <p className="reportSummary">{page.summary}</p>
-          <div className="screenshotCard card">
-            <div className="sectionHeader"><div><div className="muted">VISUAL EVIDENCE</div><h3>High-resolution full-page screenshot & issue markers</h3></div><span className="pill">{evidence.length} evidence marker{evidence.length === 1 ? "" : "s"}</span></div>
-            <div className="visualEvidence">
-              <div className="screenshotStage">
-                <div className="screenshotCanvas">
-                  {screenshotError ? <div className="screenshotFallback">Screenshot could not be rendered for this page. The UX findings remain available below.</div> : <img src={screenshotUrl} alt={`Full-page screenshot of ${page.url}`} loading="lazy" onError={() => setScreenshotError(true)} />}
-                  {!screenshotError && evidence.map((item, index) => <div key={`${item.findingId}-${item.marker}-${index}`} className="annotation" style={{ left: `${item.x}%`, top: `${item.y}%`, width: `${item.width}%`, height: `${item.height}%` }}><span>{index + 1}</span></div>)}
-                </div>
-              </div>
-              <div className="evidenceCallouts">{evidence.map((item, index) => <div className="evidenceCallout" key={`${item.findingId}-callout-${index}`}><span className="marker">{index + 1}</span><div><strong>{item.label}</strong><p>{item.detail}</p></div></div>)}</div>
-              <svg className="annotationLines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">{evidence.map((item, index) => <line key={`${item.findingId}-line-${index}`} x1={(item.x + item.width) * 0.68} y1={item.y + item.height / 2} x2="99" y2={10 + index * (80 / Math.max(evidence.length, 1))} />)}</svg>
+
+          <div className="websitePreviewCard card">
+            <div className="sectionHeader"><div><div className="muted">LIVE WEBSITE VIEW</div><h3>Rendered website with UX evidence overlays</h3></div><span className="pill">{evidence.length} highlighted region{evidence.length === 1 ? "" : "s"}</span></div>
+            <div className="previewLegend"><span className="legendSwatch" /> Yellow regions are the areas referenced by the audit. Hover or focus a numbered marker to see the complete finding.</div>
+            <div className="websitePreviewFrame">
+              {previewLoading && <div className="previewLoading">Loading rendered website…</div>}
+              {previewError ? <div className="previewFallback"><strong>Website view could not be loaded.</strong><span>{previewError}</span></div> : <iframe key={src} title={`Rendered website preview of ${page.url}`} src={src} sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads" referrerPolicy="no-referrer" onLoad={() => { setPreviewLoading(false); setPreviewError(""); }} onError={() => { setPreviewLoading(false); setPreviewError("The rendered page could not be displayed. The audit findings remain available below."); }} />}
             </div>
-            <div className="evidenceLegend">The visual evidence is a high-resolution full-page browser-rendered snapshot. Markers connect approximate page regions to the matching finding; coordinates are inferred from the document structure and should be treated as directional, not pixel-perfect.</div>
+            <div className="previewNote">The website itself is rendered inside a restricted preview frame. Audit markers are layered into that rendered page; they are not a screenshot. The highlighted coordinates are approximate and derived from the audit evidence.</div>
           </div>
+
           <div className="summary">
             <div className="card scoreCard"><div className="muted">PAGE SUMMARY</div><div className="metric">{page.score}/100</div><p>{page.summary}</p></div>
             <div className="card"><div className="muted">High priority</div><div className="metric">{high}</div></div>
