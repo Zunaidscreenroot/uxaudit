@@ -44,7 +44,7 @@ export type AuditResult = {
 const MAX_PAGES = 8;
 const MAX_HTML_CHARS = 45000;
 const GEMINI_MODEL = "gemini-flash-latest";
-const SCREENSHOT_WIDTH = 1440;
+const SCREENSHOT_WIDTH = 1200;
 
 function stripTags(value: string) {
   return value
@@ -58,9 +58,10 @@ function stripTags(value: string) {
 }
 
 function makeScreenshotUrl(url: string) {
-  // Thum.io renders the page in a real browser. `fullpage` is important here:
-  // the audit report needs the complete rendered page, not a 1200px crop.
-  return `https://image.thum.io/get/fullpage/width/${SCREENSHOT_WIDTH}/noanimate/${encodeURIComponent(url)}`;
+  // Use Thum.io's broadly available viewport screenshot API. The fullpage
+  // modifier requires Thum.io's paid Better plan and can otherwise return no image.
+  // A 1200x1200 browser viewport is more reliable and keeps report generation fast.
+  return `https://image.thum.io/get/width/${SCREENSHOT_WIDTH}/crop/1200/noanimate/${encodeURIComponent(url)}`;
 }
 
 function absoluteSameDomainLinks(html: string, baseUrl: string) {
@@ -211,7 +212,7 @@ Rules:
 - Use the phrase "Potential violation" unless the supplied evidence directly establishes a requirement failure.
 - Prefer specific, actionable findings over generic advice.
 - Use relevant laws such as Hick's Law, Fitts's Law, Jakob's Law, Miller's Law, Tesler's Law, Doherty Threshold, Peak-End Rule, Aesthetic-Usability Effect, Zeigarnik Effect, Von Restorff Effect, Gestalt principles, Nielsen heuristics, or WCAG when appropriate; do not force a law.
-- Evidence coordinates are approximate percentage boxes on a ${SCREENSHOT_WIDTH}px full-page screenshot. Estimate the likely vertical position from the document structure. Keep x/y/width/height between 0 and 100.
+- Evidence coordinates are approximate percentage boxes on a ${SCREENSHOT_WIDTH}px browser screenshot. Estimate the likely vertical position from the document structure. Keep x/y/width/height between 0 and 100.
 - Score 0-100 based on severity and breadth.
 - Return 3-8 high-value findings when evidence supports them. If evidence is insufficient, return fewer findings rather than inventing issues.
 
@@ -342,7 +343,7 @@ export async function createAudit(url: string): Promise<AuditResult> {
     url,
     pageTitle: firstTitle,
     score,
-    summary: `Audited ${pages.length} same-domain page${pages.length === 1 ? "" : "s"}. Each page is analysed separately and capped at ${MAX_PAGES} pages per run. Visual evidence uses a full-page browser-rendered screenshot.`,
+    summary: `Audited ${pages.length} same-domain page${pages.length === 1 ? "" : "s"}. Each page is analysed separately and capped at ${MAX_PAGES} pages per run. Visual evidence uses a browser-rendered screenshot.`,
     pages,
   };
 }
