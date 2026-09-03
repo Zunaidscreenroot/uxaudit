@@ -13,7 +13,8 @@ export async function POST(request: Request) {
     const normalizedUrl = rawUrl.startsWith("http") ? rawUrl : `https://${rawUrl}`;
     new URL(normalizedUrl);
 
-    return NextResponse.json(createAudit(normalizedUrl));
+    const result = await createAudit(normalizedUrl);
+    return NextResponse.json(result);
   } catch {
     return NextResponse.json({ error: "Please enter a valid website URL." }, { status: 400 });
   }
