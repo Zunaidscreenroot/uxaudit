@@ -42,6 +42,9 @@ export default function Home() {
   );
   const high = page?.findings.filter((f) => f.severity === "high").length ?? 0;
   const medium = page?.findings.filter((f) => f.severity === "medium").length ?? 0;
+  const screenshotUrl = page
+    ? `/api/screenshot?url=${encodeURIComponent(page.url)}`
+    : "";
 
   return (
     <main className="shell">
@@ -132,7 +135,7 @@ export default function Home() {
             <div className="sectionHeader">
               <div>
                 <div className="muted">VISUAL EVIDENCE</div>
-                <h3>Full-page screenshot & issue markers</h3>
+                <h3>High-resolution full-page screenshot & issue markers</h3>
               </div>
               <span className="pill">
                 {evidence.length} evidence marker{evidence.length === 1 ? "" : "s"}
@@ -141,7 +144,11 @@ export default function Home() {
             <div className="visualEvidence">
               <div className="screenshotStage">
                 <div className="screenshotCanvas">
-                  <img src={page.screenshotUrl} alt={`Full-page screenshot of ${page.url}`} />
+                  <img
+                    src={screenshotUrl}
+                    alt={`Full-page screenshot of ${page.url}`}
+                    loading="lazy"
+                  />
                   {evidence.map((item, index) => (
                     <div
                       key={`${item.findingId}-${item.marker}-${index}`}
@@ -187,9 +194,10 @@ export default function Home() {
               </svg>
             </div>
             <div className="evidenceLegend">
-              The visual evidence is a full-page browser-rendered snapshot. Markers connect
-              approximate page regions to the matching finding; coordinates are inferred from
-              the document structure and should be treated as directional, not pixel-perfect.
+              The visual evidence is a high-resolution full-page browser-rendered snapshot.
+              Markers connect approximate page regions to the matching finding; coordinates are
+              inferred from the document structure and should be treated as directional, not
+              pixel-perfect.
             </div>
           </div>
 
