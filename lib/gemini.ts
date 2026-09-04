@@ -33,33 +33,42 @@ export function buildAuditPrompt(url: string, width: number, height: number): st
 export function buildRegionVerificationPrompt(): string {
   return `${GEMINI_AUDIT_INSTRUCTIONS}
 
-TASK: VERIFY EVIDENCE REGIONS
+TASK: VERIFY AND, IF NECESSARY, CORRECT EVIDENCE REGIONS
 You receive exactly two images.
-IMAGE 1 = the untouched MAIN screenshot. It is immutable and is the ONLY source of truth for where evidence exists.
-IMAGE 2 = a NEW annotated image generated from IMAGE 1. Yellow borders and markers are annotations only. They are NEVER evidence.
+IMAGE 1 = the untouched MAIN screenshot. It is immutable and is the ONLY source of truth for both visual content and coordinates.
+IMAGE 2 = a NEW annotated image generated from IMAGE 1. Yellow borders, translucent yellow fills, and numbered markers are annotations only. They are NEVER evidence.
 
-For EACH evidence item:
-1. Read its finding title, description, category and evidence label.
-2. Ignore the yellow annotation completely.
-3. Look at IMAGE 1 and locate the exact UI element that actually supports the finding.
-4. Compare that location with the yellow region in IMAGE 2.
-5. Reject the region if it is displaced to another page section, top navigation, header, footer, unrelated image, nearby component, or empty space.
-6. Reject it if it is materially oversized. Keep the region tightly around the supporting UI.
-7. Do not accept a region merely because it is close to the correct area or visually prominent.
+This is a semantic verification task, not merely a geometric check.
+
+FOR EACH REGION
+1. Read the supplied FINDING CONTEXT: category, title, description, assessment, evidence label, and evidence detail.
+2. Determine exactly WHICH visible UI element in IMAGE 1 supports that specific finding.
+3. Ignore the yellow annotation while deciding what the correct evidence is.
+4. Find that UI element in IMAGE 1.
+5. Compare its real location to the corresponding yellow region in IMAGE 2.
+6. The region is CORRECT only if it encloses the actual supporting UI for THIS finding. Being visually nearby, prominent, or inside the same general section is NOT sufficient.
+7. Reject regions that point to another section, top navigation, header, footer, unrelated image, another component, or empty space.
+8. Reject materially oversized regions. The region should be tight around the supporting UI plus only the minimum surrounding context needed to establish the UX issue.
 
 CRITICAL EXAMPLE
-Finding: "Low contrast text over promotional background".
-Correct evidence: the white promotional text in the hero/banner and its immediately relevant background.
-WRONG evidence: a yellow rectangle around the TOP NAVIGATION BAR. That region MUST be rejected and replaced with coordinates around the actual promotional text/background in the hero.
+Finding context: Visual design → "Low contrast text over promotional background" → evidence: "Low contrast overlay text" → white text on complex photographic background.
+The correct target is the promotional text in the hero/banner and its immediately relevant background.
+A yellow rectangle around the TOP NAVIGATION BAR is WRONG even if it is close to the banner. It MUST be rejected and replaced with coordinates around the actual promotional text/background.
 
-If ANY region is wrong, return correct=false and corrected coordinates for EVERY evidence item. Calculate every corrected coordinate from IMAGE 1, never from IMAGE 2 or from the yellow border.
-If ALL regions are correct, return correct=true and regions=[].
+IMPORTANT
+- Do NOT judge whether the finding itself is a good UX finding. Assume the finding is fixed; only verify whether its region points to the evidence described by the finding.
+- Do NOT preserve a bad coordinate just because it came from the first analysis.
+- If a region is wrong, find the correct UI yourself in IMAGE 1 and return new coordinates.
+- If ANY region is wrong, return corrected coordinates for EVERY evidence item so the renderer can rebuild a complete clean annotation image from IMAGE 1.
+- Corrected coordinates must be calculated from IMAGE 1, never from IMAGE 2 and never from the yellow border.
+- Never change finding text, severity, category, recommendation, UX law, or tasks.
+
+DECISION RULE
+Return correct=true ONLY when you have independently confirmed that EVERY yellow region corresponds semantically and spatially to the evidence described for its finding.
 
 Required JSON shape:
-{"correct":true,"regions":[],"notes":"All proposed regions tightly match the supporting UI."}
+{"correct":true,"regions":[],"notes":"Every proposed region semantically and spatially matches its finding."}
 OR
-{"correct":false,"regions":[{"findingId":"finding-1","evidenceIndex":0,"box":[120,80,220,320]}],"notes":"The proposed region was displaced and has been corrected against IMAGE 1."}
-
-Only change evidence coordinates. Do not change finding text, category, severity, recommendation, UX law, or tasks.
+{"correct":false,"regions":[{"findingId":"finding-1","evidenceIndex":0,"box":[120,80,220,320]}],"notes":"The region was pointing to unrelated UI; corrected against IMAGE 1."}
 `;
 }
