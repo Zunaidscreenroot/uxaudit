@@ -158,7 +158,7 @@ async function callGemini(apiKey: string, model: string, prompt: string, buffer:
     headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
     body: JSON.stringify({
       contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: "image/png", data: buffer.toString("base64") } }] }],
-      generationConfig: { responseMimeType: "application/json", maxOutputTokens, thinkingConfig: { thinkingLevel: "low" }, media_resolution: "MEDIA_RESOLUTION_MEDIUM", media_resolution: "MEDIA_RESOLUTION_MEDIUM" }
+      generationConfig: { responseMimeType: "application/json", maxOutputTokens, thinkingConfig: { thinkingLevel: "low" }, media_resolution: "MEDIA_RESOLUTION_MEDIUM" }
     }),
     signal: AbortSignal.timeout(timeoutMs)
   });
