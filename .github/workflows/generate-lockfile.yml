@@ -36,39 +36,44 @@ jobs:
           marker = 'type GeminiAnalysis = { findings: Finding[]; model: string };'
           helper = r'''
 
-          function extractJsonObject(text: string): unknown | null {
-            const cleaned = text.replace(/```(?:json)?/gi, "").replace(/```/g, "").trim();
-            try { return JSON.parse(cleaned); } catch {}
-            const start = cleaned.indexOf("{");
-            if (start < 0) return null;
-            let depth = 0;
-            let inString = false;
-            let escaped = false;
-            for (let i = start; i < cleaned.length; i++) {
-              const ch = cleaned[i];
-              if (inString) {
-                if (escaped) escaped = false;
-                else if (ch === "\\") escaped = true;
-                else if (ch === '"') inString = false;
-                continue;
-              }
-              if (ch === '"') { inString = true; continue; }
-              if (ch === "{") depth++;
-              else if (ch === "}") {
-                depth--;
-                if (depth === 0) {
-                  try { return JSON.parse(cleaned.slice(start, i + 1)); } catch { return null; }
-                }
-              }
-            }
-            return null;
-          }
-          '''
+function extractJsonObject(text: string): unknown | null {
+  const cleaned = text.replace(/```(?:json)?/gi, "").replace(/```/g, "").trim();
+  try { return JSON.parse(cleaned); } catch {}
+  const start = cleaned.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        try { return JSON.parse(cleaned.slice(start, i + 1)); } catch { return null; }
+      }
+    }
+  }
+  return null;
+}
+'''
           if 'function extractJsonObject' not in s:
               s = s.replace(marker, marker + helper)
 
-          s = s.replace('try { json = JSON.parse(text); } catch { lastError = `Gemini ${model} returned invalid JSON.`; continue; }', 'json = extractJsonObject(text);\n      if (!json) { lastError = `Gemini ${model} returned invalid JSON.`; continue; }')
-          s = s.replace('try { parsed = JSON.parse(text) as typeof parsed; } catch { return findings; }', 'const recovered = extractJsonObject(text);\n    if (recovered && typeof recovered === "object") parsed = recovered as typeof parsed;')
+          old_analysis = 'try { json = JSON.parse(text); } catch { lastError = `Gemini ${model} returned invalid JSON.`; continue; }'
+          new_analysis = 'json = extractJsonObject(text);\n      if (!json) { lastError = `Gemini ${model} returned invalid JSON.`; continue; }'
+          s = s.replace(old_analysis, new_analysis)
+
+          old_verify = 'try { parsed = JSON.parse(text) as typeof parsed; } catch { return findings; }'
+          new_verify = 'const recovered = extractJsonObject(text);\n    if (recovered && typeof recovered === "object") parsed = recovered as typeof parsed;'
+          s = s.replace(old_verify, new_verify)
           p.write_text(s)
           PY
       - name: Commit changes
@@ -77,5 +82,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add package-lock.json lib/audit.ts
-          git commit -m "fix: tolerate Gemini JSON wrappers and truncation"
+          git commit -m "fix: correct Gemini JSON recovery patch"
           git push
