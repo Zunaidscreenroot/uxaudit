@@ -1,5 +1,4 @@
-// Gemini model order: prefer the strongest stable visual model, then fall back to
-// lower-cost stable models when a model is temporarily unavailable.
+// Direct Gemini models remain as a fallback when OpenRouter is unavailable.
 export const GEMINI_MODELS = [
   "gemini-3.6-flash",
   "gemini-3.5-flash",
