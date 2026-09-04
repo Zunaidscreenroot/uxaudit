@@ -75,7 +75,7 @@ CRITICAL REGION EXAMPLE
 A finding about calculator output must have a region around the calculator output. A yellow rectangle around the hero/banner, navigation bar, or another green section is WRONG and must be rejected.
 
 REGION STATUS
-For every evidence item, return an explicit `correct` boolean.
+For every evidence item, return an explicit correct boolean.
 - correct=true means the CURRENT yellow region already encloses the exact supporting UI in IMAGE 1.
 - correct=false means the CURRENT region is wrong; return a replacement box calculated from IMAGE 1.
 - Even when correct=true, return the current box unchanged.
