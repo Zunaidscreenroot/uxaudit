@@ -74,16 +74,25 @@ If a finding says "Low contrast EMI result text", inspect the actual EMI number 
 CRITICAL REGION EXAMPLE
 A finding about calculator output must have a region around the calculator output. A yellow rectangle around the hero/banner, navigation bar, or another green section is WRONG and must be rejected.
 
+REGION STATUS
+For every evidence item, return an explicit `correct` boolean.
+- correct=true means the CURRENT yellow region already encloses the exact supporting UI in IMAGE 1.
+- correct=false means the CURRENT region is wrong; return a replacement box calculated from IMAGE 1.
+- Even when correct=true, return the current box unchanged.
+- Never set correct=true merely because the region is nearby.
+
 IMPORTANT
 - Do not trust the first model's finding or coordinates.
 - Do not use IMAGE 2's yellow marks to decide what is correct.
 - Corrected coordinates must be calculated from IMAGE 1.
-- If a finding is invalid, set valid=false and do not return replacement coordinates for it.
-- If a finding is valid but any region is wrong, return corrected coordinates for every evidence item in that finding.
+- If a finding is invalid, set valid=false and return regions=[] for it.
+- If a finding is valid, return exactly one region object for every evidence item.
 - Never change finding text, severity, category, recommendation, UX law, or tasks.
 
 Required JSON shape:
-{"findings":[{"findingId":"finding-1","valid":true,"regions":[{"evidenceIndex":0,"box":[120,80,220,320]}],"reason":"The screenshot visibly supports the finding and the region matches the exact UI."}]}
+{"findings":[{"findingId":"finding-1","valid":true,"regions":[{"evidenceIndex":0,"correct":true,"box":[120,80,220,320]}],"reason":"The screenshot visibly supports the finding and the current region encloses the exact supporting UI."}]}
+OR when a region is wrong:
+{"findings":[{"findingId":"finding-1","valid":true,"regions":[{"evidenceIndex":0,"correct":false,"box":[620,210,700,520]}],"reason":"The original region pointed to unrelated UI; this replacement box targets the exact supporting UI in IMAGE 1."}]}
 OR for an invalid finding:
 {"findings":[{"findingId":"finding-1","valid":false,"regions":[],"reason":"The screenshot contradicts the claimed issue; the visible text/background combination does not demonstrate low contrast."}]}
 
