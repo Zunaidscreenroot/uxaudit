@@ -36,8 +36,10 @@ export async function GET() {
             },
           ],
           generationConfig: {
-            temperature: 0,
-            maxOutputTokens: 20,
+            thinkingConfig: {
+              thinkingLevel: "low",
+            },
+            maxOutputTokens: 100,
           },
         }),
         signal: AbortSignal.timeout(15000),
