@@ -138,7 +138,9 @@ async function renderRegions(mainImage: Buffer, width: number, height: number, f
   if (!findings.some((finding) => finding.evidence.length)) return mainImage;
   return sharp(mainImage).composite([{ input: buildRegionSvg(width, height, findings), left: 0, top: 0, blend: "over" }]).png().toBuffer();
 }
-function flattenRegions(findings: Finding[]) { return findings.flatMap((finding) => finding.evidence.map((e, evidenceIndex) => ({ findingId: finding.id, evidenceIndex, finding: { severity: finding.severity, category: finding.category, title: finding.title, description: finding.description, recommendation: finding.recommendation, assessment: finding.uxPerspective.assessment, law: finding.uxPerspective.law }, evidence: { label: e.label, detail: e.detail }, box: [e.y * 10, e.x * 10, (e.y + e.height) * 10, (e.x + e.width) * 10] as RegionBox })))); }
+function flattenRegions(findings: Finding[]) {
+  return findings.flatMap((finding) => finding.evidence.map((e, evidenceIndex) => ({ findingId: finding.id, evidenceIndex, finding: { severity: finding.severity, category: finding.category, title: finding.title, description: finding.description, recommendation: finding.recommendation, assessment: finding.uxPerspective.assessment, law: finding.uxPerspective.law }, evidence: { label: e.label, detail: e.detail }, box: [e.y * 10, e.x * 10, (e.y + e.height) * 10, (e.x + e.width) * 10] as RegionBox })));
+}
 function applyVerificationBoxes(findings: Finding[], verification: VerificationItem[]): Finding[] {
   const next = findings.map((finding) => ({ ...finding, evidence: finding.evidence.map((e) => ({ ...e })) }));
   for (const item of verification) for (const region of item.regions) {
