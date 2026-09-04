@@ -19,16 +19,20 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-      - name: Fix audit TypeScript syntax
+      - name: Patch audit runtime limits
         run: |
           python - <<'PY'
           from pathlib import Path
           p = Path('lib/audit.ts')
           s = p.read_text()
-          old = 'box.style.cssText = `position:absolute;left:${item.x}%;top:${item.y}%;width:${item.width}%;height:${item.height}%;border:3px solid #ffd400;background:rgba(255,212,0,.12);box-sizing:border-box;font:700 16px Arial;color:#111;`;'
-          new = 'box.style.cssText = "position:absolute;left:" + item.x + "%;top:" + item.y + "%;width:" + item.width + "%;height:" + item.height + "%;border:3px solid #ffd400;background:rgba(255,212,0,.12);box-sizing:border-box;font:700 16px Arial;color:#111;";'
-          if old in s:
-              p.write_text(s.replace(old, new))
+          s = s.replace('const GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.7-flash"] as const;', 'const GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"] as const;')
+          s = s.replace('const VERIFY_BROWSERLESS_TIMEOUT_MS = 4000;', 'const VERIFY_BROWSERLESS_TIMEOUT_MS = 3500;')
+          s = s.replace('const GEMINI_ANALYSIS_TIMEOUT_MS = 8000;', 'const GEMINI_ANALYSIS_TIMEOUT_MS = 14000;')
+          s = s.replace('const GEMINI_VERIFY_TIMEOUT_MS = 4000;', 'const GEMINI_VERIFY_TIMEOUT_MS = 3500;')
+          s = s.replace('maxOutputTokens, thinkingConfig: { thinkingLevel: "low" }', 'maxOutputTokens, thinkingConfig: { thinkingLevel: "low" }, media_resolution: "MEDIA_RESOLUTION_MEDIUM"')
+          s = s.replace('callGemini(apiKey, model, prompt, buffer, 4500, GEMINI_ANALYSIS_TIMEOUT_MS)', 'callGemini(apiKey, model, prompt, buffer, 3000, GEMINI_ANALYSIS_TIMEOUT_MS)')
+          s = s.replace('callGemini(apiKey, model, prompt, verificationScreenshot, 1800, GEMINI_VERIFY_TIMEOUT_MS)', 'callGemini(apiKey, model, prompt, verificationScreenshot, 1200, GEMINI_VERIFY_TIMEOUT_MS)')
+          p.write_text(s)
           PY
       - name: Commit changes
         run: |
@@ -36,5 +40,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add package-lock.json lib/audit.ts
-          git commit -m "chore: fix audit build syntax and lock dependencies"
+          git commit -m "fix: tune Gemini visual audit latency"
           git push
