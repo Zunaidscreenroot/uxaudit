@@ -8,6 +8,35 @@ export type AuditResult = { pages: AuditPage[] };
 type TextRegion = { text: string; x: number; y: number; width: number; height: number };
 type GeminiAnalysis = { findings: Finding[]; model: string };
 
+function extractJsonObject(text: string): unknown | null {
+  const cleaned = text.replace(/```(?:json)?/gi, "").replace(/```/g, "").trim();
+  try { return JSON.parse(cleaned); } catch {}
+  const start = cleaned.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        try { return JSON.parse(cleaned.slice(start, i + 1)); } catch { return null; }
+      }
+    }
+  }
+  return null;
+}
+
+
 const GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"] as const;
 const BROWSERLESS_TIMEOUT_MS = 24000;
 const VERIFY_BROWSERLESS_TIMEOUT_MS = 3500;
@@ -129,7 +158,7 @@ async function callGemini(apiKey: string, model: string, prompt: string, buffer:
     headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
     body: JSON.stringify({
       contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: "image/png", data: buffer.toString("base64") } }] }],
-      generationConfig: { responseMimeType: "application/json", maxOutputTokens, thinkingConfig: { thinkingLevel: "low" }, media_resolution: "MEDIA_RESOLUTION_MEDIUM" }
+      generationConfig: { responseMimeType: "application/json", maxOutputTokens, thinkingConfig: { thinkingLevel: "low" }, media_resolution: "MEDIA_RESOLUTION_MEDIUM", media_resolution: "MEDIA_RESOLUTION_MEDIUM" }
     }),
     signal: AbortSignal.timeout(timeoutMs)
   });
@@ -144,7 +173,7 @@ async function analyseWithGemini(url: string, title: string, capture: { buffer: 
   if (!apiKey) throw new Error("GEMINI_API_KEY is not configured on this deployment.");
   const { width, height, buffer, textRegions } = capture;
   const anchorList = textRegions.slice(0, 300).map((r) => `${r.text.slice(0, 120)} @ [${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}]`).join("\n");
-  const prompt = `You are a senior UX auditor for ScreenRoot. Analyze ONLY the supplied desktop landing-page screenshot for ${url} (title: ${title}). It is one complete full-page image captured at a fixed 1440px desktop viewport, with mobile/responsive emulation disabled. Identify 3 to 8 meaningful, visually evidenced UX issues. Do not infer hidden interactions or inspect source code.
+  const prompt = `You are a senior UX auditor for ScreenRoot. Analyze ONLY the supplied desktop landing-page screenshot for ${url} (title: ${title}). It is one complete full-page image captured at a fixed 1440px desktop viewport, with mobile/responsive emulation disabled. Identify 3 to 6 meaningful, visually evidenced UX issues. Do not infer hidden interactions or inspect source code.
 
 For every finding return severity, category, title, description, recommendation, screenrootTasks, devTasks, uxPerspective (law, definition, assessment), and evidence. Evidence localization is critical. The image may be much taller than one viewport. For text-based evidence, ALWAYS return evidence.anchor as an EXACT visible text snippet from the supplied DOM text-anchor list. The server resolves that anchor to its actual full-page pixel location. Do not return viewport-relative coordinates. For non-text visual evidence, use the closest relevant text anchor when possible; otherwise use box:[ymin,xmin,ymax,xmax] normalized 0-1000 across the ENTIRE image. Keep boxes tight. Never create a footer box spanning the whole footer merely because the issue is footer-related; anchor to the specific relevant link/group. Footer evidence must be in the bottom portion of the full image. Hero evidence must be in the top portion. Banner evidence must cover the actual banner. Use UX laws/principles only when genuinely applicable. Return ONLY valid JSON.
 
@@ -158,7 +187,8 @@ JSON shape: {"findings":[{"id":"finding-1","severity":"medium","category":"...",
       const text = await callGemini(apiKey, model, prompt, buffer, 3000, GEMINI_ANALYSIS_TIMEOUT_MS);
       if (!text) { lastError = `Gemini ${model} returned an empty analysis.`; continue; }
       let json: unknown;
-      try { json = JSON.parse(text); } catch { lastError = `Gemini ${model} returned invalid JSON.`; continue; }
+      json = extractJsonObject(text);
+      if (!json) { lastError = `Gemini ${model} returned invalid JSON.`; continue; }
       const rawFindings = Array.isArray((json as { findings?: unknown }).findings) ? (json as { findings: unknown[] }).findings : [];
       const findings = rawFindings.map((item: unknown, index: number) => normalizeFinding(item, index, width, height, textRegions));
       if (findings.length) return { findings, model };
@@ -194,7 +224,8 @@ async function verifyEvidence(capture: { buffer: Buffer; width: number; height: 
     const prompt = `Verify every yellow evidence rectangle in this full-page UX audit screenshot. A rectangle is correct only when it tightly covers the relevant UI described by its label/detail and does not cover unrelated content. Return ONLY JSON: {"verified":true|false,"corrections":[{"findingId":"...","evidenceIndex":0,"box":[ymin,xmin,ymax,xmax]}]}. Coordinates are normalized 0-1000 against the ENTIRE image, never viewport-relative. If all are correct, return verified:true with no corrections. Audit regions:\n${JSON.stringify(regions)}`;
     const text = await callGemini(apiKey, model, prompt, verificationScreenshot, 1600, GEMINI_VERIFY_TIMEOUT_MS);
     let parsed: { verified?: boolean; corrections?: Array<{ findingId?: string; evidenceIndex?: number; box?: unknown }> } = {};
-    try { parsed = JSON.parse(text) as typeof parsed; } catch { return findings; }
+    const recovered = extractJsonObject(text);
+    if (recovered && typeof recovered === "object") parsed = recovered as typeof parsed;
     const corrections = Array.isArray(parsed.corrections) ? parsed.corrections : [];
     if (parsed.verified === true || corrections.length === 0) return findings;
     const next = findings.map((finding) => ({ ...finding, evidence: finding.evidence.map((e) => ({ ...e })) }));
