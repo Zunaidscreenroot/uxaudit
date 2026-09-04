@@ -67,9 +67,6 @@ export default function Home() {
           if (eventData.type === "error") throw new Error(eventData.error ?? "Audit failed.");
         }
       }
-      if (!result && !error) {
-        // Result state is intentionally set by the stream event above; no fallback UI is needed here.
-      }
     } catch (err) { setError(err instanceof Error ? err.message : "Something went wrong."); }
     finally { setLoading(false); }
   }
@@ -79,7 +76,7 @@ export default function Home() {
   const medium = page?.findings.filter((finding) => finding.severity === "medium").length ?? 0;
   const low = page?.findings.filter((finding) => finding.severity === "low").length ?? 0;
   const score = page ? Math.max(0, 100 - high * 15 - medium * 8 - low * 3) : 0;
-  const summary = page ? `${page.findings.length} high-priority visually evidenced UX finding${page.findings.length === 1 ? "" : "s"} identified across the landing page.` : "";
+  const summary = page ? `${page.findings.length} verified visually evidenced UX finding${page.findings.length === 1 ? "" : "s"} identified across the landing page.` : "";
   return <main className="shell">
     <nav className="nav"><div className="brandLockup"><div className="brand">UX Audit</div><div className="brandByline">by ScreenRoot</div></div><div className="navMeta">AI-assisted UX review</div></nav>
     <section className="hero"><div className="eyebrow">Website experience intelligence</div><h1>Find the friction before your users do.</h1><p className="lede">Enter a website and get a visual landing-page audit with highlighted evidence, UX laws, explanations, and implementation tasks.</p><form className="auditForm" onSubmit={runAudit}><input className="urlInput" type="text" inputMode="url" placeholder="https://yourwebsite.com" value={url} onChange={(event) => setUrl(event.target.value)} aria-label="Website URL" /><button className="auditButton" type="submit" disabled={loading}>{loading ? "Running audit…" : "Run audit"}</button></form>{error && <div className="error">{error}</div>}</section>
