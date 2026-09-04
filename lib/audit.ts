@@ -13,10 +13,24 @@ type VerificationItem = { findingId: string; valid: boolean; regions: Array<{ ev
 type VerificationResult = { findings: VerificationItem[] };
 
 const BROWSERLESS_TIMEOUT_MS = 14000;
-const GEMINI_ANALYSIS_TIMEOUT_MS = 11000;
-const GEMINI_FALLBACK_TIMEOUT_MS = 6000;
+const OPENROUTER_ANALYSIS_TIMEOUT_MS = 12000;
+const OPENROUTER_VERIFY_TIMEOUT_MS = 10000;
+const GEMINI_ANALYSIS_TIMEOUT_MS = 9000;
 const GEMINI_VERIFY_TIMEOUT_MS = 7000;
 const MAX_EVIDENCE_VERIFICATION_PASSES = 2;
+
+const OPENROUTER_ANALYSIS_MODELS = [
+  "openai/gpt-5.6-luna",
+  "anthropic/claude-sonnet-5",
+  "google/gemini-3-flash-preview",
+] as const;
+
+const OPENROUTER_VERIFY_MODELS = [
+  "anthropic/claude-sonnet-5",
+  "openai/gpt-5.6-luna",
+  "google/gemini-3-flash-preview",
+] as const;
+
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
 function extractJsonObject(text: string): unknown | null {
@@ -56,11 +70,34 @@ function normalizeFinding(value: unknown, index: number): Finding {
     const box = normalizeBox(entry.box);
     if (!box) return null;
     const [y1, x1, y2, x2] = box;
-    return { label: typeof entry.label === "string" ? entry.label : `Region ${evidenceIndex + 1}`, detail: typeof entry.detail === "string" ? entry.detail : "Visible evidence identified in the screenshot.", marker: typeof entry.marker === "string" ? entry.marker : String(evidenceIndex + 1), x: x1 / 10, y: y1 / 10, width: Math.max(0.8, (x2 - x1) / 10), height: Math.max(0.8, (y2 - y1) / 10) };
+    return {
+      label: typeof entry.label === "string" ? entry.label : `Region ${evidenceIndex + 1}`,
+      detail: typeof entry.detail === "string" ? entry.detail : "Visible evidence identified in the screenshot.",
+      marker: typeof entry.marker === "string" ? entry.marker : String(evidenceIndex + 1),
+      x: x1 / 10,
+      y: y1 / 10,
+      width: Math.max(0.8, (x2 - x1) / 10),
+      height: Math.max(0.8, (y2 - y1) / 10),
+    };
   }).filter((entry): entry is Evidence => Boolean(entry));
   const requestedCategory = typeof item.category === "string" ? item.category.trim().toLowerCase() : "visual design";
   const category = AUDIT_CATEGORIES.find((candidate) => candidate.toLowerCase() === requestedCategory) ?? "Visual design";
-  return { id: typeof item.id === "string" ? item.id : `finding-${index + 1}`, severity: item.severity === "high" ? "high" : "medium", category, title: typeof item.title === "string" ? item.title : "UX issue", description: typeof item.description === "string" ? item.description : "The visible interface may create friction for users.", recommendation: typeof item.recommendation === "string" ? item.recommendation : "Review this area against established UX principles.", screenrootTasks: Array.isArray(item.screenrootTasks) ? item.screenrootTasks.filter((task): task is string => typeof task === "string") : [], devTasks: Array.isArray(item.devTasks) ? item.devTasks.filter((task): task is string => typeof task === "string") : [], uxPerspective: { law: typeof perspective.law === "string" ? perspective.law : "UX principle", definition: typeof perspective.definition === "string" ? perspective.definition : "A usability principle used to evaluate interface design.", assessment: typeof perspective.assessment === "string" ? perspective.assessment : "This visible area deserves review based on the supplied screenshot." }, evidence };
+  return {
+    id: typeof item.id === "string" ? item.id : `finding-${index + 1}`,
+    severity: item.severity === "high" ? "high" : "medium",
+    category,
+    title: typeof item.title === "string" ? item.title : "UX issue",
+    description: typeof item.description === "string" ? item.description : "The visible interface may create friction for users.",
+    recommendation: typeof item.recommendation === "string" ? item.recommendation : "Review this area against established UX principles.",
+    screenrootTasks: Array.isArray(item.screenrootTasks) ? item.screenrootTasks.filter((task): task is string => typeof task === "string") : [],
+    devTasks: Array.isArray(item.devTasks) ? item.devTasks.filter((task): task is string => typeof task === "string") : [],
+    uxPerspective: {
+      law: typeof perspective.law === "string" ? perspective.law : "UX principle",
+      definition: typeof perspective.definition === "string" ? perspective.definition : "A usability principle used to evaluate interface design.",
+      assessment: typeof perspective.assessment === "string" ? perspective.assessment : "This visible area deserves review based on the supplied screenshot.",
+    },
+    evidence,
+  };
 }
 
 async function captureScreenshot(url: string): Promise<Capture> {
@@ -101,56 +138,132 @@ async function captureScreenshot(url: string): Promise<Capture> {
   return { buffer, width, height, analysisBuffer };
 }
 
-function isTransientGeminiError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /HTTP (429|500|502|503|504)|high demand|temporarily unavailable|capacity|overloaded|deadline/i.test(message);
+async function callOpenRouter(apiKey: string, models: readonly string[], prompt: string, images: Buffer[], maxTokens: number, timeoutMs: number): Promise<{ text: string; model: string }> {
+  const content: Array<Record<string, unknown>> = [{ type: "text", text: prompt }];
+  for (const image of images) {
+    content.push({ type: "image_url", image_url: { url: `data:image/png;base64,${image.toString("base64")}` } });
+  }
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://uxaudit-screenroot.vercel.app",
+      "X-Title": "ScreenRoot UX Audit",
+    },
+    body: JSON.stringify({
+      model: models[0],
+      models,
+      messages: [{ role: "user", content }],
+      max_tokens: maxTokens,
+      response_format: { type: "json_object" },
+      provider: { allow_fallbacks: true, sort: "latency" },
+    }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const detail = await response.text();
+  if (!response.ok) {
+    let message = `OpenRouter returned HTTP ${response.status}.`;
+    try { message = JSON.parse(detail)?.error?.message || message; } catch {}
+    throw new Error(message);
+  }
+  const parsed = JSON.parse(detail) as { model?: string; choices?: Array<{ message?: { content?: unknown } }> };
+  const raw = parsed.choices?.[0]?.message?.content;
+  const text = typeof raw === "string" ? raw : Array.isArray(raw) ? raw.map((part) => typeof part === "object" && part && "text" in part ? String((part as { text?: unknown }).text ?? "") : "").join("") : "";
+  if (!text) throw new Error("OpenRouter returned an empty model response.");
+  return { text, model: parsed.model || models[0] };
 }
 
 async function callGemini(apiKey: string, model: string, prompt: string, images: Buffer[], maxOutputTokens: number, timeoutMs: number): Promise<string> {
   const parts: Array<Record<string, unknown>> = [{ text: prompt }];
   for (const image of images) parts.push({ inlineData: { mimeType: "image/png", data: image.toString("base64") } });
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, { method: "POST", headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey }, body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { responseMimeType: "application/json", maxOutputTokens, thinkingConfig: { thinkingLevel: "low" }, media_resolution: "MEDIA_RESOLUTION_HIGH" } }), signal: AbortSignal.timeout(timeoutMs) });
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
+    body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { responseMimeType: "application/json", maxOutputTokens, thinkingConfig: { thinkingLevel: "low" }, media_resolution: "MEDIA_RESOLUTION_HIGH" } }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
   const detail = await response.text();
   if (!response.ok) { let message = `Gemini ${model} returned HTTP ${response.status}.`; try { message = JSON.parse(detail)?.error?.message || message; } catch {} throw new Error(message); }
   const parsed = JSON.parse(detail) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
   return parsed.candidates?.[0]?.content?.parts?.map((part) => typeof part.text === "string" ? part.text : "").join("") || "";
 }
 
-async function analyseWithGemini(url: string, capture: Capture): Promise<{ findings: Finding[]; model: string }> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY is not configured on this deployment.");
+async function analyseWithModels(url: string, capture: Capture): Promise<{ findings: Finding[]; model: string }> {
   const prompt = buildAuditPrompt(url, capture.width, capture.height);
-  let lastError = "Gemini analysis could not be completed.";
-  for (let index = 0; index < GEMINI_MODELS.length; index++) {
-    const model = GEMINI_MODELS[index];
-    const timeout = index === 0 ? GEMINI_ANALYSIS_TIMEOUT_MS : GEMINI_FALLBACK_TIMEOUT_MS;
-    const attempts = index === 0 ? 2 : 1;
-    for (let attempt = 0; attempt < attempts; attempt++) {
+  const openRouterKey = process.env.OPENROUTER_API_KEY;
+  let lastError = "OpenRouter analysis could not be completed.";
+  if (openRouterKey) {
+    try {
+      const result = await callOpenRouter(openRouterKey, OPENROUTER_ANALYSIS_MODELS, prompt, [capture.analysisBuffer], 2600, OPENROUTER_ANALYSIS_TIMEOUT_MS);
+      const json = extractJsonObject(result.text) as { findings?: unknown[] } | null;
+      if (json && Array.isArray(json.findings)) {
+        const findings = json.findings.map((item, itemIndex) => normalizeFinding(item, itemIndex)).filter((finding) => finding.severity === "high" && finding.evidence.length > 0).slice(0, 5);
+        return { findings, model: result.model };
+      }
+      lastError = "OpenRouter returned invalid audit JSON.";
+    } catch (error) { lastError = error instanceof Error ? error.message : lastError; }
+  }
+  const geminiKey = process.env.GEMINI_API_KEY;
+  if (geminiKey) {
+    for (const model of GEMINI_MODELS) {
       try {
-        const text = await callGemini(apiKey, model, prompt, [capture.analysisBuffer], 2600, timeout);
+        const text = await callGemini(geminiKey, model, prompt, [capture.analysisBuffer], 2600, GEMINI_ANALYSIS_TIMEOUT_MS);
         const json = extractJsonObject(text) as { findings?: unknown[] } | null;
-        if (!json || !Array.isArray(json.findings)) { lastError = `Gemini ${model} returned invalid audit JSON.`; break; }
+        if (!json || !Array.isArray(json.findings)) { lastError = `Gemini ${model} returned invalid audit JSON.`; continue; }
         const findings = json.findings.map((item, itemIndex) => normalizeFinding(item, itemIndex)).filter((finding) => finding.severity === "high" && finding.evidence.length > 0).slice(0, 5);
         return { findings, model };
-      } catch (error) {
-        lastError = error instanceof Error ? error.message : lastError;
-        if (index === 0 && attempt === 0 && isTransientGeminiError(error)) await new Promise(resolve => setTimeout(resolve, 700));
-        else break;
-      }
+      } catch (error) { lastError = error instanceof Error ? error.message : lastError; }
     }
   }
-  throw new Error(`All Gemini audit models failed. Last error: ${lastError}`);
+  throw new Error(`All visual audit models failed. Last error: ${lastError}`);
 }
 
 function escapeXml(value: string): string { return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;").replace(/'/g, "&apos;"); }
-function buildRegionSvg(width: number, height: number, findings: Finding[]): Buffer { const elements = findings.flatMap((finding) => finding.evidence.map((e) => { const x = clamp(e.x / 100 * width, 0, width - 1), y = clamp(e.y / 100 * height, 0, height - 1); const w = clamp(e.width / 100 * width, 8, width - x), h = clamp(e.height / 100 * height, 8, height - y); const markerW = 34, markerH = 34, markerX = x, markerY = Math.max(0, y - markerH - 4); return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="3" fill="#ffd400" fill-opacity="0.12" stroke="#ffd400" stroke-width="5"/><rect x="${markerX}" y="${markerY}" width="${markerW}" height="${markerH}" rx="17" fill="#ffd400" stroke="#111" stroke-width="2"/><text x="${markerX + markerW / 2}" y="${markerY + 23}" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="700" fill="#111">${escapeXml(e.marker)}</text>`; })).join(""); return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${elements}</svg>`); }
-async function renderRegions(mainImage: Buffer, width: number, height: number, findings: Finding[]): Promise<Buffer> { if (!findings.some((finding) => finding.evidence.length)) return mainImage; return sharp(mainImage).composite([{ input: buildRegionSvg(width, height, findings), left: 0, top: 0, blend: "over" }]).png().toBuffer(); }
+function buildRegionSvg(width: number, height: number, findings: Finding[]): Buffer {
+  const elements = findings.flatMap((finding) => finding.evidence.map((e) => {
+    const x = clamp(e.x / 100 * width, 0, width - 1), y = clamp(e.y / 100 * height, 0, height - 1);
+    const w = clamp(e.width / 100 * width, 8, width - x), h = clamp(e.height / 100 * height, 8, height - y);
+    const markerW = 34, markerH = 34, markerX = x, markerY = Math.max(0, y - markerH - 4);
+    return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="3" fill="#ffd400" fill-opacity="0.12" stroke="#ffd400" stroke-width="5"/><rect x="${markerX}" y="${markerY}" width="${markerW}" height="${markerH}" rx="17" fill="#ffd400" stroke="#111" stroke-width="2"/><text x="${markerX + markerW / 2}" y="${markerY + 23}" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="700" fill="#111">${escapeXml(e.marker)}</text>`;
+  })).join("");
+  return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${elements}</svg>`);
+}
+async function renderRegions(mainImage: Buffer, width: number, height: number, findings: Finding[]): Promise<Buffer> {
+  if (!findings.some((finding) => finding.evidence.length)) return mainImage;
+  return sharp(mainImage).composite([{ input: buildRegionSvg(width, height, findings), left: 0, top: 0, blend: "over" }]).png().toBuffer();
+}
 
-function flattenRegions(findings: Finding[]) { return findings.flatMap((finding) => finding.evidence.map((e, evidenceIndex) => ({ findingId: finding.id, evidenceIndex, finding: { category: finding.category, title: finding.title, description: finding.description, recommendation: finding.recommendation, assessment: finding.uxPerspective.assessment, law: finding.uxPerspective.law }, evidence: { label: e.label, detail: e.detail }, box: [e.y * 10, e.x * 10, (e.y + e.height) * 10, (e.x + e.width) * 10] as RegionBox }))); }
+function flattenRegions(findings: Finding[]) {
+  return findings.flatMap((finding) => finding.evidence.map((e, evidenceIndex) => ({
+    findingId: finding.id,
+    evidenceIndex,
+    finding: { category: finding.category, title: finding.title, description: finding.description, recommendation: finding.recommendation, assessment: finding.uxPerspective.assessment, law: finding.uxPerspective.law },
+    evidence: { label: e.label, detail: e.detail },
+    box: [e.y * 10, e.x * 10, (e.y + e.height) * 10, (e.x + e.width) * 10] as RegionBox,
+  })));
+}
 
-function applyVerificationBoxes(findings: Finding[], verification: VerificationItem[]): Finding[] { const next = findings.map((finding) => ({ ...finding, evidence: finding.evidence.map((e) => ({ ...e })) })); for (const item of verification) { const finding = next.find((entry) => entry.id === item.findingId); if (!finding) continue; for (const region of item.regions) { const evidence = finding.evidence[region.evidenceIndex]; const box = normalizeBox(region.box); if (!evidence || !box) continue; const [y1, x1, y2, x2] = box; evidence.x = x1 / 10; evidence.y = y1 / 10; evidence.width = (x2 - x1) / 10; evidence.height = (y2 - y1) / 10; } } return next; }
+function applyVerificationBoxes(findings: Finding[], verification: VerificationItem[]): Finding[] {
+  const next = findings.map((finding) => ({ ...finding, evidence: finding.evidence.map((e) => ({ ...e })) }));
+  for (const item of verification) {
+    const finding = next.find((entry) => entry.id === item.findingId);
+    if (!finding) continue;
+    for (const region of item.regions) {
+      const evidence = finding.evidence[region.evidenceIndex];
+      const box = normalizeBox(region.box);
+      if (!evidence || !box) continue;
+      const [y1, x1, y2, x2] = box;
+      evidence.x = x1 / 10; evidence.y = y1 / 10; evidence.width = (x2 - x1) / 10; evidence.height = (y2 - y1) / 10;
+    }
+  }
+  return next;
+}
 
-function removeInvalidFindings(findings: Finding[], verification: VerificationResult): Finding[] { const validIds = new Set(verification.findings.filter((item) => item.valid).map((item) => item.findingId)); return findings.filter((finding) => validIds.has(finding.id)); }
+function removeInvalidFindings(findings: Finding[], verification: VerificationResult): Finding[] {
+  const validIds = new Set(verification.findings.filter((item) => item.valid).map((item) => item.findingId));
+  return findings.filter((finding) => validIds.has(finding.id));
+}
 function regionsNeedCorrection(verification: VerificationItem[]): boolean { return verification.some((item) => item.valid && item.regions.some((region) => !region.correct)); }
 function hasCompleteVerification(findings: Finding[], verification: VerificationItem[]): boolean {
   if (verification.length !== findings.length) return false;
@@ -163,24 +276,32 @@ function hasCompleteVerification(findings: Finding[], verification: Verification
 }
 
 async function verifyAndCorrectRegions(capture: Capture, findings: Finding[], model: string, onStage?: (stage: AuditStage) => void): Promise<{ findings: Finding[]; annotated: Buffer }> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || !findings.length) return { findings: [], annotated: capture.buffer };
+  if (!findings.length) return { findings: [], annotated: capture.buffer };
   let current = findings.map((finding) => ({ ...finding, evidence: finding.evidence.map((e) => ({ ...e })) }));
   let annotated = await renderRegions(capture.buffer, capture.width, capture.height, current);
   let lastError = "Evidence verification could not be completed.";
 
   for (let pass = 1; pass <= MAX_EVIDENCE_VERIFICATION_PASSES; pass++) {
-    onStage?.({ id: "verify", label: pass === 1 ? "Analysing highlighted regions" : "Analysing highlighted regions (correction pass)", detail: "An independent Gemini check is comparing the highlighted image with the untouched screenshot and the complete finding context.", status: "active" });
+    onStage?.({ id: "verify", label: pass === 1 ? "Analysing highlighted regions" : "Analysing highlighted regions (correction pass)", detail: "An independent visual model is comparing the highlighted image with the untouched screenshot and the complete finding context.", status: "active" });
     const regions = flattenRegions(current);
     const prompt = `${buildRegionVerificationPrompt()}\n\nAUDIT FINDINGS AND CURRENT REGION DATA\n${JSON.stringify(regions)}\n\nVerification pass: ${pass}. Image 1 is MAIN. Image 2 is the annotated image rendered from MAIN.`;
     try {
       const annotatedAnalysis = await sharp(annotated).resize({ height: Math.min(6000, capture.height), withoutEnlargement: true }).png().toBuffer();
-      const verificationModel = GEMINI_MODELS[2] || model;
-      const text = await callGemini(apiKey, verificationModel, prompt, [capture.analysisBuffer, annotatedAnalysis], 2200, GEMINI_VERIFY_TIMEOUT_MS);
+      const openRouterKey = process.env.OPENROUTER_API_KEY;
+      let text = "";
+      if (openRouterKey) {
+        const result = await callOpenRouter(openRouterKey, OPENROUTER_VERIFY_MODELS, prompt, [capture.analysisBuffer, annotatedAnalysis], 2200, OPENROUTER_VERIFY_TIMEOUT_MS);
+        text = result.text;
+      } else {
+        const geminiKey = process.env.GEMINI_API_KEY;
+        if (!geminiKey) throw new Error("OPENROUTER_API_KEY is not configured on this deployment.");
+        const verificationModel = GEMINI_MODELS[2] || model;
+        text = await callGemini(geminiKey, verificationModel, prompt, [capture.analysisBuffer, annotatedAnalysis], 2200, GEMINI_VERIFY_TIMEOUT_MS);
+      }
       const json = extractJsonObject(text) as VerificationResult | null;
-      if (!json || !Array.isArray(json.findings)) { lastError = "Gemini returned invalid evidence verification JSON."; continue; }
+      if (!json || !Array.isArray(json.findings)) { lastError = "Visual model returned invalid evidence verification JSON."; continue; }
       const items = json.findings.filter((item): item is VerificationItem => Boolean(item && typeof item === "object" && typeof (item as VerificationItem).findingId === "string" && typeof (item as VerificationItem).valid === "boolean" && Array.isArray((item as VerificationItem).regions)));
-      if (!hasCompleteVerification(current, items)) { lastError = "Gemini did not independently verify every finding and evidence item."; continue; }
+      if (!hasCompleteVerification(current, items)) { lastError = "Visual model did not independently verify every finding and evidence item."; continue; }
 
       const stillValid = removeInvalidFindings(current, { findings: items });
       if (stillValid.length !== current.length) {
@@ -192,12 +313,12 @@ async function verifyAndCorrectRegions(capture: Capture, findings: Finding[], mo
       }
 
       if (!regionsNeedCorrection(items)) return { findings: current, annotated };
-
       onStage?.({ id: "correct", label: `Correcting highlighted regions (pass ${pass})`, detail: "The evidence coordinates did not match the finding context, so the annotation is being rebuilt from the untouched screenshot.", status: "active" });
       current = applyVerificationBoxes(current, items);
       annotated = await renderRegions(capture.buffer, capture.width, capture.height, current);
     } catch (error) {
       lastError = error instanceof Error ? error.message : lastError;
+      if (pass < MAX_EVIDENCE_VERIFICATION_PASSES) continue;
       break;
     }
   }
@@ -209,9 +330,9 @@ export async function createAudit(url: string, onStage?: (stage: AuditStage) => 
   onStage?.({ id: "capture", label: "Taking page snapshot", detail: "Browserless is capturing the complete desktop landing page and preserving the original image.", status: "active" });
   const capture = await captureScreenshot(url);
   onStage?.({ id: "capture", label: "Taking page snapshot", detail: "The untouched main screenshot is ready.", status: "complete" });
-  onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "Gemini is reviewing the untouched screenshot against the ScreenRoot framework.", status: "active" });
-  const analysis = await analyseWithGemini(url, capture);
-  onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "Gemini completed the initial visual UX analysis.", status: "complete" });
+  onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "The visual audit engine is reviewing the untouched screenshot against the ScreenRoot framework.", status: "active" });
+  const analysis = await analyseWithModels(url, capture);
+  onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "Initial visual UX analysis completed.", status: "complete" });
   onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "Creating the first annotated image from the untouched screenshot.", status: "active" });
   const verified = await verifyAndCorrectRegions(capture, analysis.findings, analysis.model, onStage);
   onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "The final annotated image has been rebuilt only from the untouched screenshot.", status: "complete" });
