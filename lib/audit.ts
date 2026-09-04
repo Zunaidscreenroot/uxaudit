@@ -14,8 +14,6 @@ type VerificationItem = { findingId: string; valid: boolean; regions: Array<{ ev
 type VerificationResult = { findings: VerificationItem[] };
 
 const MODEL = "minimax/minimax-m3:free";
-// Keep the full audit comfortably below Vercel's function duration while allowing
-// MiniMax enough time for two multimodal calls.
 const BROWSERLESS_TIMEOUT_MS = 11000;
 const ANALYSIS_TIMEOUT_MS = 16000;
 const VERIFY_TIMEOUT_MS = 16000;
@@ -101,15 +99,13 @@ async function captureScreenshot(url: string): Promise<Capture> {
   const metadata = await sharp(buffer).metadata();
   const width = Number(payload.width) || metadata.width || 1440;
   const height = Number(payload.height) || metadata.height || 900;
-  // Keep visual detail high enough for text/layout inspection while controlling
-  // the multimodal request size. Coordinates remain normalized to the full image.
-  const analysisBuffer = await sharp(buffer).resize({ height: Math.min(5000, height), withoutEnlargement: true }).png({ compressionLevel: 6 }).toBuffer();
+  const analysisBuffer = await sharp(buffer).resize({ height: Math.min(5000, height), withoutEnlargement: true }).jpeg({ quality: 82, progressive: true, mozjpeg: true }).toBuffer();
   return { buffer, width, height, analysisBuffer };
 }
 
 async function callMiniMax(apiKey: string, prompt: string, images: Buffer[], maxTokens: number, timeout: number): Promise<string> {
   const content: any[] = [{ type: "text", text: prompt }];
-  for (const image of images) content.push({ type: "image_url", image_url: { url: `data:image/png;base64,${image.toString("base64")}` } });
+  for (const image of images) content.push({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${image.toString("base64")}` } });
   const client = new OpenAI({ baseURL: "https://openrouter.ai/api/v1", apiKey, timeout, maxRetries: 0 });
   const response = await client.chat.completions.create({
     model: MODEL,
@@ -181,7 +177,7 @@ async function verifyAndCorrectRegions(capture: Capture, findings: Finding[], on
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("OPENROUTER_API_KEY is not configured on this deployment.");
   onStage?.({ id: "verify", label: "Verifying evidence", detail: "MiniMax M3 is independently checking every finding against the untouched screenshot and correcting only coordinates that are wrong.", status: "active" });
-  const prompt = `${buildRegionVerificationPrompt()}\n\nAUDIT FINDINGS AND CURRENT REGION DATA\n${JSON.stringify(flattenRegions(findings))}\n\nThere is ONE image in this request: IMAGE 1 = the untouched MAIN screenshot. Use it as the only visual source of truth. Do not expect an annotation image.`;
+  const prompt = `${buildRegionVerificationPrompt()}\n\nAUDIT FINDINGS AND CURRENT REGION DATA\n${JSON.stringify(flattenRegions(findings))}\n\nThere is ONE image in this request: IMAGE 1 = the untouched MAIN screenshot. Use it as the only visual source of truth.`;
   let text: string;
   try {
     text = await callMiniMax(apiKey, prompt, [capture.analysisBuffer], 2200, VERIFY_TIMEOUT_MS);
