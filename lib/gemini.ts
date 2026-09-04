@@ -31,7 +31,7 @@ AUDIT DEPTH
 
 STRICT FINDING VALIDITY
 - Every finding must be directly supported by the screenshot.
-- Before writing a finding, identify the exact visible UI that proves it.
+- Before writing a finding, identify the exact visible UI that proves the issue.
 - Check that the screenshot does not contradict the claim.
 - Do not turn a neutral design choice into a UX violation without clear evidence.
 - For contrast/readability findings, inspect the actual foreground text and actual background behind that text. Do not claim low contrast merely because a panel uses a saturated color.
@@ -59,9 +59,8 @@ export function buildRegionVerificationPrompt(): string {
 
 TASK: INDEPENDENTLY VERIFY FINDINGS AND THEIR EVIDENCE REGIONS
 
-You receive exactly two images.
+You receive exactly ONE image.
 IMAGE 1 = the untouched MAIN screenshot. It is immutable and is the ONLY source of truth for visible content and coordinates.
-IMAGE 2 = a NEW annotated image generated from IMAGE 1. Yellow borders, yellow fills, and numbered markers are annotations only. They are NEVER evidence.
 
 This is BOTH a finding-validity check and a semantic evidence-region check.
 
@@ -83,14 +82,13 @@ A finding about a calculator output must target the calculator output. A finding
 
 REGION STATUS
 For every evidence item, return an explicit correct boolean.
-- correct=true means the CURRENT yellow region already encloses the exact supporting UI in IMAGE 1.
+- correct=true means the CURRENT region encloses the exact supporting UI in IMAGE 1.
 - correct=false means the CURRENT region is wrong; return a replacement box calculated from IMAGE 1.
 - Even when correct=true, return the current box unchanged.
 - Never set correct=true merely because the region is nearby.
 
 IMPORTANT
 - Do not trust the first model's finding or coordinates.
-- Do not use IMAGE 2's yellow marks to decide what is correct.
 - Corrected coordinates must be calculated from IMAGE 1.
 - If a finding is invalid, set valid=false and return regions=[] for it.
 - If a finding is valid, return exactly one region object for every evidence item.
