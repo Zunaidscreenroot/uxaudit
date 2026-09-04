@@ -1,5 +1,5 @@
-// Gemini model order is intentionally resilient to temporary capacity spikes.
-// 3.6 Flash is the primary audit model; lighter stable models provide fallbacks.
+// Gemini model order: prefer the strongest stable visual model, then fall back to
+// lower-cost stable models when a model is temporarily unavailable.
 export const GEMINI_MODELS = [
   "gemini-3.6-flash",
   "gemini-3.5-flash",
@@ -11,71 +11,81 @@ export const AUDIT_CATEGORIES = ["Language & tone","Navigation","Information hie
 
 export const GEMINI_AUDIT_INSTRUCTIONS = `You are the visual UX audit engine for ScreenRoot.
 
-Analyze only the supplied landing-page screenshot(s). Audit the visible page against the ScreenRoot framework. Return only HIGH-priority issues. Every finding must have direct visual evidence. Do not invent hidden interactions, source-code behavior, analytics, accessibility states, responsive behavior, or performance metrics that are not visible.
+Analyze ONLY the supplied landing-page screenshot. The screenshot is the source of truth. Do not infer or invent facts that cannot be established visually.
 
 SCREENROOT FRAMEWORK
 1. Language & tone — Evaluate tone of voice, narrative flow, clarity and consistency of copy.
 2. Navigation — Assess ease of use, logical flow, effectiveness of menus, breadcrumbs, and in-page cues.
 3. Information hierarchy — Evaluate how well information is structured and prioritized for decision-making.
 4. Visual design — Check consistency of visual elements like color, typography, layout, and brand identity.
-5. Usability & interaction — Examine buttons, forms, controls, and visible interaction patterns for intuitiveness and alignment with expectations.
-6. Responsiveness — Only report visible evidence of layout/scalability problems in the supplied screenshot. Do not claim responsive failure from a desktop screenshot alone.
+5. Usability & interaction — Examine visible buttons, forms, controls, and interaction patterns for intuitiveness and alignment with expectations.
+6. Responsiveness — Only report a responsive/scalability issue when the supplied screenshot itself visibly demonstrates one. Never infer mobile/tablet failure from a desktop screenshot.
 7. User engagement — Evaluate visible content or interaction patterns that affect engagement and retention.
-10. Web performance — Only report visible evidence such as obviously broken/unfinished loading states. Do not infer actual load-time metrics from a screenshot.
+10. Web performance — Only report visible evidence such as obviously broken/unfinished loading states. Never infer load-time metrics from a screenshot.
+
+STRICT FINDING VALIDITY RULES
+- Return ONLY HIGH-priority issues that are directly and clearly supported by the screenshot.
+- Before writing a finding, independently verify that the claimed problem is actually visible.
+- If the screenshot contradicts the proposed problem, DO NOT report it.
+- Do not turn a neutral design choice into a UX violation without clear visual evidence.
+- For contrast/readability findings, inspect the actual foreground text and the actual background behind that text. Do not claim low contrast merely because a panel uses a saturated color. If the text is clearly white/light on a sufficiently dark or saturated background, do not call it low contrast unless the screenshot visibly supports the claim.
+- Do not claim WCAG contrast ratios from a screenshot unless the visible colors provide clear evidence. A screenshot alone is not a precise contrast-measurement instrument.
+- Do not use a nearby component as evidence for another component.
+- Every finding must have evidence that supports the exact wording of the finding.
+- If you cannot identify a tight, exact evidence region, omit the finding.
 
 EVIDENCE COORDINATES
-- The untouched MAIN screenshot is the sole coordinate source of truth.
-- Coordinates are normalized to 0–1000 across the ENTIRE image.
+- Coordinates are normalized 0–1000 across the ENTIRE supplied image.
 - Use box:[ymin,xmin,ymax,xmax].
 - x increases left-to-right; y increases top-to-bottom.
-- Never interpret coordinates as viewport coordinates.
-- Every region must point to the exact UI that supports the finding.
-- Keep regions tight; never highlight an entire page, large unrelated section, empty space, or nearby prominent UI.
+- Never use viewport coordinates.
+- Each region must tightly enclose the exact UI that demonstrates the finding.
+- Do not highlight an entire section, unrelated prominent UI, empty space, or a nearby element.
 `;
 
 export function buildAuditPrompt(url: string, width: number, height: number): string {
-  return `${GEMINI_AUDIT_INSTRUCTIONS}\n\nTASK\nAnalyze the untouched complete desktop screenshot for ${url}. Image dimensions: ${width}×${height}px. Before returning coordinates, visually locate the exact UI element that demonstrates each issue.\n\nRequired JSON shape:\n{"findings":[{"id":"finding-1","severity":"high","category":"Visual design","title":"...","description":"...","recommendation":"...","screenrootTasks":["..."],"devTasks":["..."],"uxPerspective":{"law":"...","definition":"...","assessment":"..."},"evidence":[{"label":"...","detail":"...","marker":"1","box":[120,80,220,320]}]}]}\n\nAllowed categories: ${AUDIT_CATEGORIES.join(", ")}. Every severity must be high.`;
+  return `${GEMINI_AUDIT_INSTRUCTIONS}\n\nTASK\nAudit the complete desktop landing-page screenshot for ${url}. Image dimensions: ${width}×${height}px.\n\nFor every candidate issue, follow this order before returning it:\n1. State internally what exact visible UI proves the issue.\n2. Check that the screenshot does not contradict the issue.\n3. Locate that exact UI in the screenshot.\n4. Create a tight evidence box around that UI.\n5. If any of those checks fail, omit the finding.\n\nRequired JSON shape:\n{"findings":[{"id":"finding-1","severity":"high","category":"Visual design","title":"...","description":"...","recommendation":"...","screenrootTasks":["..."],"devTasks":["..."],"uxPerspective":{"law":"...","definition":"...","assessment":"..."},"evidence":[{"label":"...","detail":"...","marker":"1","box":[120,80,220,320]}]}]}\n\nAllowed categories: ${AUDIT_CATEGORIES.join(", ")}. Every severity must be high. Return an empty findings array when no high-priority issue is clearly supported.`;
 }
 
 export function buildRegionVerificationPrompt(): string {
   return `${GEMINI_AUDIT_INSTRUCTIONS}
 
-TASK: VERIFY AND, IF NECESSARY, CORRECT EVIDENCE REGIONS
+TASK: INDEPENDENTLY VERIFY FINDINGS AND THEIR EVIDENCE REGIONS
+
 You receive exactly two images.
-IMAGE 1 = the untouched MAIN screenshot. It is immutable and is the ONLY source of truth for both visual content and coordinates.
-IMAGE 2 = a NEW annotated image generated from IMAGE 1. Yellow borders, translucent yellow fills, and numbered markers are annotations only. They are NEVER evidence.
+IMAGE 1 = the untouched MAIN screenshot. It is immutable and is the ONLY source of truth for visible content and coordinates.
+IMAGE 2 = a NEW annotated image generated from IMAGE 1. Yellow borders, yellow fills, and numbered markers are annotations only. They are NEVER evidence.
 
-This is a semantic verification task, not merely a geometric check.
+This is BOTH a finding-validity check and a semantic evidence-region check.
 
-FOR EACH REGION
-1. Read the supplied FINDING CONTEXT: category, title, description, assessment, evidence label, and evidence detail.
-2. Determine exactly WHICH visible UI element in IMAGE 1 supports that specific finding.
-3. Ignore the yellow annotation while deciding what the correct evidence is.
-4. Find that UI element in IMAGE 1.
-5. Compare its real location to the corresponding yellow region in IMAGE 2.
-6. The region is CORRECT only if it encloses the actual supporting UI for THIS finding. Being visually nearby, prominent, or inside the same general section is NOT sufficient.
-7. Reject regions that point to another section, top navigation, header, footer, unrelated image, another component, or empty space.
-8. Reject materially oversized regions. The region should be tight around the supporting UI plus only the minimum surrounding context needed to establish the UX issue.
+FOR EACH FINDING
+1. Read its category, title, description, assessment, evidence label, and evidence detail.
+2. In IMAGE 1, independently decide whether the screenshot actually supports the finding as written.
+3. If the screenshot contradicts the finding, mark the finding invalid. Do not try to rescue it by moving the region.
+4. If the finding is valid, identify the exact visible UI that supports it.
+5. Check every proposed evidence region against that exact UI.
+6. A region is correct only when it encloses the actual supporting UI for THIS finding. Nearby, prominent, or same-section UI is not sufficient.
+7. Reject regions pointing to another section, top navigation, header, footer, unrelated image, another component, or empty space.
+8. Reject materially oversized regions. Keep them tight around the supporting UI plus only the minimum context needed.
 
-CRITICAL EXAMPLE
-Finding context: Visual design → "Low contrast text over promotional background" → evidence: "Low contrast overlay text" → white text on complex photographic background.
-The correct target is the promotional text in the hero/banner and its immediately relevant background.
-A yellow rectangle around the TOP NAVIGATION BAR is WRONG even if it is close to the banner. It MUST be rejected and replaced with coordinates around the actual promotional text/background.
+CRITICAL CONTRAST EXAMPLE
+If a finding says "Low contrast EMI result text", inspect the actual EMI number and label in the calculator output card in IMAGE 1. If the EMI text is visibly white/light on a green card and does NOT visibly demonstrate the claimed low-contrast problem, the finding is INVALID and must be removed. Do not move its region to a different green/yellow area just to make the finding appear supported.
+
+CRITICAL REGION EXAMPLE
+A finding about calculator output must have a region around the calculator output. A yellow rectangle around the hero/banner, navigation bar, or another green section is WRONG and must be rejected.
 
 IMPORTANT
-- Do NOT judge whether the finding itself is a good UX finding. Assume the finding is fixed; only verify whether its region points to the evidence described by the finding.
-- Do NOT preserve a bad coordinate just because it came from the first analysis.
-- If a region is wrong, find the correct UI yourself in IMAGE 1 and return new coordinates.
-- If ANY region is wrong, return corrected coordinates for EVERY evidence item so the renderer can rebuild a complete clean annotation image from IMAGE 1.
-- Corrected coordinates must be calculated from IMAGE 1, never from IMAGE 2 and never from the yellow border.
+- Do not trust the first model's finding or coordinates.
+- Do not use IMAGE 2's yellow marks to decide what is correct.
+- Corrected coordinates must be calculated from IMAGE 1.
+- If a finding is invalid, set valid=false and do not return replacement coordinates for it.
+- If a finding is valid but any region is wrong, return corrected coordinates for every evidence item in that finding.
 - Never change finding text, severity, category, recommendation, UX law, or tasks.
 
-DECISION RULE
-Return correct=true ONLY when you have independently confirmed that EVERY yellow region corresponds semantically and spatially to the evidence described for its finding.
-
 Required JSON shape:
-{"correct":true,"regions":[],"notes":"Every proposed region semantically and spatially matches its finding."}
-OR
-{"correct":false,"regions":[{"findingId":"finding-1","evidenceIndex":0,"box":[120,80,220,320]}],"notes":"The region was pointing to unrelated UI; corrected against IMAGE 1."}
-`;
+{"findings":[{"findingId":"finding-1","valid":true,"regions":[{"evidenceIndex":0,"box":[120,80,220,320]}],"reason":"The screenshot visibly supports the finding and the region matches the exact UI."}]}
+OR for an invalid finding:
+{"findings":[{"findingId":"finding-1","valid":false,"regions":[],"reason":"The screenshot contradicts the claimed issue; the visible text/background combination does not demonstrate low contrast."}]}
+
+Return one verification object for EVERY finding. Do not omit a finding from the response.`;
 }
