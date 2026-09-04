@@ -18,69 +18,180 @@ jobs:
         with:
           node-version: 20
       - run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-      - name: Patch audit runtime limits and capture
+      - name: Patch audit runtime, evidence loop and framework
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
+
           p = Path('lib/audit.ts')
           s = p.read_text()
+
+          s = s.replace('const GEMINI_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"] as const;', 'const GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"] as const;')
           s = s.replace('const GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.7-flash"] as const;', 'const GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"] as const;')
-          s = s.replace('const VERIFY_BROWSERLESS_TIMEOUT_MS = 4000;', 'const VERIFY_BROWSERLESS_TIMEOUT_MS = 3500;')
+          s = s.replace('const VERIFY_BROWSERLESS_TIMEOUT_MS = 4000;', 'const VERIFY_BROWSERLESS_TIMEOUT_MS = 2500;')
+          s = s.replace('const VERIFY_BROWSERLESS_TIMEOUT_MS = 3500;', 'const VERIFY_BROWSERLESS_TIMEOUT_MS = 2500;')
           s = s.replace('const GEMINI_ANALYSIS_TIMEOUT_MS = 8000;', 'const GEMINI_ANALYSIS_TIMEOUT_MS = 14000;')
-          s = s.replace('const GEMINI_VERIFY_TIMEOUT_MS = 4000;', 'const GEMINI_VERIFY_TIMEOUT_MS = 3500;')
-          s = s.replace('maxOutputTokens, thinkingConfig: { thinkingLevel: "low" }', 'maxOutputTokens, thinkingConfig: { thinkingLevel: "low" }, media_resolution: "MEDIA_RESOLUTION_MEDIUM"')
+          s = s.replace('const GEMINI_VERIFY_TIMEOUT_MS = 4000;', 'const GEMINI_VERIFY_TIMEOUT_MS = 2500;')
+          s = s.replace('const GEMINI_VERIFY_TIMEOUT_MS = 3500;', 'const GEMINI_VERIFY_TIMEOUT_MS = 2500;')
+          s = re.sub(r'(media_resolution: "MEDIA_RESOLUTION_MEDIUM")(?:\s*,\s*media_resolution: "MEDIA_RESOLUTION_MEDIUM")+', r'\1', s)
+          if 'media_resolution: "MEDIA_RESOLUTION_MEDIUM"' not in s:
+              s = s.replace('maxOutputTokens, thinkingConfig: { thinkingLevel: "low" }', 'maxOutputTokens, thinkingConfig: { thinkingLevel: "low" }, media_resolution: "MEDIA_RESOLUTION_MEDIUM"')
+          s = re.sub(r'(media_resolution: "MEDIA_RESOLUTION_MEDIUM")(?:\s*,\s*media_resolution: "MEDIA_RESOLUTION_MEDIUM")+', r'\1', s)
           s = s.replace('callGemini(apiKey, model, prompt, buffer, 4500, GEMINI_ANALYSIS_TIMEOUT_MS)', 'callGemini(apiKey, model, prompt, buffer, 3000, GEMINI_ANALYSIS_TIMEOUT_MS)')
           s = s.replace('callGemini(apiKey, model, prompt, verificationScreenshot, 1800, GEMINI_VERIFY_TIMEOUT_MS)', 'callGemini(apiKey, model, prompt, verificationScreenshot, 1200, GEMINI_VERIFY_TIMEOUT_MS)')
-          s = s.replace('Identify 3 to 8 meaningful, visually evidenced UX issues.', 'Identify 3 to 6 meaningful, visually evidenced UX issues.')
+          s = s.replace('callGemini(apiKey, model, prompt, verificationScreenshot, 1600, GEMINI_VERIFY_TIMEOUT_MS)', 'callGemini(apiKey, model, prompt, verificationScreenshot, 1200, GEMINI_VERIFY_TIMEOUT_MS)')
 
-          marker = 'type GeminiAnalysis = { findings: Finding[]; model: string };'
-          helper = r'''
-
-function extractJsonObject(text: string): unknown | null {
-  const cleaned = text.replace(/```(?:json)?/gi, "").replace(/```/g, "").trim();
-  try { return JSON.parse(cleaned); } catch {}
-  const start = cleaned.indexOf("{");
-  if (start < 0) return null;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < cleaned.length; i++) {
-    const ch = cleaned[i];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (ch === "\\") escaped = true;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') { inString = true; continue; }
-    if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) {
-        try { return JSON.parse(cleaned.slice(start, i + 1)); } catch { return null; }
+          old_scroll = '''    await new Promise(resolve => setTimeout(resolve, 1000));
+    await page.evaluate(async () => {
+      const step = Math.max(500, Math.floor(window.innerHeight * 0.8));
+      for (let y = 0; y < document.body.scrollHeight; y += step) { window.scrollTo(0, y); await new Promise(resolve => setTimeout(resolve, 60)); }
+      window.scrollTo(0, 0);
+      await new Promise(resolve => setTimeout(resolve, 250));
+    });'''
+          new_scroll = '''    await new Promise(resolve => setTimeout(resolve, 1200));
+    await page.evaluate(async () => {
+      document.querySelectorAll('img[loading="lazy"]').forEach((img) => img.setAttribute('loading', 'eager'));
+      document.querySelectorAll('img').forEach((img) => img.setAttribute('fetchpriority', 'high'));
+      const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+      const scrollHeight = () => Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
+      const step = Math.max(600, Math.floor(window.innerHeight * 0.75));
+      for (let pass = 0; pass < 2; pass++) {
+        for (let y = 0; y <= scrollHeight(); y += step) {
+          window.scrollTo(0, y);
+          await wait(180);
+        }
+        window.scrollTo(0, scrollHeight());
+        await wait(500);
       }
-    }
-  }
-  return null;
+      const images = Array.from(document.images);
+      await Promise.all(images.map((img) => {
+        if (img.complete) return Promise.resolve();
+        return new Promise(resolve => {
+          img.addEventListener('load', resolve, { once: true });
+          img.addEventListener('error', resolve, { once: true });
+        });
+      }));
+      await wait(500);
+      window.scrollTo(0, 0);
+      await wait(500);
+    });'''
+          if old_scroll in s:
+              s = s.replace(old_scroll, new_scroll)
+
+          marker = 'const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));'
+          helper = '''
+const AUDIT_CATEGORIES = [
+  "Language & tone",
+  "Navigation",
+  "Information hierarchy",
+  "Visual design",
+  "Usability & interaction",
+  "Responsiveness",
+  "User engagement",
+  "Web performance"
+] as const;
+
+function normalizeCategory(value: unknown, title: string, description: string): string {
+  const raw = typeof value === "string" ? value.trim() : "";
+  const lower = `${raw} ${title} ${description}`.toLowerCase();
+  const exact = AUDIT_CATEGORIES.find((category) => category.toLowerCase() === raw.toLowerCase());
+  if (exact) return exact;
+  if (/contrast|color|typography|visual|layout|spacing|alignment|brand/.test(lower)) return "Visual design";
+  if (/navigation|menu|breadcrumb|wayfinding|findability/.test(lower)) return "Navigation";
+  if (/hierarchy|density|grouping|priorit|scan|cognitive/.test(lower)) return "Information hierarchy";
+  if (/button|form|control|interaction|cookie|consent|target|click|input/.test(lower)) return "Usability & interaction";
+  if (/responsive|mobile|tablet|screen size|viewport/.test(lower)) return "Responsiveness";
+  if (/engagement|retention|content engagement|interactive tool/.test(lower)) return "User engagement";
+  if (/load|performance|speed|latency|responsive interface/.test(lower)) return "Web performance";
+  if (/tone|copy|language|voice|narrative|clarity/.test(lower)) return "Language & tone";
+  return "Usability & interaction";
 }
 '''
-          if 'function extractJsonObject' not in s:
+          if 'const AUDIT_CATEGORIES =' not in s:
               s = s.replace(marker, marker + helper)
 
-          old_analysis = 'try { json = JSON.parse(text); } catch { lastError = `Gemini ${model} returned invalid JSON.`; continue; }'
-          new_analysis = 'json = extractJsonObject(text);\n      if (!json) { lastError = `Gemini ${model} returned invalid JSON.`; continue; }'
-          s = s.replace(old_analysis, new_analysis)
+          s = s.replace('category: typeof item.category === "string" ? item.category : "UX",', 'category: normalizeCategory(item.category, String(item.title ?? ""), String(item.description ?? "")),')
+          s = s.replace('Identify 3 to 8 meaningful, visually evidenced UX issues.', 'Identify only 1 to 6 meaningful, visually evidenced HIGH-priority UX issues. Do not return medium or low priority issues.')
+          s = s.replace('Identify 3 to 6 meaningful, visually evidenced UX issues.', 'Identify only 1 to 6 meaningful, visually evidenced HIGH-priority UX issues. Do not return medium or low priority issues.')
+          framework_sentence = 'Use exactly one category from this framework: Language & tone, Navigation, Information hierarchy, Visual design, Usability & interaction, Responsiveness, User engagement, Web performance. Do not invent other categories.'
+          if framework_sentence not in s:
+              s = s.replace('Do not infer hidden interactions or inspect source code.', 'Do not infer hidden interactions or inspect source code. ' + framework_sentence)
 
-          old_verify = 'try { parsed = JSON.parse(text) as typeof parsed; } catch { return findings; }'
-          new_verify = 'const recovered = extractJsonObject(text);\n    if (recovered && typeof recovered === "object") parsed = recovered as typeof parsed;'
-          s = s.replace(old_verify, new_verify)
+          old_findings = 'const findings = rawFindings.map((item: unknown, index: number) => normalizeFinding(item, index, width, height, textRegions));'
+          new_findings = 'const findings = rawFindings.map((item: unknown, index: number) => normalizeFinding(item, index, width, height, textRegions)).filter((finding) => finding.severity === "high");'
+          s = s.replace(old_findings, new_findings)
+
+          start = s.find('async function verifyEvidence(')
+          end = s.find('\n\nexport async function createAudit', start)
+          if start >= 0 and end > start:
+              verify = r'''async function verifyEvidence(capture: { buffer: Buffer; width: number; height: number }, findings: Finding[], model: string): Promise<Finding[]> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || !findings.some((f) => f.evidence.length)) return findings;
+
+  let current = findings;
+  const maxPasses = 4;
+
+  for (let pass = 1; pass <= maxPasses; pass++) {
+    try {
+      const verificationScreenshot = await renderEvidenceVerificationScreenshot(capture, current);
+      const regions = current.flatMap((finding) => finding.evidence.map((e, evidenceIndex) => ({
+        findingId: finding.id,
+        evidenceIndex,
+        marker: e.marker,
+        label: e.label,
+        detail: e.detail,
+        box: [e.y * 10, e.x * 10, (e.y + e.height) * 10, (e.x + e.width) * 10]
+      })));
+
+      const prompt = `You are the final evidence QA reviewer for a UX audit. Inspect the supplied screenshot WITH yellow numbered rectangles. This is the exact screenshot that will be shown to the user. For every rectangle, decide whether it tightly covers the UI described by its label/detail. A correct region must: (a) cover the actual relevant UI element, (b) include enough of it to be understandable, (c) exclude unrelated content, and (d) be in the correct vertical section of the full-page screenshot. If a rectangle is wrong, return a corrected tight box. Never move a footer issue into another section, never use a whole-footer box for one link group, and never use a generic placeholder region. Coordinates are normalized 0-1000 against the ENTIRE image. Return ONLY JSON: {"verified":true|false,"corrections":[{"findingId":"...","evidenceIndex":0,"box":[ymin,xmin,ymax,xmax],"reason":"short reason"}]}. If all regions are correct, return verified:true with no corrections.\n\nAudit regions:\n${JSON.stringify(regions)}`;
+      const text = await callGemini(apiKey, model, prompt, verificationScreenshot, 1200, GEMINI_VERIFY_TIMEOUT_MS);
+      const recovered = extractJsonObject(text);
+      let parsed: { verified?: boolean; corrections?: Array<{ findingId?: string; evidenceIndex?: number; box?: unknown }> } = {};
+      if (recovered && typeof recovered === "object") parsed = recovered as typeof parsed;
+
+      const corrections = Array.isArray(parsed.corrections) ? parsed.corrections : [];
+      if (parsed.verified === true || corrections.length === 0) return current;
+
+      const next = current.map((finding) => ({ ...finding, evidence: finding.evidence.map((e) => ({ ...e })) }));
+      let changed = false;
+      for (const correction of corrections) {
+        const evidenceIndex = correction.evidenceIndex;
+        if (typeof correction.findingId !== "string" || typeof evidenceIndex !== "number" || !Number.isInteger(evidenceIndex) || !Array.isArray(correction.box) || correction.box.length !== 4) continue;
+        const nums = correction.box.map(Number);
+        if (!nums.every(Number.isFinite)) continue;
+        const [y1, x1, y2, x2] = nums.map((n) => clamp(n, 0, 1000));
+        const finding = next.find((f) => f.id === correction.findingId);
+        if (!finding || evidenceIndex < 0 || evidenceIndex >= finding.evidence.length || x2 <= x1 || y2 <= y1) continue;
+        const evidence = finding.evidence[evidenceIndex];
+        const nx = x1 / 10, ny = y1 / 10, nw = (x2 - x1) / 10, nh = (y2 - y1) / 10;
+        if (Math.abs(evidence.x - nx) > 0.5 || Math.abs(evidence.y - ny) > 0.5 || Math.abs(evidence.width - nw) > 0.5 || Math.abs(evidence.height - nh) > 0.5) changed = true;
+        evidence.x = nx;
+        evidence.y = ny;
+        evidence.width = nw;
+        evidence.height = nh;
+      }
+      if (!changed) return current;
+      current = next;
+    } catch (error) {
+      console.warn(`Evidence verification pass ${pass} skipped`, error);
+      return current;
+    }
+  }
+
+  return current;
+}'''
+              s = s[:start] + verify + s[end:]
+
           p.write_text(s)
           PY
+      - name: Validate TypeScript
+        run: npm run build
       - name: Commit changes
         run: |
           if git diff --quiet -- package-lock.json lib/audit.ts; then exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add package-lock.json lib/audit.ts
-          git commit -m "fix: correct Gemini JSON recovery patch"
+          git commit -m "fix: iterative evidence QA and audit categories"
           git push
