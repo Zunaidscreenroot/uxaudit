@@ -1,5 +1,6 @@
+import OpenAI from "openai";
 import sharp from "sharp";
-import { AUDIT_CATEGORIES, GEMINI_MODELS, buildAuditPrompt, buildRegionVerificationPrompt } from "./gemini";
+import { AUDIT_CATEGORIES, buildAuditPrompt, buildRegionVerificationPrompt } from "./gemini";
 
 export type Severity = "high" | "medium" | "low";
 export type Evidence = { label: string; detail: string; marker: string; x: number; y: number; width: number; height: number };
@@ -12,24 +13,11 @@ type RegionBox = [number, number, number, number];
 type VerificationItem = { findingId: string; valid: boolean; regions: Array<{ evidenceIndex: number; correct: boolean; box: RegionBox }>; reason: string };
 type VerificationResult = { findings: VerificationItem[] };
 
+const MODEL = "minimax/minimax-m3:free";
 const BROWSERLESS_TIMEOUT_MS = 14000;
-const OPENROUTER_ANALYSIS_TIMEOUT_MS = 12000;
-const OPENROUTER_VERIFY_TIMEOUT_MS = 10000;
-const GEMINI_ANALYSIS_TIMEOUT_MS = 9000;
-const GEMINI_VERIFY_TIMEOUT_MS = 7000;
+const ANALYSIS_TIMEOUT_MS = 14000;
+const VERIFY_TIMEOUT_MS = 12000;
 const MAX_EVIDENCE_VERIFICATION_PASSES = 2;
-
-const OPENROUTER_ANALYSIS_MODELS = [
-  "openai/gpt-5.6-luna",
-  "anthropic/claude-sonnet-5",
-  "google/gemini-3-flash-preview",
-] as const;
-
-const OPENROUTER_VERIFY_MODELS = [
-  "anthropic/claude-sonnet-5",
-  "openai/gpt-5.6-luna",
-  "google/gemini-3-flash-preview",
-] as const;
 
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
@@ -74,10 +62,8 @@ function normalizeFinding(value: unknown, index: number): Finding {
       label: typeof entry.label === "string" ? entry.label : `Region ${evidenceIndex + 1}`,
       detail: typeof entry.detail === "string" ? entry.detail : "Visible evidence identified in the screenshot.",
       marker: typeof entry.marker === "string" ? entry.marker : String(evidenceIndex + 1),
-      x: x1 / 10,
-      y: y1 / 10,
-      width: Math.max(0.8, (x2 - x1) / 10),
-      height: Math.max(0.8, (y2 - y1) / 10),
+      x: x1 / 10, y: y1 / 10,
+      width: Math.max(0.8, (x2 - x1) / 10), height: Math.max(0.8, (y2 - y1) / 10),
     };
   }).filter((entry): entry is Evidence => Boolean(entry));
   const requestedCategory = typeof item.category === "string" ? item.category.trim().toLowerCase() : "visual design";
@@ -107,7 +93,7 @@ async function captureScreenshot(url: string): Promise<Capture> {
   const code = `export default async ({ page }) => {
     await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1, isMobile: false, hasTouch: false });
     await page.emulateMediaType("screen");
-    try { await page.goto(${JSON.stringify(url)}, { waitUntil: "domcontentloaded", timeout: 6000 }); } catch (error) { console.warn("Navigation did not finish before the capture budget; continuing with the rendered page", error); }
+    try { await page.goto(${JSON.stringify(url)}, { waitUntil: "domcontentloaded", timeout: 6000 }); } catch (error) { console.warn("Navigation did not finish before the capture budget; continuing", error); }
     if (!await page.evaluate(() => !!document.body)) throw new Error("Browserless loaded no document body.");
     await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}html{scroll-behavior:auto!important}" }).catch(() => {});
     await new Promise(resolve => setTimeout(resolve, 600));
@@ -138,85 +124,37 @@ async function captureScreenshot(url: string): Promise<Capture> {
   return { buffer, width, height, analysisBuffer };
 }
 
-async function callOpenRouter(apiKey: string, models: readonly string[], prompt: string, images: Buffer[], maxTokens: number, timeoutMs: number): Promise<{ text: string; model: string }> {
-  const content: Array<Record<string, unknown>> = [{ type: "text", text: prompt }];
-  for (const image of images) {
-    content.push({ type: "image_url", image_url: { url: `data:image/png;base64,${image.toString("base64")}` } });
-  }
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": "https://uxaudit-screenroot.vercel.app",
-      "X-Title": "ScreenRoot UX Audit",
-    },
-    body: JSON.stringify({
-      model: models[0],
-      models,
-      messages: [{ role: "user", content }],
-      max_tokens: maxTokens,
-      response_format: { type: "json_object" },
-      provider: { allow_fallbacks: true, sort: "latency" },
-    }),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  const detail = await response.text();
-  if (!response.ok) {
-    let message = `OpenRouter returned HTTP ${response.status}.`;
-    try { message = JSON.parse(detail)?.error?.message || message; } catch {}
-    throw new Error(message);
-  }
-  const parsed = JSON.parse(detail) as { model?: string; choices?: Array<{ message?: { content?: unknown } }> };
-  const raw = parsed.choices?.[0]?.message?.content;
-  const text = typeof raw === "string" ? raw : Array.isArray(raw) ? raw.map((part) => typeof part === "object" && part && "text" in part ? String((part as { text?: unknown }).text ?? "") : "").join("") : "";
-  if (!text) throw new Error("OpenRouter returned an empty model response.");
-  return { text, model: parsed.model || models[0] };
+function getClient(apiKey: string, timeout: number) {
+  return new OpenAI({ baseURL: "https://openrouter.ai/api/v1", apiKey, timeout });
 }
 
-async function callGemini(apiKey: string, model: string, prompt: string, images: Buffer[], maxOutputTokens: number, timeoutMs: number): Promise<string> {
-  const parts: Array<Record<string, unknown>> = [{ text: prompt }];
-  for (const image of images) parts.push({ inlineData: { mimeType: "image/png", data: image.toString("base64") } });
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
-    body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { responseMimeType: "application/json", maxOutputTokens, thinkingConfig: { thinkingLevel: "low" }, media_resolution: "MEDIA_RESOLUTION_HIGH" } }),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  const detail = await response.text();
-  if (!response.ok) { let message = `Gemini ${model} returned HTTP ${response.status}.`; try { message = JSON.parse(detail)?.error?.message || message; } catch {} throw new Error(message); }
-  const parsed = JSON.parse(detail) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
-  return parsed.candidates?.[0]?.content?.parts?.map((part) => typeof part.text === "string" ? part.text : "").join("") || "";
+async function callMiniMax(apiKey: string, prompt: string, images: Buffer[], maxTokens: number, timeout: number): Promise<string> {
+  const content: any[] = [{ type: "text", text: prompt }];
+  for (const image of images) content.push({ type: "image_url", image_url: { url: `data:image/png;base64,${image.toString("base64")}` } });
+  const client = getClient(apiKey, timeout);
+  const response = await client.chat.completions.create({
+    model: MODEL,
+    messages: [{ role: "user", content }],
+    reasoning: { enabled: true },
+    max_tokens: maxTokens,
+    temperature: 0.1,
+    response_format: { type: "json_object" },
+    provider: { allow_fallbacks: true, sort: "latency" },
+  } as any);
+  const raw = response.choices?.[0]?.message?.content;
+  const text = typeof raw === "string" ? raw : Array.isArray(raw) ? raw.map((part: any) => typeof part === "object" && part && "text" in part ? String(part.text ?? "") : "").join("") : "";
+  if (!text) throw new Error("MiniMax M3 returned an empty response.");
+  return text;
 }
 
-async function analyseWithModels(url: string, capture: Capture): Promise<{ findings: Finding[]; model: string }> {
+async function analyseWithMiniMax(url: string, capture: Capture): Promise<Finding[]> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) throw new Error("OPENROUTER_API_KEY is not configured on this deployment.");
   const prompt = buildAuditPrompt(url, capture.width, capture.height);
-  const openRouterKey = process.env.OPENROUTER_API_KEY;
-  let lastError = "OpenRouter analysis could not be completed.";
-  if (openRouterKey) {
-    try {
-      const result = await callOpenRouter(openRouterKey, OPENROUTER_ANALYSIS_MODELS, prompt, [capture.analysisBuffer], 2600, OPENROUTER_ANALYSIS_TIMEOUT_MS);
-      const json = extractJsonObject(result.text) as { findings?: unknown[] } | null;
-      if (json && Array.isArray(json.findings)) {
-        const findings = json.findings.map((item, itemIndex) => normalizeFinding(item, itemIndex)).filter((finding) => finding.severity === "high" && finding.evidence.length > 0).slice(0, 5);
-        return { findings, model: result.model };
-      }
-      lastError = "OpenRouter returned invalid audit JSON.";
-    } catch (error) { lastError = error instanceof Error ? error.message : lastError; }
-  }
-  const geminiKey = process.env.GEMINI_API_KEY;
-  if (geminiKey) {
-    for (const model of GEMINI_MODELS) {
-      try {
-        const text = await callGemini(geminiKey, model, prompt, [capture.analysisBuffer], 2600, GEMINI_ANALYSIS_TIMEOUT_MS);
-        const json = extractJsonObject(text) as { findings?: unknown[] } | null;
-        if (!json || !Array.isArray(json.findings)) { lastError = `Gemini ${model} returned invalid audit JSON.`; continue; }
-        const findings = json.findings.map((item, itemIndex) => normalizeFinding(item, itemIndex)).filter((finding) => finding.severity === "high" && finding.evidence.length > 0).slice(0, 5);
-        return { findings, model };
-      } catch (error) { lastError = error instanceof Error ? error.message : lastError; }
-    }
-  }
-  throw new Error(`All visual audit models failed. Last error: ${lastError}`);
+  const text = await callMiniMax(apiKey, prompt, [capture.analysisBuffer], 3000, ANALYSIS_TIMEOUT_MS);
+  const json = extractJsonObject(text) as { findings?: unknown[] } | null;
+  if (!json || !Array.isArray(json.findings)) throw new Error("MiniMax M3 returned invalid audit JSON.");
+  return json.findings.map((item, index) => normalizeFinding(item, index)).filter((finding) => finding.severity === "high" && finding.evidence.length > 0).slice(0, 5);
 }
 
 function escapeXml(value: string): string { return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;").replace(/'/g, "&apos;"); }
@@ -275,37 +213,29 @@ function hasCompleteVerification(findings: Finding[], verification: Verification
   });
 }
 
-async function verifyAndCorrectRegions(capture: Capture, findings: Finding[], model: string, onStage?: (stage: AuditStage) => void): Promise<{ findings: Finding[]; annotated: Buffer }> {
+async function verifyAndCorrectRegions(capture: Capture, findings: Finding[], onStage?: (stage: AuditStage) => void): Promise<{ findings: Finding[]; annotated: Buffer }> {
   if (!findings.length) return { findings: [], annotated: capture.buffer };
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) throw new Error("OPENROUTER_API_KEY is not configured on this deployment.");
   let current = findings.map((finding) => ({ ...finding, evidence: finding.evidence.map((e) => ({ ...e })) }));
   let annotated = await renderRegions(capture.buffer, capture.width, capture.height, current);
   let lastError = "Evidence verification could not be completed.";
 
   for (let pass = 1; pass <= MAX_EVIDENCE_VERIFICATION_PASSES; pass++) {
-    onStage?.({ id: "verify", label: pass === 1 ? "Analysing highlighted regions" : "Analysing highlighted regions (correction pass)", detail: "An independent visual model is comparing the highlighted image with the untouched screenshot and the complete finding context.", status: "active" });
+    onStage?.({ id: "verify", label: pass === 1 ? "Analysing highlighted regions" : "Analysing highlighted regions (correction pass)", detail: "MiniMax M3 is independently comparing the highlighted image with the untouched screenshot and the complete finding context.", status: "active" });
     const regions = flattenRegions(current);
     const prompt = `${buildRegionVerificationPrompt()}\n\nAUDIT FINDINGS AND CURRENT REGION DATA\n${JSON.stringify(regions)}\n\nVerification pass: ${pass}. Image 1 is MAIN. Image 2 is the annotated image rendered from MAIN.`;
     try {
       const annotatedAnalysis = await sharp(annotated).resize({ height: Math.min(6000, capture.height), withoutEnlargement: true }).png().toBuffer();
-      const openRouterKey = process.env.OPENROUTER_API_KEY;
-      let text = "";
-      if (openRouterKey) {
-        const result = await callOpenRouter(openRouterKey, OPENROUTER_VERIFY_MODELS, prompt, [capture.analysisBuffer, annotatedAnalysis], 2200, OPENROUTER_VERIFY_TIMEOUT_MS);
-        text = result.text;
-      } else {
-        const geminiKey = process.env.GEMINI_API_KEY;
-        if (!geminiKey) throw new Error("OPENROUTER_API_KEY is not configured on this deployment.");
-        const verificationModel = GEMINI_MODELS[2] || model;
-        text = await callGemini(geminiKey, verificationModel, prompt, [capture.analysisBuffer, annotatedAnalysis], 2200, GEMINI_VERIFY_TIMEOUT_MS);
-      }
+      const text = await callMiniMax(apiKey, prompt, [capture.analysisBuffer, annotatedAnalysis], 2600, VERIFY_TIMEOUT_MS);
       const json = extractJsonObject(text) as VerificationResult | null;
-      if (!json || !Array.isArray(json.findings)) { lastError = "Visual model returned invalid evidence verification JSON."; continue; }
+      if (!json || !Array.isArray(json.findings)) { lastError = "MiniMax M3 returned invalid evidence verification JSON."; continue; }
       const items = json.findings.filter((item): item is VerificationItem => Boolean(item && typeof item === "object" && typeof (item as VerificationItem).findingId === "string" && typeof (item as VerificationItem).valid === "boolean" && Array.isArray((item as VerificationItem).regions)));
-      if (!hasCompleteVerification(current, items)) { lastError = "Visual model did not independently verify every finding and evidence item."; continue; }
+      if (!hasCompleteVerification(current, items)) { lastError = "MiniMax M3 did not independently verify every finding and evidence item."; continue; }
 
       const stillValid = removeInvalidFindings(current, { findings: items });
       if (stillValid.length !== current.length) {
-        onStage?.({ id: "correct", label: "Correcting highlighted regions", detail: "The independent check rejected unsupported findings. Those findings will not be shown in the final audit.", status: "active" });
+        onStage?.({ id: "correct", label: "Correcting highlighted regions", detail: "The independent check rejected unsupported findings. Those findings will not be shown.", status: "active" });
         current = stillValid;
         if (!current.length) return { findings: [], annotated: capture.buffer };
         annotated = await renderRegions(capture.buffer, capture.width, capture.height, current);
@@ -322,7 +252,6 @@ async function verifyAndCorrectRegions(capture: Capture, findings: Finding[], mo
       break;
     }
   }
-
   throw new Error(`Evidence verification failed: ${lastError}`);
 }
 
@@ -330,11 +259,11 @@ export async function createAudit(url: string, onStage?: (stage: AuditStage) => 
   onStage?.({ id: "capture", label: "Taking page snapshot", detail: "Browserless is capturing the complete desktop landing page and preserving the original image.", status: "active" });
   const capture = await captureScreenshot(url);
   onStage?.({ id: "capture", label: "Taking page snapshot", detail: "The untouched main screenshot is ready.", status: "complete" });
-  onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "The visual audit engine is reviewing the untouched screenshot against the ScreenRoot framework.", status: "active" });
-  const analysis = await analyseWithModels(url, capture);
+  onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "MiniMax M3 is reviewing the untouched screenshot against the ScreenRoot framework with reasoning enabled.", status: "active" });
+  const findings = await analyseWithMiniMax(url, capture);
   onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "Initial visual UX analysis completed.", status: "complete" });
   onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "Creating the first annotated image from the untouched screenshot.", status: "active" });
-  const verified = await verifyAndCorrectRegions(capture, analysis.findings, analysis.model, onStage);
+  const verified = await verifyAndCorrectRegions(capture, findings, onStage);
   onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "The final annotated image has been rebuilt only from the untouched screenshot.", status: "complete" });
   onStage?.({ id: "complete", label: "Finalising verified audit", detail: "Preparing the final verified report for the product.", status: "active" });
   const result = { pages: [{ url, title: new URL(url).hostname, screenshot: `data:image/png;base64,${verified.annotated.toString("base64")}`, screenshotWidth: capture.width, screenshotHeight: capture.height, findings: verified.findings.filter((finding) => finding.severity === "high" && finding.evidence.length > 0) }] };
