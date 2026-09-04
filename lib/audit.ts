@@ -8,14 +8,14 @@ export type Finding = { id: string; severity: Severity; category: string; title:
 export type AuditPage = { url: string; title: string; screenshot: string; screenshotWidth: number; screenshotHeight: number; findings: Finding[] };
 export type AuditResult = { pages: AuditPage[] };
 export type AuditStage = { id: string; label: string; detail: string; status: "active" | "complete" };
-type Capture = { buffer: Buffer; width: number; height: number };
+type Capture = { buffer: Buffer; width: number; height: number; analysisBuffer: Buffer };
 type RegionBox = [number, number, number, number];
 type VerificationResult = { correct: boolean; regions: Array<{ findingId: string; evidenceIndex: number; box: RegionBox }>; notes: string };
 
-const BROWSERLESS_TIMEOUT_MS = 26000;
-const GEMINI_ANALYSIS_TIMEOUT_MS = 12000;
-const GEMINI_VERIFY_TIMEOUT_MS = 4000;
-const MAX_EVIDENCE_VERIFICATION_PASSES = 3;
+const BROWSERLESS_TIMEOUT_MS = 18000;
+const GEMINI_ANALYSIS_TIMEOUT_MS = 16000;
+const GEMINI_VERIFY_TIMEOUT_MS = 2500;
+const MAX_EVIDENCE_VERIFICATION_PASSES = 2;
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
 function extractJsonObject(text: string): unknown | null {
@@ -68,19 +68,19 @@ async function captureScreenshot(url: string): Promise<Capture> {
   const code = `export default async ({ page }) => {
     await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1, isMobile: false, hasTouch: false });
     await page.emulateMediaType("screen");
-    try { await page.goto(${JSON.stringify(url)}, { waitUntil: "domcontentloaded", timeout: 9000 }); } catch (error) { console.warn("Navigation did not finish before the navigation budget; capturing the rendered page", error); }
+    try { await page.goto(${JSON.stringify(url)}, { waitUntil: "domcontentloaded", timeout: 8000 }); } catch (error) { console.warn("Navigation did not finish before the navigation budget; capturing the rendered page", error); }
     if (!await page.evaluate(() => !!document.body)) throw new Error("Browserless loaded no document body.");
     await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}html{scroll-behavior:auto!important}" }).catch(() => {});
-    await new Promise(resolve => setTimeout(resolve, 900));
+    await new Promise(resolve => setTimeout(resolve, 700));
     await page.evaluate(async () => {
       const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
       document.documentElement.style.scrollBehavior = "auto";
       document.querySelectorAll("img[loading=lazy]").forEach(img => img.setAttribute("loading", "eager"));
       document.querySelectorAll("img").forEach(img => img.setAttribute("fetchpriority", "high"));
       const scrollHeight = () => Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
-      const step = Math.max(800, Math.floor(window.innerHeight * 0.9));
-      for (let y = 0; y <= scrollHeight(); y += step) { window.scrollTo(0, y); await wait(120); }
-      window.scrollTo(0, scrollHeight()); await wait(700); window.scrollTo(0, 0); await wait(350);
+      const step = Math.max(850, Math.floor(window.innerHeight * 0.95));
+      for (let y = 0; y <= scrollHeight(); y += step) { window.scrollTo(0, y); await wait(100); }
+      window.scrollTo(0, scrollHeight()); await wait(450); window.scrollTo(0, 0); await wait(250);
     });
     const width = 1440;
     const height = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight, 900);
@@ -93,7 +93,10 @@ async function captureScreenshot(url: string): Promise<Capture> {
   if (!payload.screenshot) throw new Error("Browserless returned no screenshot data.");
   const buffer = Buffer.from(payload.screenshot, "base64");
   const metadata = await sharp(buffer).metadata();
-  return { buffer, width: Number(payload.width) || metadata.width || 1440, height: Number(payload.height) || metadata.height || 900 };
+  const width = Number(payload.width) || metadata.width || 1440;
+  const height = Number(payload.height) || metadata.height || 900;
+  const analysisBuffer = await sharp(buffer).resize({ height: Math.min(5000, height), withoutEnlargement: true }).png().toBuffer();
+  return { buffer, width, height, analysisBuffer };
 }
 
 async function callGemini(apiKey: string, model: string, prompt: string, images: Buffer[], maxOutputTokens: number, timeoutMs: number): Promise<string> {
@@ -113,7 +116,7 @@ async function analyseWithGemini(url: string, capture: Capture): Promise<{ findi
   let lastError = "Gemini analysis could not be completed.";
   for (const model of GEMINI_MODELS) {
     try {
-      const text = await callGemini(apiKey, model, prompt, [capture.buffer], 2800, GEMINI_ANALYSIS_TIMEOUT_MS);
+      const text = await callGemini(apiKey, model, prompt, [capture.analysisBuffer], 2800, GEMINI_ANALYSIS_TIMEOUT_MS);
       const json = extractJsonObject(text) as { findings?: unknown[] } | null;
       if (!json || !Array.isArray(json.findings)) { lastError = `Gemini ${model} returned invalid audit JSON.`; continue; }
       const findings = json.findings.map((item, index) => normalizeFinding(item, index)).filter((finding) => finding.severity === "high" && finding.evidence.length > 0).slice(0, 5);
@@ -137,34 +140,41 @@ async function verifyAndCorrectRegions(capture: Capture, findings: Finding[], mo
   for (let pass = 1; pass <= MAX_EVIDENCE_VERIFICATION_PASSES; pass++) {
     onStage?.({ id: "verify", label: `Analysing highlighted regions${pass > 1 ? ` (correction pass ${pass})` : ""}`, detail: "Gemini is comparing each annotated region with the finding context and the untouched main screenshot.", status: "active" });
     const regions = flattenRegions(current);
-    const prompt = `${buildRegionVerificationPrompt()}\n\nAUDIT FINDINGS AND CURRENT REGION DATA\n${JSON.stringify(regions)}\n\nVerification pass: ${pass}. Image 1 is MAIN. Image 2 is the current annotated image. A correct result must match both semantics and coordinates.`;
+    const prompt = `${buildRegionVerificationPrompt()}\n\nAUDIT FINDINGS AND CURRENT REGION DATA\n${JSON.stringify(regions)}\n\nVerification pass: ${pass}. Image 1 is MAIN. Image 2 is the annotated version generated from MAIN. The main image is immutable.`;
     try {
-      const text = await callGemini(apiKey, model, prompt, [capture.buffer, annotated], 2200, GEMINI_VERIFY_TIMEOUT_MS);
+      const annotatedAnalysis = await sharp(annotated).resize({ height: Math.min(5000, capture.height), withoutEnlargement: true }).png().toBuffer();
+      const text = await callGemini(apiKey, model, prompt, [capture.analysisBuffer, annotatedAnalysis], 1800, GEMINI_VERIFY_TIMEOUT_MS);
       const json = extractJsonObject(text) as VerificationResult | null;
       if (!json) return { findings: current, annotated };
       if (json.correct === true) return { findings: current, annotated };
       if (Array.isArray(json.regions) && json.regions.length) {
-        onStage?.({ id: "correct", label: `Correcting highlighted regions (pass ${pass})`, detail: "Discarding the previous annotation and rebuilding from the untouched main screenshot.", status: "active" });
+        onStage?.({ id: "correct", label: `Correcting highlighted regions (pass ${pass})`, detail: "The proposed region did not match its finding, so a new annotation is being generated from the untouched screenshot.", status: "active" });
         current = applyVerificationBoxes(current, json.regions);
         annotated = await renderRegions(capture.buffer, capture.width, capture.height, current);
         continue;
       }
       return { findings: current, annotated };
-    } catch (error) { console.warn(`Evidence verification pass ${pass} skipped`, error); return { findings: current, annotated }; }
+    } catch (error) {
+      console.warn(`Evidence verification pass ${pass} skipped`, error);
+      return { findings: current, annotated };
+    }
   }
   return { findings: current, annotated };
 }
 
 export async function createAudit(url: string, onStage?: (stage: AuditStage) => void): Promise<AuditResult> {
-  onStage?.({ id: "capture", label: "Taking page snapshot", detail: "Browserless is loading the landing page and creating the untouched full-page screenshot.", status: "active" });
+  onStage?.({ id: "capture", label: "Taking page snapshot", detail: "Browserless is capturing the complete desktop landing page and preserving the original image.", status: "active" });
   const capture = await captureScreenshot(url);
-  onStage?.({ id: "capture", label: "Page snapshot captured", detail: `${capture.width} × ${capture.height}px main screenshot captured. This image will remain untouched.`, status: "complete" });
-  onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "Gemini is reviewing the untouched screenshot against the ScreenRoot UX framework.", status: "active" });
+  onStage?.({ id: "capture", label: "Taking page snapshot", detail: "The untouched main screenshot is ready.", status: "complete" });
+  onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "Gemini is reviewing the untouched screenshot against the ScreenRoot framework.", status: "active" });
   const analysis = await analyseWithGemini(url, capture);
-  onStage?.({ id: "analyse", label: "Screenshot analysis complete", detail: `${analysis.findings.length} high-priority visually evidenced finding${analysis.findings.length === 1 ? "" : "s"} selected.`, status: "complete" });
-  onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "Creating a new annotated image from the untouched screenshot using Gemini's coordinates.", status: "active" });
+  onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "Gemini completed the visual UX analysis.", status: "complete" });
+  onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "Creating the first annotated image from the untouched screenshot.", status: "active" });
   const verified = await verifyAndCorrectRegions(capture, analysis.findings, analysis.model, onStage);
-  onStage?.({ id: "highlight", label: "Evidence image created", detail: "The highlighted image was generated without modifying the main screenshot.", status: "complete" });
-  onStage?.({ id: "complete", label: "Audit ready", detail: "Only after region verification is the final annotated image returned to the product.", status: "complete" });
-  return { pages: [{ url, title: new URL(url).hostname, screenshot: `data:image/png;base64,${verified.annotated.toString("base64")}`, screenshotWidth: capture.width, screenshotHeight: capture.height, findings: verified.findings }] };
+  onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "The final verified annotated image has been generated from the untouched screenshot.", status: "complete" });
+  onStage?.({ id: "verify", label: "Analysing highlighted regions", detail: "Evidence placement has been verified.", status: "complete" });
+  onStage?.({ id: "complete", label: "Finalising verified audit", detail: "Preparing the final verified report for the product.", status: "active" });
+  const result = { pages: [{ url, title: new URL(url).hostname, screenshot: `data:image/png;base64,${verified.annotated.toString("base64")}`, screenshotWidth: capture.width, screenshotHeight: capture.height, findings: verified.findings }] };
+  onStage?.({ id: "complete", label: "Finalising verified audit", detail: "Verified audit is ready.", status: "complete" });
+  return result;
 }
