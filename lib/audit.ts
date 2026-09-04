@@ -126,7 +126,7 @@ async function analyseWithGemini(url: string, capture: Capture): Promise<{ findi
 function escapeXml(value: string): string { return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;").replace(/'/g, "&apos;"); }
 function buildRegionSvg(width: number, height: number, findings: Finding[]): Buffer { const elements = findings.flatMap((finding) => finding.evidence.map((e) => { const x = clamp(e.x / 100 * width, 0, width - 1), y = clamp(e.y / 100 * height, 0, height - 1); const w = clamp(e.width / 100 * width, 8, width - x), h = clamp(e.height / 100 * height, 8, height - y); const markerW = 34, markerH = 34, markerX = x, markerY = Math.max(0, y - markerH - 4); return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="3" fill="#ffd400" fill-opacity="0.12" stroke="#ffd400" stroke-width="5"/><rect x="${markerX}" y="${markerY}" width="${markerW}" height="${markerH}" rx="17" fill="#ffd400" stroke="#111" stroke-width="2"/><text x="${markerX + markerW / 2}" y="${markerY + 23}" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="700" fill="#111">${escapeXml(e.marker)}</text>`; })).join(""); return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${elements}</svg>`); }
 async function renderRegions(mainImage: Buffer, width: number, height: number, findings: Finding[]): Promise<Buffer> { if (!findings.some((finding) => finding.evidence.length)) return mainImage; return sharp(mainImage).composite([{ input: buildRegionSvg(width, height, findings), left: 0, top: 0, blend: "over" }]).png().toBuffer(); }
-function flattenRegions(findings: Finding[]) { return findings.flatMap((finding) => finding.evidence.map((e, evidenceIndex) => ({ findingId: finding.id, evidenceIndex, marker: e.marker, label: e.label, detail: e.detail, box: [e.y * 10, e.x * 10, (e.y + e.height) * 10, (e.x + e.width) * 10] as RegionBox }))); }
+function flattenRegions(findings: Finding[]) { return findings.flatMap((finding) => finding.evidence.map((e, evidenceIndex) => ({ findingId: finding.id, evidenceIndex, finding: { category: finding.category, title: finding.title, description: finding.description, assessment: finding.uxPerspective.assessment }, evidence: { label: e.label, detail: e.detail }, box: [e.y * 10, e.x * 10, (e.y + e.height) * 10, (e.x + e.width) * 10] as RegionBox }))); }
 function applyVerificationBoxes(findings: Finding[], regions: VerificationResult["regions"]): Finding[] { const next = findings.map((finding) => ({ ...finding, evidence: finding.evidence.map((e) => ({ ...e })) })); for (const region of regions) { const finding = next.find((item) => item.id === region.findingId), evidence = finding?.evidence[region.evidenceIndex], box = normalizeBox(region.box); if (!evidence || !box) continue; const [y1, x1, y2, x2] = box; evidence.x = x1 / 10; evidence.y = y1 / 10; evidence.width = (x2 - x1) / 10; evidence.height = (y2 - y1) / 10; } return next; }
 
 async function verifyAndCorrectRegions(capture: Capture, findings: Finding[], model: string, onStage?: (stage: AuditStage) => void): Promise<{ findings: Finding[]; annotated: Buffer }> {
@@ -135,16 +135,16 @@ async function verifyAndCorrectRegions(capture: Capture, findings: Finding[], mo
   let annotated = await renderRegions(capture.buffer, capture.width, capture.height, current);
   if (!apiKey || !current.some((finding) => finding.evidence.length)) return { findings: current, annotated };
   for (let pass = 1; pass <= MAX_EVIDENCE_VERIFICATION_PASSES; pass++) {
-    onStage?.({ id: "verify", label: `Analysing highlighted regions${pass > 1 ? ` (correction pass ${pass})` : ""}`, detail: "Gemini is comparing the annotated image with the untouched main screenshot.", status: "active" });
+    onStage?.({ id: "verify", label: `Analysing highlighted regions${pass > 1 ? ` (correction pass ${pass})` : ""}`, detail: "Gemini is comparing each annotated region with the finding context and the untouched main screenshot.", status: "active" });
     const regions = flattenRegions(current);
-    const prompt = `${buildRegionVerificationPrompt()}\n\nAUDIT FINDINGS AND CURRENT REGION DATA\n${JSON.stringify(regions)}\n\nVerification pass: ${pass}. The main image is always Image 1. The annotated image is always Image 2. Use the same full-image coordinate system for corrections.`;
+    const prompt = `${buildRegionVerificationPrompt()}\n\nAUDIT FINDINGS AND CURRENT REGION DATA\n${JSON.stringify(regions)}\n\nVerification pass: ${pass}. Image 1 is MAIN. Image 2 is the current annotated image. A correct result must match both semantics and coordinates.`;
     try {
-      const text = await callGemini(apiKey, model, prompt, [capture.buffer, annotated], 1800, GEMINI_VERIFY_TIMEOUT_MS);
+      const text = await callGemini(apiKey, model, prompt, [capture.buffer, annotated], 2200, GEMINI_VERIFY_TIMEOUT_MS);
       const json = extractJsonObject(text) as VerificationResult | null;
       if (!json) return { findings: current, annotated };
       if (json.correct === true) return { findings: current, annotated };
       if (Array.isArray(json.regions) && json.regions.length) {
-        onStage?.({ id: "correct", label: `Correcting highlighted regions (pass ${pass})`, detail: "A placement needs adjustment. Rebuilding the annotated image from the untouched screenshot.", status: "active" });
+        onStage?.({ id: "correct", label: `Correcting highlighted regions (pass ${pass})`, detail: "Discarding the previous annotation and rebuilding from the untouched main screenshot.", status: "active" });
         current = applyVerificationBoxes(current, json.regions);
         annotated = await renderRegions(capture.buffer, capture.width, capture.height, current);
         continue;
