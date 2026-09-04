@@ -6,7 +6,6 @@ const PIPELINE = [
   { id: "capture", label: "Taking page snapshot" },
   { id: "analyse", label: "Analysing screenshot" },
   { id: "highlight", label: "Highlighting evidence regions" },
-  { id: "verify", label: "Analysing highlighted regions" },
   { id: "complete", label: "Finalising verified audit" },
 ];
 
@@ -19,21 +18,19 @@ function EvidenceMap({ page }: { page: AuditPage }) {
 function ProgressPanel({ stages }: { stages: Record<string, AuditStage> }) {
   const active = Object.values(stages).find((stage) => stage.status === "active");
   const activeIndex = Math.max(0, PIPELINE.findIndex((item) => item.id === active?.id));
-  const verification = stages.verify;
-  const correction = stages.correct;
-  const headline = correction?.status === "active" ? correction.label : active?.label ?? "Preparing audit";
-  const detail = correction?.status === "active" ? correction.detail : active?.detail ?? "Starting the audit pipeline…";
+  const headline = active?.label ?? "Preparing audit";
+  const detail = active?.detail ?? "Starting the audit pipeline…";
   return <div className="progressCard" role="status" aria-live="polite">
     <div className="progressTop"><div><div className="muted">LIVE AUDIT PIPELINE</div><h2>{headline}</h2><p>{detail}</p></div><div className="progressSpinner" aria-hidden="true" /></div>
     <div className="pipeline">
       {PIPELINE.map((item, index) => {
         const state = stages[item.id];
-        const done = index < activeIndex || state?.status === "complete" || (item.id === "verify" && verification?.status === "complete");
-        const current = item.id === active?.id || (item.id === "verify" && correction?.status === "active");
+        const done = index < activeIndex || state?.status === "complete";
+        const current = item.id === active?.id;
         return <div className={`pipelineStep ${done ? "done" : ""} ${current ? "current" : ""}`} key={item.id}><span className="pipelineIcon">{done ? "✓" : index + 1}</span><div><strong>{item.label}</strong><small>{done ? "Complete" : current ? "In progress" : "Waiting"}</small></div></div>;
       })}
     </div>
-    <div className="pipelineNote">The untouched screenshot is kept separate. Every new highlighted image is generated from that original, and the final image is shown only after region verification.</div>
+    <div className="pipelineNote">The untouched screenshot is kept as the source of truth. MiniMax M3 self-verifies each finding and evidence region before the final highlights are rendered.</div>
   </div>;
 }
 
@@ -83,7 +80,7 @@ export default function Home() {
     {loading && <section className="results progressResults"><ProgressPanel stages={stages} /></section>}
     {result && page && <section className="results" aria-live="polite">
       <div className="reportHeader"><div><div className="muted">LANDING PAGE AUDIT</div><h2>{page.title}</h2><a href={page.url} target="_blank" rel="noreferrer">{page.url}</a></div><div className="reportScore"><span>UX score</span><strong>{score}</strong><small>/100</small></div></div><p className="reportSummary">{summary}</p>
-      <div className="card screenshotCard"><div className="sectionHeader"><div><div className="muted">VISUAL EVIDENCE</div><h3>Verified landing page screenshot</h3></div><span className="pill">{evidence.length} verified highlighted region{evidence.length === 1 ? "" : "s"}</span></div><p className="screenshotHint">The final screenshot preserves the captured page at its native aspect ratio. Yellow regions are generated from the untouched main screenshot and returned only after AI verification.</p><EvidenceMap page={page} /></div>
+      <div className="card screenshotCard"><div className="sectionHeader"><div><div className="muted">VISUAL EVIDENCE</div><h3>Verified landing page screenshot</h3></div><span className="pill">{evidence.length} verified highlighted region{evidence.length === 1 ? "" : "s"}</span></div><p className="screenshotHint">The final screenshot preserves the captured page at its native aspect ratio. Yellow regions are generated from the untouched main screenshot after MiniMax self-verification.</p><EvidenceMap page={page} /></div>
       <div className="summary"><div className="card scoreCard"><div className="muted">PAGE SUMMARY</div><div className="metric">{score}/100</div><p>{summary}</p></div><div className="card"><div className="muted">High priority</div><div className="metric">{high}</div></div><div className="card"><div className="muted">Medium priority</div><div className="metric">{medium}</div></div><div className="card"><div className="muted">Low priority</div><div className="metric">{low}</div></div></div>
       <div className="regionExplanations"><div className="sectionHeader"><div><div className="muted">REGION-BY-REGION ANALYSIS</div><h3>What each highlighted region is saying</h3></div></div>{page.findings.map((finding) => <article className="card regionFinding" key={finding.id}><div className={`severity ${finding.severity}`}>{finding.severity}</div><div className="findingBody"><div className="findingTop"><div><div className="category">Category: {finding.category}</div><h3>{finding.title}</h3></div><div className="pill">{finding.uxPerspective.law}</div></div><p>{finding.description}</p><div className="regionList">{finding.evidence.map((item, index) => <div className="regionRow" key={`${item.marker}-${index}`}><span className="marker">{item.marker}</span><div><strong>Region {item.marker}: {item.label}</strong><p>{item.detail}</p></div></div>)}</div><div className="detailGrid"><section className="detailBlock"><h4>ScreenRoot / UX tasks</h4><ul>{finding.screenrootTasks.map((task) => <li key={task}>{task}</li>)}</ul></section><section className="detailBlock"><h4>Development tasks</h4><ul>{finding.devTasks.map((task) => <li key={task}>{task}</li>)}</ul></section><section className="detailBlock lawBlock"><h4>UX law / principle</h4><div className="lawName">{finding.uxPerspective.law}</div><p><strong>Definition:</strong> {finding.uxPerspective.definition}</p><p><strong>Assessment:</strong> {finding.uxPerspective.assessment}</p></section></div><p className="recommendation"><strong>Recommended change:</strong> {finding.recommendation}</p></div></article>)}</div>
     </section>}
