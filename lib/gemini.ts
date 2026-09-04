@@ -1,4 +1,11 @@
-export const GEMINI_MODELS = ["gemini-3.8-flash", "gemini-3.5-flash-lite"] as const;
+// Gemini model order is intentionally resilient to temporary capacity spikes.
+// 3.6 Flash is the primary audit model; lighter stable models provide fallbacks.
+export const GEMINI_MODELS = [
+  "gemini-3.6-flash",
+  "gemini-3.5-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.1-flash-lite",
+] as const;
 
 export const AUDIT_CATEGORIES = ["Language & tone","Navigation","Information hierarchy","Visual design","Usability & interaction","Responsiveness","User engagement","Web performance"] as const;
 
