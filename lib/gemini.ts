@@ -1,29 +1,10 @@
 export const GEMINI_MODELS = ["gemini-3.8-flash", "gemini-3.5-flash-lite"] as const;
 
-export const AUDIT_CATEGORIES = [
-  "Language & tone",
-  "Navigation",
-  "Information hierarchy",
-  "Visual design",
-  "Usability & interaction",
-  "Responsiveness",
-  "User engagement",
-  "Web performance",
-] as const;
+export const AUDIT_CATEGORIES = ["Language & tone","Navigation","Information hierarchy","Visual design","Usability & interaction","Responsiveness","User engagement","Web performance"] as const;
 
-export const GEMINI_AUDIT_INSTRUCTIONS = `
-You are the visual UX audit engine for ScreenRoot.
+export const GEMINI_AUDIT_INSTRUCTIONS = `You are the visual UX audit engine for ScreenRoot.
 
-CORE RULES
-- Analyze only the supplied landing-page screenshot(s).
-- Audit the visible page against the ScreenRoot framework categories.
-- Do not invent hidden interactions, source-code behavior, analytics, accessibility states, responsive behavior, or performance metrics that are not directly visible.
-- Return only HIGH-priority issues. Ignore medium and low issues.
-- Prefer 1–5 strong, defensible findings over many weak findings.
-- Do not force every framework category to appear.
-- Every finding must have direct visual evidence in the screenshot.
-- Evidence regions must be tight around the actual UI that demonstrates the issue.
-- Never highlight an entire page, large section, unrelated content, or empty space just to provide evidence.
+Analyze only the supplied landing-page screenshot(s). Audit the visible page against the ScreenRoot framework. Return only HIGH-priority issues. Every finding must have direct visual evidence. Do not invent hidden interactions, source-code behavior, analytics, accessibility states, responsive behavior, or performance metrics that are not visible.
 
 SCREENROOT FRAMEWORK
 1. Language & tone — Evaluate tone of voice, narrative flow, clarity and consistency of copy.
@@ -36,23 +17,49 @@ SCREENROOT FRAMEWORK
 10. Web performance — Only report visible evidence such as obviously broken/unfinished loading states. Do not infer actual load-time metrics from a screenshot.
 
 EVIDENCE COORDINATES
-- The complete screenshot is the coordinate system.
-- Coordinates are normalized to 0–1000.
+- The untouched MAIN screenshot is the sole coordinate source of truth.
+- Coordinates are normalized to 0–1000 across the ENTIRE image.
 - Use box:[ymin,xmin,ymax,xmax].
-- x increases from left to right; y increases from top to bottom.
-- Coordinates are for the entire screenshot, not the current viewport.
-- Keep every box as small as possible while still containing the visual evidence.
-- For text, the box should tightly contain the problematic text/control and its immediately relevant visual context.
-- For a component, include the component itself, not the whole surrounding section.
-
-OUTPUT
-Return strict JSON only. No markdown. No commentary.
+- x increases left-to-right; y increases top-to-bottom.
+- Never interpret coordinates as viewport coordinates.
+- Every region must point to the exact UI that supports the finding.
+- Keep regions tight; never highlight an entire page, large unrelated section, empty space, or nearby prominent UI.
 `;
 
 export function buildAuditPrompt(url: string, width: number, height: number): string {
-  return `${GEMINI_AUDIT_INSTRUCTIONS}\n\nTASK\nAnalyze the untouched complete desktop screenshot for ${url}. The image is ${width}×${height}px. Identify only high-priority visual UX issues and give each issue precise evidence coordinates.\n\nRequired JSON shape:\n{"findings":[{"id":"finding-1","severity":"high","category":"Usability & interaction","title":"...","description":"...","recommendation":"...","screenrootTasks":["..."],"devTasks":["..."],"uxPerspective":{"law":"...","definition":"...","assessment":"..."},"evidence":[{"label":"...","detail":"...","marker":"1","box":[120,80,220,320]}]}]}\n\nAllowed categories: ${AUDIT_CATEGORIES.join(", ")}. Every severity must be high. Evidence boxes must use the full-image normalized coordinate system above.`;
+  return `${GEMINI_AUDIT_INSTRUCTIONS}\n\nTASK\nAnalyze the untouched complete desktop screenshot for ${url}. Image dimensions: ${width}×${height}px. Before returning coordinates, visually locate the exact UI element that demonstrates each issue.\n\nRequired JSON shape:\n{"findings":[{"id":"finding-1","severity":"high","category":"Visual design","title":"...","description":"...","recommendation":"...","screenrootTasks":["..."],"devTasks":["..."],"uxPerspective":{"law":"...","definition":"...","assessment":"..."},"evidence":[{"label":"...","detail":"...","marker":"1","box":[120,80,220,320]}]}]}\n\nAllowed categories: ${AUDIT_CATEGORIES.join(", ")}. Every severity must be high.`;
 }
 
 export function buildRegionVerificationPrompt(): string {
-  return `${GEMINI_AUDIT_INSTRUCTIONS}\n\nTASK\nYou are now validating evidence placement. Image 1 is the untouched MAIN screenshot and must never be modified. Image 2 is a NEW annotated screenshot created from Image 1 by drawing the proposed evidence regions.\n\nCompare Image 2 against Image 1. For every proposed region, decide whether it tightly and correctly highlights the UI that supports its finding. Ignore the yellow graphics themselves when judging the underlying UI.\n\nIf every region is correct, return correct=true and keep regions empty.\nIf any region is incorrect, return correct=false and provide corrected coordinates for EVERY region, including regions that were already correct. Corrected coordinates must be based on Image 1 and use the full-image normalized [ymin,xmin,ymax,xmax] coordinate system. Do not change findings, severity, category, or issue text. Only correct evidence placement.\n\nRequired JSON shape:\n{"correct":true,"regions":[],"notes":"All proposed regions tightly match the visible evidence."}\nOR\n{"correct":false,"regions":[{"findingId":"finding-1","evidenceIndex":0,"box":[120,80,220,320]}],"notes":"Explain briefly which placements needed correction."}\n\nBe conservative: a region is correct only when it points to the actual evidence and is not materially oversized or displaced.`;
+  return `${GEMINI_AUDIT_INSTRUCTIONS}
+
+TASK: VERIFY EVIDENCE REGIONS
+You receive exactly two images.
+IMAGE 1 = the untouched MAIN screenshot. It is immutable and is the ONLY source of truth for where evidence exists.
+IMAGE 2 = a NEW annotated image generated from IMAGE 1. Yellow borders and markers are annotations only. They are NEVER evidence.
+
+For EACH evidence item:
+1. Read its finding title, description, category and evidence label.
+2. Ignore the yellow annotation completely.
+3. Look at IMAGE 1 and locate the exact UI element that actually supports the finding.
+4. Compare that location with the yellow region in IMAGE 2.
+5. Reject the region if it is displaced to another page section, top navigation, header, footer, unrelated image, nearby component, or empty space.
+6. Reject it if it is materially oversized. Keep the region tightly around the supporting UI.
+7. Do not accept a region merely because it is close to the correct area or visually prominent.
+
+CRITICAL EXAMPLE
+Finding: "Low contrast text over promotional background".
+Correct evidence: the white promotional text in the hero/banner and its immediately relevant background.
+WRONG evidence: a yellow rectangle around the TOP NAVIGATION BAR. That region MUST be rejected and replaced with coordinates around the actual promotional text/background in the hero.
+
+If ANY region is wrong, return correct=false and corrected coordinates for EVERY evidence item. Calculate every corrected coordinate from IMAGE 1, never from IMAGE 2 or from the yellow border.
+If ALL regions are correct, return correct=true and regions=[].
+
+Required JSON shape:
+{"correct":true,"regions":[],"notes":"All proposed regions tightly match the supporting UI."}
+OR
+{"correct":false,"regions":[{"findingId":"finding-1","evidenceIndex":0,"box":[120,80,220,320]}],"notes":"The proposed region was displaced and has been corrected against IMAGE 1."}
+
+Only change evidence coordinates. Do not change finding text, category, severity, recommendation, UX law, or tasks.
+`;
 }
