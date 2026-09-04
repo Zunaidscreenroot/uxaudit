@@ -18,7 +18,7 @@ jobs:
         with:
           node-version: 20
       - run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-      - name: Patch audit runtime limits
+      - name: Patch audit runtime limits and capture
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -31,6 +31,53 @@ jobs:
           s = s.replace('maxOutputTokens, thinkingConfig: { thinkingLevel: "low" }', 'maxOutputTokens, thinkingConfig: { thinkingLevel: "low" }, media_resolution: "MEDIA_RESOLUTION_MEDIUM"')
           s = s.replace('callGemini(apiKey, model, prompt, buffer, 4500, GEMINI_ANALYSIS_TIMEOUT_MS)', 'callGemini(apiKey, model, prompt, buffer, 3000, GEMINI_ANALYSIS_TIMEOUT_MS)')
           s = s.replace('callGemini(apiKey, model, prompt, verificationScreenshot, 1800, GEMINI_VERIFY_TIMEOUT_MS)', 'callGemini(apiKey, model, prompt, verificationScreenshot, 1200, GEMINI_VERIFY_TIMEOUT_MS)')
+
+          old = '''    await new Promise(resolve => setTimeout(resolve, 1000));
+    await page.evaluate(async () => {
+      const step = Math.max(500, Math.floor(window.innerHeight * 0.8));
+      for (let y = 0; y < document.body.scrollHeight; y += step) { window.scrollTo(0, y); await new Promise(resolve => setTimeout(resolve, 60)); }
+      window.scrollTo(0, 0);
+      await new Promise(resolve => setTimeout(resolve, 250));
+    });'''
+          new = '''    await new Promise(resolve => setTimeout(resolve, 1200));
+    await page.evaluate(async () => {
+      // Force lazy-loaded content to become eligible for capture.
+      document.querySelectorAll('img[loading="lazy"]').forEach((img) => img.setAttribute('loading', 'eager'));
+      document.querySelectorAll('img').forEach((img) => {
+        img.setAttribute('fetchpriority', 'high');
+      });
+
+      const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+      const scrollHeight = () => Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
+      const step = Math.max(600, Math.floor(window.innerHeight * 0.75));
+
+      // Two passes give IntersectionObserver/lazy sections time to render and load.
+      for (let pass = 0; pass < 2; pass++) {
+        for (let y = 0; y <= scrollHeight(); y += step) {
+          window.scrollTo(0, y);
+          await wait(180);
+        }
+        window.scrollTo(0, scrollHeight());
+        await wait(500);
+      }
+
+      // Wait briefly for all currently-known images to decode before the final full-page shot.
+      const images = Array.from(document.images);
+      await Promise.all(images.map((img) => {
+        if (img.complete) return Promise.resolve();
+        return new Promise(resolve => {
+          img.addEventListener('load', resolve, { once: true });
+          img.addEventListener('error', resolve, { once: true });
+        });
+      }));
+      await wait(500);
+      window.scrollTo(0, 0);
+      await wait(500);
+    });'''
+          if old in s:
+              s = s.replace(old, new)
+          else:
+              raise SystemExit('capture block not found; refusing to patch silently')
           p.write_text(s)
           PY
       - name: Commit changes
@@ -39,5 +86,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add package-lock.json lib/audit.ts
-          git commit -m "fix: tune Gemini visual audit latency"
+          git commit -m "fix: make full-page capture load lazy content"
           git push
