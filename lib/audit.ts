@@ -18,7 +18,6 @@ const BROWSERLESS_TIMEOUT_MS = 14000;
 const ANALYSIS_TIMEOUT_MS = 14000;
 const VERIFY_TIMEOUT_MS = 12000;
 const MAX_EVIDENCE_VERIFICATION_PASSES = 2;
-
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
 function extractJsonObject(text: string): unknown | null {
@@ -58,32 +57,11 @@ function normalizeFinding(value: unknown, index: number): Finding {
     const box = normalizeBox(entry.box);
     if (!box) return null;
     const [y1, x1, y2, x2] = box;
-    return {
-      label: typeof entry.label === "string" ? entry.label : `Region ${evidenceIndex + 1}`,
-      detail: typeof entry.detail === "string" ? entry.detail : "Visible evidence identified in the screenshot.",
-      marker: typeof entry.marker === "string" ? entry.marker : String(evidenceIndex + 1),
-      x: x1 / 10, y: y1 / 10,
-      width: Math.max(0.8, (x2 - x1) / 10), height: Math.max(0.8, (y2 - y1) / 10),
-    };
+    return { label: typeof entry.label === "string" ? entry.label : `Region ${evidenceIndex + 1}`, detail: typeof entry.detail === "string" ? entry.detail : "Visible evidence identified in the screenshot.", marker: typeof entry.marker === "string" ? entry.marker : String(evidenceIndex + 1), x: x1 / 10, y: y1 / 10, width: Math.max(0.8, (x2 - x1) / 10), height: Math.max(0.8, (y2 - y1) / 10) };
   }).filter((entry): entry is Evidence => Boolean(entry));
   const requestedCategory = typeof item.category === "string" ? item.category.trim().toLowerCase() : "visual design";
   const category = AUDIT_CATEGORIES.find((candidate) => candidate.toLowerCase() === requestedCategory) ?? "Visual design";
-  return {
-    id: typeof item.id === "string" ? item.id : `finding-${index + 1}`,
-    severity: item.severity === "high" ? "high" : "medium",
-    category,
-    title: typeof item.title === "string" ? item.title : "UX issue",
-    description: typeof item.description === "string" ? item.description : "The visible interface may create friction for users.",
-    recommendation: typeof item.recommendation === "string" ? item.recommendation : "Review this area against established UX principles.",
-    screenrootTasks: Array.isArray(item.screenrootTasks) ? item.screenrootTasks.filter((task): task is string => typeof task === "string") : [],
-    devTasks: Array.isArray(item.devTasks) ? item.devTasks.filter((task): task is string => typeof task === "string") : [],
-    uxPerspective: {
-      law: typeof perspective.law === "string" ? perspective.law : "UX principle",
-      definition: typeof perspective.definition === "string" ? perspective.definition : "A usability principle used to evaluate interface design.",
-      assessment: typeof perspective.assessment === "string" ? perspective.assessment : "This visible area deserves review based on the supplied screenshot.",
-    },
-    evidence,
-  };
+  return { id: typeof item.id === "string" ? item.id : `finding-${index + 1}`, severity: item.severity === "high" ? "high" : "medium", category, title: typeof item.title === "string" ? item.title : "UX issue", description: typeof item.description === "string" ? item.description : "The visible interface may create friction for users.", recommendation: typeof item.recommendation === "string" ? item.recommendation : "Review this area against established UX principles.", screenrootTasks: Array.isArray(item.screenrootTasks) ? item.screenrootTasks.filter((task): task is string => typeof task === "string") : [], devTasks: Array.isArray(item.devTasks) ? item.devTasks.filter((task): task is string => typeof task === "string") : [], uxPerspective: { law: typeof perspective.law === "string" ? perspective.law : "UX principle", definition: typeof perspective.definition === "string" ? perspective.definition : "A usability principle used to evaluate interface design.", assessment: typeof perspective.assessment === "string" ? perspective.assessment : "This visible area deserves review based on the supplied screenshot." }, evidence };
 }
 
 async function captureScreenshot(url: string): Promise<Capture> {
@@ -124,14 +102,10 @@ async function captureScreenshot(url: string): Promise<Capture> {
   return { buffer, width, height, analysisBuffer };
 }
 
-function getClient(apiKey: string, timeout: number) {
-  return new OpenAI({ baseURL: "https://openrouter.ai/api/v1", apiKey, timeout });
-}
-
 async function callMiniMax(apiKey: string, prompt: string, images: Buffer[], maxTokens: number, timeout: number): Promise<string> {
   const content: any[] = [{ type: "text", text: prompt }];
   for (const image of images) content.push({ type: "image_url", image_url: { url: `data:image/png;base64,${image.toString("base64")}` } });
-  const client = getClient(apiKey, timeout);
+  const client = new OpenAI({ baseURL: "https://openrouter.ai/api/v1", apiKey, timeout });
   const response = await client.chat.completions.create({
     model: MODEL,
     messages: [{ role: "user", content }],
@@ -141,7 +115,7 @@ async function callMiniMax(apiKey: string, prompt: string, images: Buffer[], max
     response_format: { type: "json_object" },
     provider: { allow_fallbacks: true, sort: "latency" },
   } as any);
-  const raw = response.choices?.[0]?.message?.content;
+  const raw: any = (response.choices?.[0]?.message as any)?.content;
   const text = typeof raw === "string" ? raw : Array.isArray(raw) ? raw.map((part: any) => typeof part === "object" && part && "text" in part ? String(part.text ?? "") : "").join("") : "";
   if (!text) throw new Error("MiniMax M3 returned an empty response.");
   return text;
@@ -150,8 +124,7 @@ async function callMiniMax(apiKey: string, prompt: string, images: Buffer[], max
 async function analyseWithMiniMax(url: string, capture: Capture): Promise<Finding[]> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("OPENROUTER_API_KEY is not configured on this deployment.");
-  const prompt = buildAuditPrompt(url, capture.width, capture.height);
-  const text = await callMiniMax(apiKey, prompt, [capture.analysisBuffer], 3000, ANALYSIS_TIMEOUT_MS);
+  const text = await callMiniMax(apiKey, buildAuditPrompt(url, capture.width, capture.height), [capture.analysisBuffer], 3000, ANALYSIS_TIMEOUT_MS);
   const json = extractJsonObject(text) as { findings?: unknown[] } | null;
   if (!json || !Array.isArray(json.findings)) throw new Error("MiniMax M3 returned invalid audit JSON.");
   return json.findings.map((item, index) => normalizeFinding(item, index)).filter((finding) => finding.severity === "high" && finding.evidence.length > 0).slice(0, 5);
@@ -173,23 +146,15 @@ async function renderRegions(mainImage: Buffer, width: number, height: number, f
 }
 
 function flattenRegions(findings: Finding[]) {
-  return findings.flatMap((finding) => finding.evidence.map((e, evidenceIndex) => ({
-    findingId: finding.id,
-    evidenceIndex,
-    finding: { category: finding.category, title: finding.title, description: finding.description, recommendation: finding.recommendation, assessment: finding.uxPerspective.assessment, law: finding.uxPerspective.law },
-    evidence: { label: e.label, detail: e.detail },
-    box: [e.y * 10, e.x * 10, (e.y + e.height) * 10, (e.x + e.width) * 10] as RegionBox,
-  })));
+  return findings.flatMap((finding) => finding.evidence.map((e, evidenceIndex) => ({ findingId: finding.id, evidenceIndex, finding: { category: finding.category, title: finding.title, description: finding.description, recommendation: finding.recommendation, assessment: finding.uxPerspective.assessment, law: finding.uxPerspective.law }, evidence: { label: e.label, detail: e.detail }, box: [e.y * 10, e.x * 10, (e.y + e.height) * 10, (e.x + e.width) * 10] as RegionBox })));
 }
-
 function applyVerificationBoxes(findings: Finding[], verification: VerificationItem[]): Finding[] {
   const next = findings.map((finding) => ({ ...finding, evidence: finding.evidence.map((e) => ({ ...e })) }));
   for (const item of verification) {
     const finding = next.find((entry) => entry.id === item.findingId);
     if (!finding) continue;
     for (const region of item.regions) {
-      const evidence = finding.evidence[region.evidenceIndex];
-      const box = normalizeBox(region.box);
+      const evidence = finding.evidence[region.evidenceIndex], box = normalizeBox(region.box);
       if (!evidence || !box) continue;
       const [y1, x1, y2, x2] = box;
       evidence.x = x1 / 10; evidence.y = y1 / 10; evidence.width = (x2 - x1) / 10; evidence.height = (y2 - y1) / 10;
@@ -197,7 +162,6 @@ function applyVerificationBoxes(findings: Finding[], verification: VerificationI
   }
   return next;
 }
-
 function removeInvalidFindings(findings: Finding[], verification: VerificationResult): Finding[] {
   const validIds = new Set(verification.findings.filter((item) => item.valid).map((item) => item.findingId));
   return findings.filter((finding) => validIds.has(finding.id));
@@ -232,7 +196,6 @@ async function verifyAndCorrectRegions(capture: Capture, findings: Finding[], on
       if (!json || !Array.isArray(json.findings)) { lastError = "MiniMax M3 returned invalid evidence verification JSON."; continue; }
       const items = json.findings.filter((item): item is VerificationItem => Boolean(item && typeof item === "object" && typeof (item as VerificationItem).findingId === "string" && typeof (item as VerificationItem).valid === "boolean" && Array.isArray((item as VerificationItem).regions)));
       if (!hasCompleteVerification(current, items)) { lastError = "MiniMax M3 did not independently verify every finding and evidence item."; continue; }
-
       const stillValid = removeInvalidFindings(current, { findings: items });
       if (stillValid.length !== current.length) {
         onStage?.({ id: "correct", label: "Correcting highlighted regions", detail: "The independent check rejected unsupported findings. Those findings will not be shown.", status: "active" });
@@ -241,7 +204,6 @@ async function verifyAndCorrectRegions(capture: Capture, findings: Finding[], on
         annotated = await renderRegions(capture.buffer, capture.width, capture.height, current);
         continue;
       }
-
       if (!regionsNeedCorrection(items)) return { findings: current, annotated };
       onStage?.({ id: "correct", label: `Correcting highlighted regions (pass ${pass})`, detail: "The evidence coordinates did not match the finding context, so the annotation is being rebuilt from the untouched screenshot.", status: "active" });
       current = applyVerificationBoxes(current, items);
