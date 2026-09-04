@@ -61,7 +61,9 @@ function normalizeFinding(value: unknown, index: number): Finding {
   }).filter((entry): entry is Evidence => Boolean(entry));
   const requestedCategory = typeof item.category === "string" ? item.category.trim().toLowerCase() : "visual design";
   const category = AUDIT_CATEGORIES.find((candidate) => candidate.toLowerCase() === requestedCategory) ?? "Visual design";
-  return { id: typeof item.id === "string" ? item.id : `finding-${index + 1}`, severity: item.severity === "high" ? "high" : "medium", category, title: typeof item.title === "string" ? item.title : "UX issue", description: typeof item.description === "string" ? item.description : "The visible interface may create friction for users.", recommendation: typeof item.recommendation === "string" ? item.recommendation : "Review this area against established UX principles.", screenrootTasks: Array.isArray(item.screenrootTasks) ? item.screenrootTasks.filter((task): task is string => typeof task === "string") : [], devTasks: Array.isArray(item.devTasks) ? item.devTasks.filter((task): task is string => typeof task === "string") : [], uxPerspective: { law: typeof perspective.law === "string" ? perspective.law : "UX principle", definition: typeof perspective.definition === "string" ? perspective.definition : "A usability principle used to evaluate interface design.", assessment: typeof perspective.assessment === "string" ? perspective.assessment : "This visible area deserves review based on the supplied screenshot." }, evidence };
+  const rawSeverity = typeof item.severity === "string" ? item.severity.toLowerCase() : "medium";
+  const severity: Severity = rawSeverity === "high" || rawSeverity === "low" ? rawSeverity : "medium";
+  return { id: typeof item.id === "string" ? item.id : `finding-${index + 1}`, severity, category, title: typeof item.title === "string" ? item.title : "UX issue", description: typeof item.description === "string" ? item.description : "The visible interface may create friction for users.", recommendation: typeof item.recommendation === "string" ? item.recommendation : "Review this area against established UX principles.", screenrootTasks: Array.isArray(item.screenrootTasks) ? item.screenrootTasks.filter((task): task is string => typeof task === "string") : [], devTasks: Array.isArray(item.devTasks) ? item.devTasks.filter((task): task is string => typeof task === "string") : [], uxPerspective: { law: typeof perspective.law === "string" ? perspective.law : "UX principle", definition: typeof perspective.definition === "string" ? perspective.definition : "A usability principle used to evaluate interface design.", assessment: typeof perspective.assessment === "string" ? perspective.assessment : "This visible area deserves review based on the supplied screenshot." }, evidence };
 }
 
 async function captureScreenshot(url: string): Promise<Capture> {
@@ -106,15 +108,7 @@ async function callMiniMax(apiKey: string, prompt: string, images: Buffer[], max
   const content: any[] = [{ type: "text", text: prompt }];
   for (const image of images) content.push({ type: "image_url", image_url: { url: `data:image/png;base64,${image.toString("base64")}` } });
   const client = new OpenAI({ baseURL: "https://openrouter.ai/api/v1", apiKey, timeout });
-  const response = await client.chat.completions.create({
-    model: MODEL,
-    messages: [{ role: "user", content }],
-    reasoning: { enabled: true },
-    max_tokens: maxTokens,
-    temperature: 0.1,
-    response_format: { type: "json_object" },
-    provider: { allow_fallbacks: true, sort: "latency" },
-  } as any);
+  const response = await client.chat.completions.create({ model: MODEL, messages: [{ role: "user", content }], reasoning: { enabled: true }, max_tokens: maxTokens, temperature: 0.1, response_format: { type: "json_object" }, provider: { allow_fallbacks: true, sort: "latency" } } as any);
   const raw: any = (response.choices?.[0]?.message as any)?.content;
   const text = typeof raw === "string" ? raw : Array.isArray(raw) ? raw.map((part: any) => typeof part === "object" && part && "text" in part ? String(part.text ?? "") : "").join("") : "";
   if (!text) throw new Error("MiniMax M3 returned an empty response.");
@@ -124,10 +118,10 @@ async function callMiniMax(apiKey: string, prompt: string, images: Buffer[], max
 async function analyseWithMiniMax(url: string, capture: Capture): Promise<Finding[]> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("OPENROUTER_API_KEY is not configured on this deployment.");
-  const text = await callMiniMax(apiKey, buildAuditPrompt(url, capture.width, capture.height), [capture.analysisBuffer], 3000, ANALYSIS_TIMEOUT_MS);
+  const text = await callMiniMax(apiKey, buildAuditPrompt(url, capture.width, capture.height), [capture.analysisBuffer], 4500, ANALYSIS_TIMEOUT_MS);
   const json = extractJsonObject(text) as { findings?: unknown[] } | null;
   if (!json || !Array.isArray(json.findings)) throw new Error("MiniMax M3 returned invalid audit JSON.");
-  return json.findings.map((item, index) => normalizeFinding(item, index)).filter((finding) => finding.severity === "high" && finding.evidence.length > 0).slice(0, 5);
+  return json.findings.map((item, index) => normalizeFinding(item, index)).filter((finding) => finding.evidence.length > 0).slice(0, 8);
 }
 
 function escapeXml(value: string): string { return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;").replace(/'/g, "&apos;"); }
@@ -144,21 +138,14 @@ async function renderRegions(mainImage: Buffer, width: number, height: number, f
   if (!findings.some((finding) => finding.evidence.length)) return mainImage;
   return sharp(mainImage).composite([{ input: buildRegionSvg(width, height, findings), left: 0, top: 0, blend: "over" }]).png().toBuffer();
 }
-
-function flattenRegions(findings: Finding[]) {
-  return findings.flatMap((finding) => finding.evidence.map((e, evidenceIndex) => ({ findingId: finding.id, evidenceIndex, finding: { category: finding.category, title: finding.title, description: finding.description, recommendation: finding.recommendation, assessment: finding.uxPerspective.assessment, law: finding.uxPerspective.law }, evidence: { label: e.label, detail: e.detail }, box: [e.y * 10, e.x * 10, (e.y + e.height) * 10, (e.x + e.width) * 10] as RegionBox })));
-}
+function flattenRegions(findings: Finding[]) { return findings.flatMap((finding) => finding.evidence.map((e, evidenceIndex) => ({ findingId: finding.id, evidenceIndex, finding: { severity: finding.severity, category: finding.category, title: finding.title, description: finding.description, recommendation: finding.recommendation, assessment: finding.uxPerspective.assessment, law: finding.uxPerspective.law }, evidence: { label: e.label, detail: e.detail }, box: [e.y * 10, e.x * 10, (e.y + e.height) * 10, (e.x + e.width) * 10] as RegionBox })))); }
 function applyVerificationBoxes(findings: Finding[], verification: VerificationItem[]): Finding[] {
   const next = findings.map((finding) => ({ ...finding, evidence: finding.evidence.map((e) => ({ ...e })) }));
-  for (const item of verification) {
-    const finding = next.find((entry) => entry.id === item.findingId);
-    if (!finding) continue;
-    for (const region of item.regions) {
-      const evidence = finding.evidence[region.evidenceIndex], box = normalizeBox(region.box);
-      if (!evidence || !box) continue;
-      const [y1, x1, y2, x2] = box;
-      evidence.x = x1 / 10; evidence.y = y1 / 10; evidence.width = (x2 - x1) / 10; evidence.height = (y2 - y1) / 10;
-    }
+  for (const item of verification) for (const region of item.regions) {
+    const finding = next.find((entry) => entry.id === item.findingId), evidence = finding?.evidence[region.evidenceIndex], box = normalizeBox(region.box);
+    if (!evidence || !box) continue;
+    const [y1, x1, y2, x2] = box;
+    evidence.x = x1 / 10; evidence.y = y1 / 10; evidence.width = (x2 - x1) / 10; evidence.height = (y2 - y1) / 10;
   }
   return next;
 }
@@ -166,14 +153,13 @@ function removeInvalidFindings(findings: Finding[], verification: VerificationRe
   const validIds = new Set(verification.findings.filter((item) => item.valid).map((item) => item.findingId));
   return findings.filter((finding) => validIds.has(finding.id));
 }
-function regionsNeedCorrection(verification: VerificationItem[]): boolean { return verification.some((item) => item.valid && item.regions.some((region) => !region.correct)); }
 function hasCompleteVerification(findings: Finding[], verification: VerificationItem[]): boolean {
   if (verification.length !== findings.length) return false;
   return findings.every((finding) => {
     const item = verification.find((entry) => entry.findingId === finding.id);
     if (!item) return false;
     if (!item.valid) return item.regions.length === 0;
-    return item.regions.length === finding.evidence.length && item.regions.every((region) => typeof region.correct === "boolean" && normalizeBox(region.box));
+    return item.regions.length === finding.evidence.length && item.regions.every((region) => typeof region.correct === "boolean" && Boolean(normalizeBox(region.box)));
   });
 }
 
@@ -184,34 +170,32 @@ async function verifyAndCorrectRegions(capture: Capture, findings: Finding[], on
   let current = findings.map((finding) => ({ ...finding, evidence: finding.evidence.map((e) => ({ ...e })) }));
   let annotated = await renderRegions(capture.buffer, capture.width, capture.height, current);
   let lastError = "Evidence verification could not be completed.";
-
   for (let pass = 1; pass <= MAX_EVIDENCE_VERIFICATION_PASSES; pass++) {
-    onStage?.({ id: "verify", label: pass === 1 ? "Analysing highlighted regions" : "Analysing highlighted regions (correction pass)", detail: "MiniMax M3 is independently comparing the highlighted image with the untouched screenshot and the complete finding context.", status: "active" });
-    const regions = flattenRegions(current);
-    const prompt = `${buildRegionVerificationPrompt()}\n\nAUDIT FINDINGS AND CURRENT REGION DATA\n${JSON.stringify(regions)}\n\nVerification pass: ${pass}. Image 1 is MAIN. Image 2 is the annotated image rendered from MAIN.`;
+    onStage?.({ id: "verify", label: pass === 1 ? "Analysing highlighted regions" : "Analysing highlighted regions (correction pass)", detail: "MiniMax M3 is independently validating each finding and its exact evidence against the untouched screenshot.", status: "active" });
+    const prompt = `${buildRegionVerificationPrompt()}\n\nAUDIT FINDINGS AND CURRENT REGION DATA\n${JSON.stringify(flattenRegions(current))}\n\nVerification pass: ${pass}. Image 1 is MAIN. Image 2 is the annotated image rendered from MAIN.`;
     try {
       const annotatedAnalysis = await sharp(annotated).resize({ height: Math.min(6000, capture.height), withoutEnlargement: true }).png().toBuffer();
-      const text = await callMiniMax(apiKey, prompt, [capture.analysisBuffer, annotatedAnalysis], 2600, VERIFY_TIMEOUT_MS);
+      const text = await callMiniMax(apiKey, prompt, [capture.analysisBuffer, annotatedAnalysis], 3500, VERIFY_TIMEOUT_MS);
       const json = extractJsonObject(text) as VerificationResult | null;
       if (!json || !Array.isArray(json.findings)) { lastError = "MiniMax M3 returned invalid evidence verification JSON."; continue; }
       const items = json.findings.filter((item): item is VerificationItem => Boolean(item && typeof item === "object" && typeof (item as VerificationItem).findingId === "string" && typeof (item as VerificationItem).valid === "boolean" && Array.isArray((item as VerificationItem).regions)));
       if (!hasCompleteVerification(current, items)) { lastError = "MiniMax M3 did not independently verify every finding and evidence item."; continue; }
       const stillValid = removeInvalidFindings(current, { findings: items });
       if (stillValid.length !== current.length) {
-        onStage?.({ id: "correct", label: "Correcting highlighted regions", detail: "The independent check rejected unsupported findings. Those findings will not be shown.", status: "active" });
+        onStage?.({ id: "correct", label: "Correcting highlighted regions", detail: "Unsupported findings are being removed rather than being assigned to unrelated UI.", status: "active" });
         current = stillValid;
         if (!current.length) return { findings: [], annotated: capture.buffer };
         annotated = await renderRegions(capture.buffer, capture.width, capture.height, current);
         continue;
       }
-      if (!regionsNeedCorrection(items)) return { findings: current, annotated };
-      onStage?.({ id: "correct", label: `Correcting highlighted regions (pass ${pass})`, detail: "The evidence coordinates did not match the finding context, so the annotation is being rebuilt from the untouched screenshot.", status: "active" });
+      const needsCorrection = items.some((item) => item.valid && item.regions.some((region) => !region.correct));
+      if (!needsCorrection) return { findings: current, annotated };
+      onStage?.({ id: "correct", label: `Correcting highlighted regions (pass ${pass})`, detail: "Evidence coordinates are being recalculated from the untouched screenshot.", status: "active" });
       current = applyVerificationBoxes(current, items);
       annotated = await renderRegions(capture.buffer, capture.width, capture.height, current);
     } catch (error) {
       lastError = error instanceof Error ? error.message : lastError;
-      if (pass < MAX_EVIDENCE_VERIFICATION_PASSES) continue;
-      break;
+      if (pass === MAX_EVIDENCE_VERIFICATION_PASSES) break;
     }
   }
   throw new Error(`Evidence verification failed: ${lastError}`);
@@ -221,14 +205,14 @@ export async function createAudit(url: string, onStage?: (stage: AuditStage) => 
   onStage?.({ id: "capture", label: "Taking page snapshot", detail: "Browserless is capturing the complete desktop landing page and preserving the original image.", status: "active" });
   const capture = await captureScreenshot(url);
   onStage?.({ id: "capture", label: "Taking page snapshot", detail: "The untouched main screenshot is ready.", status: "complete" });
-  onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "MiniMax M3 is reviewing the untouched screenshot against the ScreenRoot framework with reasoning enabled.", status: "active" });
+  onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "MiniMax M3 is reviewing the complete screenshot for meaningful UX problems against the ScreenRoot framework.", status: "active" });
   const findings = await analyseWithMiniMax(url, capture);
   onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "Initial visual UX analysis completed.", status: "complete" });
-  onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "Creating the first annotated image from the untouched screenshot.", status: "active" });
+  onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "Creating evidence annotations from the untouched screenshot.", status: "active" });
   const verified = await verifyAndCorrectRegions(capture, findings, onStage);
-  onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "The final annotated image has been rebuilt only from the untouched screenshot.", status: "complete" });
-  onStage?.({ id: "complete", label: "Finalising verified audit", detail: "Preparing the final verified report for the product.", status: "active" });
-  const result = { pages: [{ url, title: new URL(url).hostname, screenshot: `data:image/png;base64,${verified.annotated.toString("base64")}`, screenshotWidth: capture.width, screenshotHeight: capture.height, findings: verified.findings.filter((finding) => finding.severity === "high" && finding.evidence.length > 0) }] };
+  onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "The final annotated image contains only independently verified evidence.", status: "complete" });
+  onStage?.({ id: "complete", label: "Finalising verified audit", detail: "Preparing the final verified report.", status: "active" });
+  const result = { pages: [{ url, title: new URL(url).hostname, screenshot: `data:image/png;base64,${verified.annotated.toString("base64")}`, screenshotWidth: capture.width, screenshotHeight: capture.height, findings: verified.findings.filter((finding) => finding.evidence.length > 0) }] };
   onStage?.({ id: "complete", label: "Finalising verified audit", detail: "Verified audit is ready.", status: "complete" });
   return result;
 }
