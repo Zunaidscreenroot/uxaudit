@@ -146,40 +146,19 @@ function escapeXml(value: string): string { return value.replace(/&/g, "&amp;").
 function buildRegionSvg(width: number, height: number, findings: Finding[]): Buffer { const elements = findings.flatMap((finding) => finding.evidence.map((e) => { const x = clamp(e.x / 100 * width, 0, width - 1), y = clamp(e.y / 100 * height, 0, height - 1); const w = clamp(e.width / 100 * width, 8, width - x), h = clamp(e.height / 100 * height, 8, height - y); const markerW = 34, markerH = 34, markerX = x, markerY = Math.max(0, y - markerH - 4); return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="3" fill="#ffd400" fill-opacity="0.12" stroke="#ffd400" stroke-width="5"/><rect x="${markerX}" y="${markerY}" width="${markerW}" height="${markerH}" rx="17" fill="#ffd400" stroke="#111" stroke-width="2"/><text x="${markerX + markerW / 2}" y="${markerY + 23}" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="700" fill="#111">${escapeXml(e.marker)}</text>`; })).join(""); return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${elements}</svg>`); }
 async function renderRegions(mainImage: Buffer, width: number, height: number, findings: Finding[]): Promise<Buffer> { if (!findings.some((finding) => finding.evidence.length)) return mainImage; return sharp(mainImage).composite([{ input: buildRegionSvg(width, height, findings), left: 0, top: 0, blend: "over" }]).png().toBuffer(); }
 
-function flattenRegions(findings: Finding[]) {
-  return findings.flatMap((finding) => finding.evidence.map((e, evidenceIndex) => ({ findingId: finding.id, evidenceIndex, finding: { category: finding.category, title: finding.title, description: finding.description, recommendation: finding.recommendation, assessment: finding.uxPerspective.assessment, law: finding.uxPerspective.law }, evidence: { label: e.label, detail: e.detail }, box: [e.y * 10, e.x * 10, (e.y + e.height) * 10, (e.x + e.width) * 10] as RegionBox })));
-}
+function flattenRegions(findings: Finding[]) { return findings.flatMap((finding) => finding.evidence.map((e, evidenceIndex) => ({ findingId: finding.id, evidenceIndex, finding: { category: finding.category, title: finding.title, description: finding.description, recommendation: finding.recommendation, assessment: finding.uxPerspective.assessment, law: finding.uxPerspective.law }, evidence: { label: e.label, detail: e.detail }, box: [e.y * 10, e.x * 10, (e.y + e.height) * 10, (e.x + e.width) * 10] as RegionBox }))); }
 
-function applyVerificationBoxes(findings: Finding[], verification: VerificationItem[]): Finding[] {
-  const next = findings.map((finding) => ({ ...finding, evidence: finding.evidence.map((e) => ({ ...e })) }));
-  for (const item of verification) {
-    const finding = next.find((entry) => entry.id === item.findingId);
-    if (!finding) continue;
-    for (const region of item.regions) {
-      const evidence = finding.evidence[region.evidenceIndex];
-      const box = normalizeBox(region.box);
-      if (!evidence || !box) continue;
-      const [y1, x1, y2, x2] = box;
-      evidence.x = x1 / 10; evidence.y = y1 / 10; evidence.width = (x2 - x1) / 10; evidence.height = (y2 - y1) / 10;
-    }
-  }
-  return next;
-}
+function applyVerificationBoxes(findings: Finding[], verification: VerificationItem[]): Finding[] { const next = findings.map((finding) => ({ ...finding, evidence: finding.evidence.map((e) => ({ ...e })) })); for (const item of verification) { const finding = next.find((entry) => entry.id === item.findingId); if (!finding) continue; for (const region of item.regions) { const evidence = finding.evidence[region.evidenceIndex]; const box = normalizeBox(region.box); if (!evidence || !box) continue; const [y1, x1, y2, x2] = box; evidence.x = x1 / 10; evidence.y = y1 / 10; evidence.width = (x2 - x1) / 10; evidence.height = (y2 - y1) / 10; } } return next; }
 
-function removeInvalidFindings(findings: Finding[], verification: VerificationResult): Finding[] {
-  const validIds = new Set(verification.findings.filter((item) => item.valid).map((item) => item.findingId));
-  return findings.filter((finding) => validIds.has(finding.id));
-}
-
-function regionsNeedCorrection(findings: Finding[], verification: VerificationItem[]): boolean {
-  return verification.some((item) => item.valid && item.regions.some((region) => !region.correct));
-}
-
+function removeInvalidFindings(findings: Finding[], verification: VerificationResult): Finding[] { const validIds = new Set(verification.findings.filter((item) => item.valid).map((item) => item.findingId)); return findings.filter((finding) => validIds.has(finding.id)); }
+function regionsNeedCorrection(verification: VerificationItem[]): boolean { return verification.some((item) => item.valid && item.regions.some((region) => !region.correct)); }
 function hasCompleteVerification(findings: Finding[], verification: VerificationItem[]): boolean {
   if (verification.length !== findings.length) return false;
   return findings.every((finding) => {
     const item = verification.find((entry) => entry.findingId === finding.id);
-    return Boolean(item && item.valid && item.regions.length === finding.evidence.length && item.regions.every((region) => typeof region.correct === "boolean" && normalizeBox(region.box)));
+    if (!item) return false;
+    if (!item.valid) return item.regions.length === 0;
+    return item.regions.length === finding.evidence.length && item.regions.every((region) => typeof region.correct === "boolean" && normalizeBox(region.box));
   });
 }
 
@@ -212,7 +191,7 @@ async function verifyAndCorrectRegions(capture: Capture, findings: Finding[], mo
         continue;
       }
 
-      if (!regionsNeedCorrection(current, items)) return { findings: current, annotated };
+      if (!regionsNeedCorrection(items)) return { findings: current, annotated };
 
       onStage?.({ id: "correct", label: `Correcting highlighted regions (pass ${pass})`, detail: "The evidence coordinates did not match the finding context, so the annotation is being rebuilt from the untouched screenshot.", status: "active" });
       current = applyVerificationBoxes(current, items);
