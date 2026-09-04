@@ -8,11 +8,11 @@ export type AuditResult = { pages: AuditPage[] };
 type TextRegion = { text: string; x: number; y: number; width: number; height: number };
 type GeminiAnalysis = { findings: Finding[]; model: string };
 
-const GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.7-flash"] as const;
+const GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"] as const;
 const BROWSERLESS_TIMEOUT_MS = 24000;
-const VERIFY_BROWSERLESS_TIMEOUT_MS = 4000;
-const GEMINI_ANALYSIS_TIMEOUT_MS = 8000;
-const GEMINI_VERIFY_TIMEOUT_MS = 4000;
+const VERIFY_BROWSERLESS_TIMEOUT_MS = 3500;
+const GEMINI_ANALYSIS_TIMEOUT_MS = 14000;
+const GEMINI_VERIFY_TIMEOUT_MS = 3500;
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
 function normalizeFinding(value: unknown, index: number, imageWidth: number, imageHeight: number, textRegions: TextRegion[]): Finding {
@@ -129,7 +129,7 @@ async function callGemini(apiKey: string, model: string, prompt: string, buffer:
     headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
     body: JSON.stringify({
       contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: "image/png", data: buffer.toString("base64") } }] }],
-      generationConfig: { responseMimeType: "application/json", maxOutputTokens, thinkingConfig: { thinkingLevel: "low" } }
+      generationConfig: { responseMimeType: "application/json", maxOutputTokens, thinkingConfig: { thinkingLevel: "low" }, media_resolution: "MEDIA_RESOLUTION_MEDIUM" }
     }),
     signal: AbortSignal.timeout(timeoutMs)
   });
@@ -155,7 +155,7 @@ JSON shape: {"findings":[{"id":"finding-1","severity":"medium","category":"...",
   let lastError = "Gemini analysis could not be completed.";
   for (const model of GEMINI_MODELS) {
     try {
-      const text = await callGemini(apiKey, model, prompt, buffer, 4500, GEMINI_ANALYSIS_TIMEOUT_MS);
+      const text = await callGemini(apiKey, model, prompt, buffer, 3000, GEMINI_ANALYSIS_TIMEOUT_MS);
       if (!text) { lastError = `Gemini ${model} returned an empty analysis.`; continue; }
       let json: unknown;
       try { json = JSON.parse(text); } catch { lastError = `Gemini ${model} returned invalid JSON.`; continue; }
