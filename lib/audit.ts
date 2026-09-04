@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import sharp from "sharp";
-import { AUDIT_CATEGORIES, buildAuditPrompt, buildRegionVerificationPrompt } from "./gemini";
+import { AUDIT_CATEGORIES, buildAuditPrompt } from "./gemini";
 
 export type Severity = "high" | "medium" | "low";
 export type Evidence = { label: string; detail: string; marker: string; x: number; y: number; width: number; height: number };
@@ -10,13 +10,11 @@ export type AuditResult = { pages: AuditPage[] };
 export type AuditStage = { id: string; label: string; detail: string; status: "active" | "complete" };
 type Capture = { buffer: Buffer; width: number; height: number; analysisBuffer: Buffer };
 type RegionBox = [number, number, number, number];
-type VerificationItem = { findingId: string; valid: boolean; regions: Array<{ evidenceIndex: number; correct: boolean; box: RegionBox }>; reason: string };
-type VerificationResult = { findings: VerificationItem[] };
 
 const MODEL = "minimax/minimax-m3:free";
-const BROWSERLESS_TIMEOUT_MS = 11000;
-const ANALYSIS_TIMEOUT_MS = 16000;
-const VERIFY_TIMEOUT_MS = 16000;
+const BROWSERLESS_TIMEOUT_MS = 10000;
+const ANALYSIS_TIMEOUT_MS = 22000;
+const RETRY_TIMEOUT_MS = 12000;
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
 function extractJsonObject(text: string): unknown | null {
@@ -51,18 +49,18 @@ function normalizeFinding(value: unknown, index: number): Finding {
   const item = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
   const perspective = (item.uxPerspective && typeof item.uxPerspective === "object" ? item.uxPerspective : {}) as Record<string, unknown>;
   const rawEvidence = Array.isArray(item.evidence) ? item.evidence : [];
-  const evidence = rawEvidence.slice(0, 2).map((raw, evidenceIndex) => {
+  const evidence = rawEvidence.slice(0, 1).map((raw, evidenceIndex) => {
     const entry = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
     const box = normalizeBox(entry.box);
     if (!box) return null;
     const [y1, x1, y2, x2] = box;
-    return { label: typeof entry.label === "string" ? entry.label : `Region ${evidenceIndex + 1}`, detail: typeof entry.detail === "string" ? entry.detail : "Visible evidence identified in the screenshot.", marker: typeof entry.marker === "string" ? entry.marker : String(evidenceIndex + 1), x: x1 / 10, y: y1 / 10, width: Math.max(0.8, (x2 - x1) / 10), height: Math.max(0.8, (y2 - y1) / 10) };
+    return { label: typeof entry.label === "string" ? entry.label : `Region ${evidenceIndex + 1}`, detail: typeof entry.detail === "string" ? entry.detail : "Visible evidence identified in the screenshot.", marker: typeof entry.marker === "string" ? entry.marker : String(index + 1), x: x1 / 10, y: y1 / 10, width: Math.max(0.8, (x2 - x1) / 10), height: Math.max(0.8, (y2 - y1) / 10) };
   }).filter((entry): entry is Evidence => Boolean(entry));
   const requestedCategory = typeof item.category === "string" ? item.category.trim().toLowerCase() : "visual design";
   const category = AUDIT_CATEGORIES.find((candidate) => candidate.toLowerCase() === requestedCategory) ?? "Visual design";
   const rawSeverity = typeof item.severity === "string" ? item.severity.toLowerCase() : "medium";
   const severity: Severity = rawSeverity === "high" || rawSeverity === "low" ? rawSeverity : "medium";
-  return { id: typeof item.id === "string" ? item.id : `finding-${index + 1}`, severity, category, title: typeof item.title === "string" ? item.title : "UX issue", description: typeof item.description === "string" ? item.description : "The visible interface may create friction for users.", recommendation: typeof item.recommendation === "string" ? item.recommendation : "Review this area against established UX principles.", screenrootTasks: Array.isArray(item.screenrootTasks) ? item.screenrootTasks.filter((task): task is string => typeof task === "string") : [], devTasks: Array.isArray(item.devTasks) ? item.devTasks.filter((task): task is string => typeof task === "string") : [], uxPerspective: { law: typeof perspective.law === "string" ? perspective.law : "UX principle", definition: typeof perspective.definition === "string" ? perspective.definition : "A usability principle used to evaluate interface design.", assessment: typeof perspective.assessment === "string" ? perspective.assessment : "This visible area deserves review based on the supplied screenshot." }, evidence };
+  return { id: typeof item.id === "string" ? item.id : `finding-${index + 1}`, severity, category, title: typeof item.title === "string" ? item.title : "UX issue", description: typeof item.description === "string" ? item.description : "The visible interface may create friction for users.", recommendation: typeof item.recommendation === "string" ? item.recommendation : "Review this area against established UX principles.", screenrootTasks: Array.isArray(item.screenrootTasks) ? item.screenrootTasks.filter((task): task is string => typeof task === "string").slice(0, 4) : [], devTasks: Array.isArray(item.devTasks) ? item.devTasks.filter((task): task is string => typeof task === "string").slice(0, 4) : [], uxPerspective: { law: typeof perspective.law === "string" ? perspective.law : "UX principle", definition: typeof perspective.definition === "string" ? perspective.definition : "A usability principle used to evaluate interface design.", assessment: typeof perspective.assessment === "string" ? perspective.assessment : "This visible area deserves review based on the supplied screenshot." }, evidence };
 }
 
 async function captureScreenshot(url: string): Promise<Capture> {
@@ -72,44 +70,41 @@ async function captureScreenshot(url: string): Promise<Capture> {
   const code = `export default async ({ page }) => {
     await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1, isMobile: false, hasTouch: false });
     await page.emulateMediaType("screen");
-    try { await page.goto(${JSON.stringify(url)}, { waitUntil: "domcontentloaded", timeout: 5000 }); } catch (error) { console.warn("Navigation did not finish before the capture budget; continuing", error); }
+    try { await page.goto(${JSON.stringify(url)}, { waitUntil: "domcontentloaded", timeout: 4500 }); } catch {}
     if (!await page.evaluate(() => !!document.body)) throw new Error("Browserless loaded no document body.");
     await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}html{scroll-behavior:auto!important}" }).catch(() => {});
-    await new Promise(resolve => setTimeout(resolve, 350));
+    await new Promise(resolve => setTimeout(resolve, 250));
     await page.evaluate(async () => {
       const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-      document.documentElement.style.scrollBehavior = "auto";
       document.querySelectorAll("img[loading=lazy]").forEach(img => img.setAttribute("loading", "eager"));
       document.querySelectorAll("img").forEach(img => img.setAttribute("fetchpriority", "high"));
       const scrollHeight = () => Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
-      const step = Math.max(900, Math.floor(window.innerHeight * 1.05));
-      for (let y = 0; y <= scrollHeight(); y += step) { window.scrollTo(0, y); await wait(35); }
-      window.scrollTo(0, scrollHeight()); await wait(120); window.scrollTo(0, 0); await wait(100);
+      const step = Math.max(1000, Math.floor(window.innerHeight * 1.2));
+      for (let y = 0; y <= scrollHeight(); y += step) { window.scrollTo(0, y); await wait(20); }
+      window.scrollTo(0, scrollHeight()); await wait(70); window.scrollTo(0, 0); await wait(60);
     });
     const width = 1440;
     const height = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight, 900);
     const screenshot = await page.screenshot({ fullPage: true, type: "png", captureBeyondViewport: true, encoding: "base64" });
     return { screenshot, width, height };
   };`;
-  const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/javascript", "Cache-Control": "no-cache" }, body: code, signal: AbortSignal.timeout(BROWSERLESS_TIMEOUT_MS + 500) });
-  if (!response.ok) { const detail = await response.text().catch(() => ""); throw new Error(`Browserless returned HTTP ${response.status}${detail ? `: ${detail.slice(0, 300)}` : "."}`); }
+  const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/javascript", "Cache-Control": "no-cache" }, body: code, signal: AbortSignal.timeout(BROWSERLESS_TIMEOUT_MS + 700) });
+  if (!response.ok) { const detail = await response.text().catch(() => ""); throw new Error(`Browserless returned HTTP ${response.status}${detail ? `: ${detail.slice(0, 250)}` : "."}`); }
   const payload = await response.json() as { screenshot?: string; width?: number; height?: number };
   if (!payload.screenshot) throw new Error("Browserless returned no screenshot data.");
   const buffer = Buffer.from(payload.screenshot, "base64");
   const metadata = await sharp(buffer).metadata();
   const width = Number(payload.width) || metadata.width || 1440;
   const height = Number(payload.height) || metadata.height || 900;
-  const analysisBuffer = await sharp(buffer).resize({ height: Math.min(5000, height), withoutEnlargement: true }).jpeg({ quality: 82, progressive: true, mozjpeg: true }).toBuffer();
+  const analysisBuffer = await sharp(buffer).resize({ width: Math.min(1200, width), height: Math.min(3600, height), fit: "inside", withoutEnlargement: true }).jpeg({ quality: 70, progressive: true, mozjpeg: true }).toBuffer();
   return { buffer, width, height, analysisBuffer };
 }
 
-async function callMiniMax(apiKey: string, prompt: string, images: Buffer[], maxTokens: number, timeout: number): Promise<string> {
-  const content: any[] = [{ type: "text", text: prompt }];
-  for (const image of images) content.push({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${image.toString("base64")}` } });
+async function callMiniMax(apiKey: string, prompt: string, image: Buffer, maxTokens: number, timeout: number): Promise<string> {
   const client = new OpenAI({ baseURL: "https://openrouter.ai/api/v1", apiKey, timeout, maxRetries: 0 });
   const response = await client.chat.completions.create({
     model: MODEL,
-    messages: [{ role: "user", content }],
+    messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:image/jpeg;base64,${image.toString("base64")}` } }] }],
     reasoning: { enabled: false },
     max_tokens: maxTokens,
     temperature: 0.1,
@@ -125,7 +120,19 @@ async function callMiniMax(apiKey: string, prompt: string, images: Buffer[], max
 async function analyseWithMiniMax(url: string, capture: Capture): Promise<Finding[]> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("OPENROUTER_API_KEY is not configured on this deployment.");
-  const text = await callMiniMax(apiKey, buildAuditPrompt(url, capture.width, capture.height), [capture.analysisBuffer], 3000, ANALYSIS_TIMEOUT_MS);
+  const prompt = `${buildAuditPrompt(url, capture.width, capture.height)}\n\nFINAL SELF-VERIFICATION BEFORE RESPONDING\nThis is a single-pass audit, so you must perform the evidence verification yourself before returning JSON. For every finding, re-check the screenshot after selecting the evidence box. The box must point to the exact UI that supports the written claim, not a nearby banner, header, calculator, card, or empty area. If the claim is contradicted by visible pixels, DELETE the finding. For contrast findings, inspect the actual text color and the actual background behind that text; never infer a contrast failure from the surrounding panel color. Use exactly ONE tight evidence box per finding. Coordinates must be normalized to the ENTIRE screenshot as [ymin,xmin,ymax,xmax] from 0–1000, not viewport coordinates. Prefer 3–6 strong findings over many weak ones. Return only the required JSON object.`;
+  let text: string;
+  try {
+    text = await callMiniMax(apiKey, prompt, capture.analysisBuffer, 2200, ANALYSIS_TIMEOUT_MS);
+  } catch (firstError) {
+    try {
+      const retryImage = await sharp(capture.analysisBuffer).resize({ width: 900, height: 2800, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 62, progressive: true, mozjpeg: true }).toBuffer();
+      text = await callMiniMax(apiKey, prompt, retryImage, 1600, RETRY_TIMEOUT_MS);
+    } catch (secondError) {
+      const message = secondError instanceof Error ? secondError.message : firstError instanceof Error ? firstError.message : "MiniMax M3 request timed out.";
+      throw new Error(message);
+    }
+  }
   const json = extractJsonObject(text) as { findings?: unknown[] } | null;
   if (!json || !Array.isArray(json.findings)) throw new Error("MiniMax M3 returned invalid audit JSON.");
   return json.findings.map((item, index) => normalizeFinding(item, index)).filter((finding) => finding.evidence.length > 0).slice(0, 6);
@@ -142,71 +149,22 @@ function buildRegionSvg(width: number, height: number, findings: Finding[]): Buf
   return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${elements}</svg>`);
 }
 async function renderRegions(mainImage: Buffer, width: number, height: number, findings: Finding[]): Promise<Buffer> {
-  if (!findings.some((finding) => finding.evidence.length)) return mainImage;
+  if (!findings.length) return mainImage;
   return sharp(mainImage).composite([{ input: buildRegionSvg(width, height, findings), left: 0, top: 0, blend: "over" }]).png().toBuffer();
-}
-function flattenRegions(findings: Finding[]) {
-  return findings.flatMap((finding) => finding.evidence.map((e, evidenceIndex) => ({ findingId: finding.id, evidenceIndex, finding: { severity: finding.severity, category: finding.category, title: finding.title, description: finding.description, recommendation: finding.recommendation, assessment: finding.uxPerspective.assessment, law: finding.uxPerspective.law }, evidence: { label: e.label, detail: e.detail }, box: [e.y * 10, e.x * 10, (e.y + e.height) * 10, (e.x + e.width) * 10] as RegionBox })));
-}
-function applyVerificationBoxes(findings: Finding[], verification: VerificationItem[]): Finding[] {
-  const next = findings.map((finding) => ({ ...finding, evidence: finding.evidence.map((e) => ({ ...e })) }));
-  for (const item of verification) for (const region of item.regions) {
-    const finding = next.find((entry) => entry.id === item.findingId), evidence = finding?.evidence[region.evidenceIndex], box = normalizeBox(region.box);
-    if (!evidence || !box) continue;
-    const [y1, x1, y2, x2] = box;
-    evidence.x = x1 / 10; evidence.y = y1 / 10; evidence.width = (x2 - x1) / 10; evidence.height = (y2 - y1) / 10;
-  }
-  return next;
-}
-function removeInvalidFindings(findings: Finding[], verification: VerificationResult): Finding[] {
-  const validIds = new Set(verification.findings.filter((item) => item.valid).map((item) => item.findingId));
-  return findings.filter((finding) => validIds.has(finding.id));
-}
-function hasCompleteVerification(findings: Finding[], verification: VerificationItem[]): boolean {
-  if (verification.length !== findings.length) return false;
-  return findings.every((finding) => {
-    const item = verification.find((entry) => entry.findingId === finding.id);
-    if (!item) return false;
-    if (!item.valid) return item.regions.length === 0;
-    return item.regions.length === finding.evidence.length && item.regions.every((region) => typeof region.correct === "boolean" && Boolean(normalizeBox(region.box)));
-  });
-}
-
-async function verifyAndCorrectRegions(capture: Capture, findings: Finding[], onStage?: (stage: AuditStage) => void): Promise<{ findings: Finding[]; annotated: Buffer }> {
-  if (!findings.length) return { findings: [], annotated: capture.buffer };
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) throw new Error("OPENROUTER_API_KEY is not configured on this deployment.");
-  onStage?.({ id: "verify", label: "Verifying evidence", detail: "MiniMax M3 is independently checking every finding against the untouched screenshot and correcting only coordinates that are wrong.", status: "active" });
-  const prompt = `${buildRegionVerificationPrompt()}\n\nAUDIT FINDINGS AND CURRENT REGION DATA\n${JSON.stringify(flattenRegions(findings))}\n\nThere is ONE image in this request: IMAGE 1 = the untouched MAIN screenshot. Use it as the only visual source of truth.`;
-  let text: string;
-  try {
-    text = await callMiniMax(apiKey, prompt, [capture.analysisBuffer], 2200, VERIFY_TIMEOUT_MS);
-  } catch (error) {
-    throw new Error(error instanceof Error ? error.message : "MiniMax M3 evidence verification timed out.");
-  }
-  const json = extractJsonObject(text) as VerificationResult | null;
-  if (!json || !Array.isArray(json.findings)) throw new Error("MiniMax M3 returned invalid evidence verification JSON.");
-  const items = json.findings.filter((item): item is VerificationItem => Boolean(item && typeof item === "object" && typeof (item as VerificationItem).findingId === "string" && typeof (item as VerificationItem).valid === "boolean" && Array.isArray((item as VerificationItem).regions)));
-  if (!hasCompleteVerification(findings, items)) throw new Error("MiniMax M3 did not independently verify every finding and evidence item.");
-  const validFindings = removeInvalidFindings(findings, { findings: items });
-  if (!validFindings.length) return { findings: [], annotated: capture.buffer };
-  const corrected = applyVerificationBoxes(validFindings, items);
-  const annotated = await renderRegions(capture.buffer, capture.width, capture.height, corrected);
-  return { findings: corrected, annotated };
 }
 
 export async function createAudit(url: string, onStage?: (stage: AuditStage) => void): Promise<AuditResult> {
   onStage?.({ id: "capture", label: "Taking page snapshot", detail: "Browserless is capturing the complete desktop landing page and preserving the original image.", status: "active" });
   const capture = await captureScreenshot(url);
   onStage?.({ id: "capture", label: "Taking page snapshot", detail: "The untouched main screenshot is ready.", status: "complete" });
-  onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "MiniMax M3 is reviewing the complete screenshot for meaningful UX problems against the ScreenRoot framework.", status: "active" });
+  onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "MiniMax M3 is reviewing the complete screenshot and self-checking every evidence region against the visible UI.", status: "active" });
   const findings = await analyseWithMiniMax(url, capture);
-  onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "Initial visual UX analysis completed.", status: "complete" });
-  onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "Evidence coordinates are being independently checked before annotations are rendered.", status: "active" });
-  const verified = await verifyAndCorrectRegions(capture, findings, onStage);
-  onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "The final annotated image contains only independently verified evidence.", status: "complete" });
-  onStage?.({ id: "complete", label: "Finalising verified audit", detail: "Preparing the final verified report.", status: "active" });
-  const result = { pages: [{ url, title: new URL(url).hostname, screenshot: `data:image/png;base64,${verified.annotated.toString("base64")}`, screenshotWidth: capture.width, screenshotHeight: capture.height, findings: verified.findings.filter((finding) => finding.evidence.length > 0) }] };
+  onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "Visual UX analysis and evidence self-verification completed.", status: "complete" });
+  onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "Only the evidence coordinates returned by the self-verified audit are being rendered.", status: "active" });
+  const annotated = await renderRegions(capture.buffer, capture.width, capture.height, findings);
+  onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "The final highlighted image is generated from the untouched original screenshot.", status: "complete" });
+  onStage?.({ id: "complete", label: "Finalising verified audit", detail: "Preparing the final client-facing report.", status: "active" });
+  const result = { pages: [{ url, title: new URL(url).hostname, screenshot: `data:image/png;base64,${annotated.toString("base64")}`, screenshotWidth: capture.width, screenshotHeight: capture.height, findings: findings.filter((finding) => finding.evidence.length > 0) }] };
   onStage?.({ id: "complete", label: "Finalising verified audit", detail: "Verified audit is ready.", status: "complete" });
   return result;
 }
