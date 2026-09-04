@@ -42,6 +42,18 @@ jobs:
           s = s.replace('callGemini(apiKey, model, prompt, verificationScreenshot, 1800, GEMINI_VERIFY_TIMEOUT_MS)', 'callGemini(apiKey, model, prompt, verificationScreenshot, 1200, GEMINI_VERIFY_TIMEOUT_MS)')
           s = s.replace('callGemini(apiKey, model, prompt, verificationScreenshot, 1600, GEMINI_VERIFY_TIMEOUT_MS)', 'callGemini(apiKey, model, prompt, verificationScreenshot, 1200, GEMINI_VERIFY_TIMEOUT_MS)')
 
+          old_nav = '    await page.goto(${JSON.stringify(url)}, { waitUntil: "networkidle2", timeout: 20000 });'
+          new_nav = '''    let navigationTimedOut = false;
+    try {
+      await page.goto(${JSON.stringify(url)}, { waitUntil: "domcontentloaded", timeout: 12000 });
+    } catch (error) {
+      navigationTimedOut = true;
+      console.warn("Navigation did not reach DOMContentLoaded before timeout; continuing with the rendered page", error);
+    }
+    if (!await page.evaluate(() => !!document.body)) throw new Error("Browserless loaded no document body.");'''
+          if old_nav in s:
+              s = s.replace(old_nav, new_nav)
+
           old_scroll = '''    await new Promise(resolve => setTimeout(resolve, 1000));
     await page.evaluate(async () => {
       const step = Math.max(500, Math.floor(window.innerHeight * 0.8));
@@ -193,5 +205,5 @@ function normalizeCategory(value: unknown, title: string, description: string): 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add package-lock.json lib/audit.ts
-          git commit -m "fix: iterative evidence QA and audit categories"
+          git commit -m "fix: robust Browserless navigation"
           git push
