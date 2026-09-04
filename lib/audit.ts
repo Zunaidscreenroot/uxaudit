@@ -9,7 +9,7 @@ export type AuditResult = { pages: AuditPage[] };
 export type AuditStage = { id: string; label: string; detail: string; status: "active" | "complete" };
 type Capture = { buffer: Buffer; width: number; height: number; analysisBuffer: Buffer };
 type RegionBox = [number, number, number, number];
-type VerificationItem = { findingId: string; valid: boolean; regions: Array<{ evidenceIndex: number; box: RegionBox }>; reason: string };
+type VerificationItem = { findingId: string; valid: boolean; regions: Array<{ evidenceIndex: number; correct: boolean; box: RegionBox }>; reason: string };
 type VerificationResult = { findings: VerificationItem[] };
 
 const BROWSERLESS_TIMEOUT_MS = 14000;
@@ -147,13 +147,7 @@ function buildRegionSvg(width: number, height: number, findings: Finding[]): Buf
 async function renderRegions(mainImage: Buffer, width: number, height: number, findings: Finding[]): Promise<Buffer> { if (!findings.some((finding) => finding.evidence.length)) return mainImage; return sharp(mainImage).composite([{ input: buildRegionSvg(width, height, findings), left: 0, top: 0, blend: "over" }]).png().toBuffer(); }
 
 function flattenRegions(findings: Finding[]) {
-  return findings.flatMap((finding) => finding.evidence.map((e, evidenceIndex) => ({
-    findingId: finding.id,
-    evidenceIndex,
-    finding: { category: finding.category, title: finding.title, description: finding.description, recommendation: finding.recommendation, assessment: finding.uxPerspective.assessment, law: finding.uxPerspective.law },
-    evidence: { label: e.label, detail: e.detail },
-    box: [e.y * 10, e.x * 10, (e.y + e.height) * 10, (e.x + e.width) * 10] as RegionBox,
-  })));
+  return findings.flatMap((finding) => finding.evidence.map((e, evidenceIndex) => ({ findingId: finding.id, evidenceIndex, finding: { category: finding.category, title: finding.title, description: finding.description, recommendation: finding.recommendation, assessment: finding.uxPerspective.assessment, law: finding.uxPerspective.law }, evidence: { label: e.label, detail: e.detail }, box: [e.y * 10, e.x * 10, (e.y + e.height) * 10, (e.x + e.width) * 10] as RegionBox })));
 }
 
 function applyVerificationBoxes(findings: Finding[], verification: VerificationItem[]): Finding[] {
@@ -178,9 +172,14 @@ function removeInvalidFindings(findings: Finding[], verification: VerificationRe
 }
 
 function regionsNeedCorrection(findings: Finding[], verification: VerificationItem[]): boolean {
-  return verification.some((item) => {
-    const finding = findings.find((entry) => entry.id === item.findingId);
-    return !finding || item.regions.length !== finding.evidence.length || item.regions.some((region) => !normalizeBox(region.box));
+  return verification.some((item) => item.valid && item.regions.some((region) => !region.correct));
+}
+
+function hasCompleteVerification(findings: Finding[], verification: VerificationItem[]): boolean {
+  if (verification.length !== findings.length) return false;
+  return findings.every((finding) => {
+    const item = verification.find((entry) => entry.findingId === finding.id);
+    return Boolean(item && item.valid && item.regions.length === finding.evidence.length && item.regions.every((region) => typeof region.correct === "boolean" && normalizeBox(region.box)));
   });
 }
 
@@ -202,7 +201,7 @@ async function verifyAndCorrectRegions(capture: Capture, findings: Finding[], mo
       const json = extractJsonObject(text) as VerificationResult | null;
       if (!json || !Array.isArray(json.findings)) { lastError = "Gemini returned invalid evidence verification JSON."; continue; }
       const items = json.findings.filter((item): item is VerificationItem => Boolean(item && typeof item === "object" && typeof (item as VerificationItem).findingId === "string" && typeof (item as VerificationItem).valid === "boolean" && Array.isArray((item as VerificationItem).regions)));
-      if (items.length !== current.length) { lastError = "Gemini did not independently verify every finding."; continue; }
+      if (!hasCompleteVerification(current, items)) { lastError = "Gemini did not independently verify every finding and evidence item."; continue; }
 
       const stillValid = removeInvalidFindings(current, { findings: items });
       if (stillValid.length !== current.length) {
@@ -231,15 +230,12 @@ export async function createAudit(url: string, onStage?: (stage: AuditStage) => 
   onStage?.({ id: "capture", label: "Taking page snapshot", detail: "Browserless is capturing the complete desktop landing page and preserving the original image.", status: "active" });
   const capture = await captureScreenshot(url);
   onStage?.({ id: "capture", label: "Taking page snapshot", detail: "The untouched main screenshot is ready.", status: "complete" });
-
   onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "Gemini is reviewing the untouched screenshot against the ScreenRoot framework.", status: "active" });
   const analysis = await analyseWithGemini(url, capture);
   onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "Gemini completed the initial visual UX analysis.", status: "complete" });
-
   onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "Creating the first annotated image from the untouched screenshot.", status: "active" });
   const verified = await verifyAndCorrectRegions(capture, analysis.findings, analysis.model, onStage);
   onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "The final annotated image has been rebuilt only from the untouched screenshot.", status: "complete" });
-
   onStage?.({ id: "complete", label: "Finalising verified audit", detail: "Preparing the final verified report for the product.", status: "active" });
   const result = { pages: [{ url, title: new URL(url).hostname, screenshot: `data:image/png;base64,${verified.annotated.toString("base64")}`, screenshotWidth: capture.width, screenshotHeight: capture.height, findings: verified.findings.filter((finding) => finding.severity === "high" && finding.evidence.length > 0) }] };
   onStage?.({ id: "complete", label: "Finalising verified audit", detail: "Verified audit is ready.", status: "complete" });
