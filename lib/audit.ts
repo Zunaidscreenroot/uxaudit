@@ -6,11 +6,11 @@ export type Finding = { id: string; severity: Severity; category: string; title:
 export type AuditPage = { url: string; title: string; screenshot: string; screenshotWidth: number; screenshotHeight: number; findings: Finding[] };
 export type AuditResult = { pages: AuditPage[] };
 type TextRegion = { text: string; x: number; y: number; width: number; height: number };
+type GeminiAnalysis = { findings: Finding[]; model: string };
 
-// Only use currently supported production models. 2.5 Flash-Lite is intentionally excluded
-// because some new-user projects can no longer access it even though it remains in legacy docs.
 const GEMINI_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"] as const;
 const BROWSERLESS_TIMEOUT_MS = 26000;
+const VERIFY_BROWSERLESS_TIMEOUT_MS = 9000;
 const GEMINI_TIMEOUT_MS = 5500;
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
@@ -37,9 +37,7 @@ function normalizeFinding(value: unknown, index: number, imageWidth: number, ima
     const nearby = textRegions.filter((r) => {
       const rx = r.x + r.width / 2;
       const ry = r.y + r.height / 2;
-      const dx = Math.abs(rx - cx);
-      const dy = Math.abs(ry - cy);
-      return dx <= 520 && dy <= 180;
+      return Math.abs(rx - cx) <= 520 && Math.abs(ry - cy) <= 180;
     });
     if (footer) {
       const footerNearby = nearby.filter((r) => r.y + r.height > imageHeight * 0.62);
@@ -113,41 +111,85 @@ async function captureScreenshot(url: string): Promise<{ buffer: Buffer; width: 
   return { buffer: Buffer.from(payload.screenshot, "base64"), width: Number(payload.width) || 1440, height: Number(payload.height) || 900, textRegions: Array.isArray(payload.textRegions) ? payload.textRegions : [] };
 }
 
-async function analyseWithGemini(url: string, title: string, capture: { buffer: Buffer; width: number; height: number; textRegions: TextRegion[] }): Promise<Finding[]> {
+async function renderEvidenceVerificationScreenshot(capture: { buffer: Buffer; width: number; height: number }, findings: Finding[]): Promise<Buffer> {
+  const token = process.env.BROWSERLESS_API_TOKEN;
+  if (!token) throw new Error("BROWSERLESS_API_TOKEN is not configured on this deployment.");
+  const endpoint = `https://production-sfo.browserless.io/function?token=${encodeURIComponent(token)}&timeout=${VERIFY_BROWSERLESS_TIMEOUT_MS}`;
+  const boxes = findings.flatMap((finding) => finding.evidence.map((e) => ({ ...e, findingId: finding.id })));
+  const boxHtml = boxes.map((e) => `<div style="position:absolute;left:${e.x}%;top:${e.y}%;width:${e.width}%;height:${e.height}%;border:6px solid #f5d547;box-sizing:border-box;"></div>`).join("");
+  const html = `<!doctype html><html><head><style>*{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff}#stage{position:relative;width:${capture.width}px;height:${capture.height}px}#stage img{display:block;width:100%;height:100%;object-fit:fill}#overlay{position:absolute;inset:0}</style></head><body><div id="stage"><img src="data:image/png;base64,${capture.buffer.toString("base64")}"/><div id="overlay">${boxHtml}</div></div></body></html>`;
+  const code = `export default async ({ page }) => { await page.setViewport({ width: ${capture.width}, height: 900, deviceScaleFactor: 1, isMobile: false, hasTouch: false }); await page.setContent(${JSON.stringify(html)}, { waitUntil: "load", timeout: 7000 }); await new Promise(resolve => setTimeout(resolve, 100)); return { screenshot: await page.screenshot({ fullPage: true, type: "png", captureBeyondViewport: true, encoding: "base64" }) }; }`;
+  const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/javascript", "Cache-Control": "no-cache" }, body: code, signal: AbortSignal.timeout(VERIFY_BROWSERLESS_TIMEOUT_MS + 1000) });
+  if (!response.ok) throw new Error(`Evidence verification screenshot failed with HTTP ${response.status}.`);
+  const payload = await response.json() as { screenshot?: string };
+  if (!payload.screenshot) throw new Error("Evidence verification screenshot returned no image.");
+  return Buffer.from(payload.screenshot, "base64");
+}
+
+async function callGemini(apiKey: string, model: string, prompt: string, buffer: Buffer, maxOutputTokens: number): Promise<string> {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, { method: "POST", headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey }, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: "image/png", data: buffer.toString("base64") } }] }], generationConfig: { responseMimeType: "application/json", maxOutputTokens } }), signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS) });
+  const detail = await response.text();
+  if (!response.ok) { let message = `Gemini ${model} returned HTTP ${response.status}.`; try { message = JSON.parse(detail)?.error?.message || message; } catch {} throw new Error(message); }
+  const parsed = JSON.parse(detail) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+  return parsed.candidates?.[0]?.content?.parts?.map((part) => typeof part.text === "string" ? part.text : "").join("") || "";
+}
+
+async function analyseWithGemini(url: string, title: string, capture: { buffer: Buffer; width: number; height: number; textRegions: TextRegion[] }): Promise<GeminiAnalysis> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY is not configured on this deployment.");
   const { width, height, buffer, textRegions } = capture;
   const anchorList = textRegions.slice(0, 500).map((r) => `${r.text} @ [${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}]`).join("\n");
-  const prompt = `You are a senior UX auditor for ScreenRoot. Analyze ONLY the supplied desktop landing-page screenshot for ${url} (title: ${title}). It is one complete full-page image captured at a fixed 1440px desktop viewport, with mobile/responsive emulation disabled. Identify 3 to 8 meaningful, visually evidenced UX issues. Do not infer hidden interactions or inspect source code.
-
-For every finding return severity, category, title, description, recommendation, screenrootTasks, devTasks, uxPerspective (law, definition, assessment), and evidence. Evidence localization is critical. The image may be much taller than one viewport. For text-based evidence, ALWAYS return evidence.anchor as an EXACT visible text snippet from the supplied DOM text-anchor list. The server resolves that anchor to its actual full-page pixel location. Do not return viewport-relative coordinates. For non-text visual evidence, use the closest relevant text anchor when possible; otherwise use box:[ymin,xmin,ymax,xmax] normalized 0-1000 across the ENTIRE image. Keep boxes tight. Never create a footer box spanning the whole footer merely because the issue is footer-related; anchor to the specific relevant link/group. Footer evidence must be in the bottom portion of the full image. Hero evidence must be in the top portion. Banner evidence must cover the actual banner. Use UX laws/principles only when genuinely applicable. Return ONLY valid JSON.
-
-DOM text-anchor list:
-${anchorList}
-
-JSON shape: {"findings":[{"id":"finding-1","severity":"medium","category":"...","title":"...","description":"...","recommendation":"...","screenrootTasks":["..."],"devTasks":["..."],"uxPerspective":{"law":"...","definition":"...","assessment":"..."},"evidence":[{"label":"...","detail":"...","marker":"1","anchor":"exact visible text snippet","box":[120,80,280,620]}]}]}`;
+  const prompt = `You are a senior UX auditor for ScreenRoot. Analyze ONLY the supplied desktop landing-page screenshot for ${url} (title: ${title}). It is one complete full-page image captured at a fixed 1440px desktop viewport, with mobile/responsive emulation disabled. Identify 3 to 8 meaningful, visually evidenced UX issues. Do not infer hidden interactions or inspect source code. For every finding return severity, category, title, description, recommendation, screenrootTasks, devTasks, uxPerspective (law, definition, assessment), and evidence. Evidence localization is critical. The image may be much taller than one viewport. For text-based evidence, ALWAYS return evidence.anchor as an EXACT visible text snippet from the supplied DOM text-anchor list. The server resolves that anchor to its actual full-page pixel location. Do not return viewport-relative coordinates. For non-text visual evidence, use the closest relevant text anchor when possible; otherwise use box:[ymin,xmin,ymax,xmax] normalized 0-1000 across the ENTIRE image. Keep boxes tight. Never create a footer box spanning the whole footer merely because the issue is footer-related; anchor to the specific relevant link/group. Footer evidence must be in the bottom portion of the full image. Hero evidence must be in the top portion. Banner evidence must cover the actual banner. Use UX laws/principles only when genuinely applicable. Return ONLY valid JSON.\n\nDOM text-anchor list:\n${anchorList}\n\nJSON shape: {"findings":[{"id":"finding-1","severity":"medium","category":"...","title":"...","description":"...","recommendation":"...","screenrootTasks":["..."],"devTasks":["..."],"uxPerspective":{"law":"...","definition":"...","assessment":"..."},"evidence":[{"label":"...","detail":"...","marker":"1","anchor":"exact visible text snippet","box":[120,80,280,620]}]}]}`;
   let lastError = "Gemini analysis could not be completed.";
   for (const model of GEMINI_MODELS) {
     try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, { method: "POST", headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey }, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: "image/png", data: buffer.toString("base64") } }] }], generationConfig: { responseMimeType: "application/json", maxOutputTokens: 6000 } }), signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS) });
-      const detail = await response.text();
-      if (!response.ok) { let message = `Gemini ${model} returned HTTP ${response.status}.`; try { message = JSON.parse(detail)?.error?.message || message; } catch {} lastError = message; console.warn("Gemini model failed", model, message); continue; }
-      const parsed = JSON.parse(detail) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
-      const text = parsed.candidates?.[0]?.content?.parts?.map((part) => typeof part.text === "string" ? part.text : "").join("") || "";
+      const text = await callGemini(apiKey, model, prompt, buffer, 6000);
       if (!text) { lastError = `Gemini ${model} returned an empty analysis.`; continue; }
       let json: unknown; try { json = JSON.parse(text); } catch { lastError = `Gemini ${model} returned invalid JSON.`; continue; }
       const rawFindings = Array.isArray((json as { findings?: unknown }).findings) ? (json as { findings: unknown[] }).findings : [];
       const findings = rawFindings.map((item: unknown, index: number) => normalizeFinding(item, index, width, height, textRegions));
-      if (findings.length) return findings;
+      if (findings.length) return { findings, model };
       lastError = `Gemini ${model} returned no findings.`;
     } catch (error) { lastError = error instanceof Error ? error.message : `Gemini ${model} failed.`; console.warn("Gemini model failed", model, lastError); }
   }
   throw new Error(`All Gemini fallback models failed. Last error: ${lastError}`);
 }
 
+async function verifyEvidence(capture: { buffer: Buffer; width: number; height: number }, findings: Finding[], model: string): Promise<Finding[]> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || !findings.some((f) => f.evidence.length)) return findings;
+  let current = findings;
+  for (let pass = 1; pass <= 3; pass += 1) {
+    try {
+      const verificationScreenshot = await renderEvidenceVerificationScreenshot(capture, current);
+      const regions = current.flatMap((finding) => finding.evidence.map((e, evidenceIndex) => ({ findingId: finding.id, evidenceIndex, marker: e.marker, label: e.label, detail: e.detail, box: [e.y * 10, e.x * 10, (e.y + e.height) * 10, (e.x + e.width) * 10] })));
+      const prompt = `You are verifying evidence placement for a UX audit. The supplied image is the ORIGINAL full-page screenshot with yellow evidence rectangles rendered on top. Check every rectangle against the visible UI content it is supposed to evidence. A region is correct only when it tightly covers the relevant interface area described by its label/detail, without covering unrelated sections. Return ONLY JSON: {"verified":true|false,"corrections":[{"findingId":"...","evidenceIndex":0,"box":[ymin,xmin,ymax,xmax]}]}. Coordinates must be normalized 0-1000 against the ENTIRE image, never viewport-relative. If a rectangle is already correct, do not include it in corrections. If a rectangle is wrong, move/resize it to the correct visible region. Audit regions:\n${JSON.stringify(regions)}`;
+      const text = await callGemini(apiKey, model, prompt, verificationScreenshot, 1800);
+      const parsed = JSON.parse(text) as { verified?: boolean; corrections?: Array<{ findingId?: string; evidenceIndex?: number; box?: unknown }> };
+      const corrections = Array.isArray(parsed.corrections) ? parsed.corrections : [];
+      if (!corrections.length || parsed.verified === true) return current;
+      const next = current.map((finding) => ({ ...finding, evidence: finding.evidence.map((e) => ({ ...e })) }));
+      for (const correction of corrections) {
+        if (typeof correction.findingId !== "string" || !Number.isInteger(correction.evidenceIndex) || !Array.isArray(correction.box) || correction.box.length !== 4) continue;
+        const [y1, x1, y2, x2] = correction.box.map(Number).map((n) => clamp(n, 0, 1000));
+        const finding = next.find((f) => f.id === correction.findingId);
+        const evidence = finding?.evidence[correction.evidenceIndex];
+        if (!finding || !evidence || x2 <= x1 || y2 <= y1) continue;
+        evidence.x = x1 / 10; evidence.y = y1 / 10; evidence.width = (x2 - x1) / 10; evidence.height = (y2 - y1) / 10;
+      }
+      current = next;
+    } catch (error) {
+      console.warn("Evidence verification pass skipped", pass, error);
+      return current;
+    }
+  }
+  return current;
+}
+
 export async function createAudit(url: string): Promise<AuditResult> {
   const capture = await captureScreenshot(url);
   const title = new URL(url).hostname;
-  const findings = await analyseWithGemini(url, title, capture);
+  const analysis = await analyseWithGemini(url, title, capture);
+  const findings = await verifyEvidence(capture, analysis.findings, analysis.model);
   return { pages: [{ url, title, screenshot: `data:image/png;base64,${capture.buffer.toString("base64")}`, screenshotWidth: capture.width, screenshotHeight: capture.height, findings }] };
 }

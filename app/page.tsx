@@ -3,25 +3,16 @@ import { FormEvent, useMemo, useState } from "react";
 import type { AuditPage, AuditResult } from "@/lib/audit";
 
 function EvidenceMap({ page, evidence }: { page: AuditPage; evidence: Array<AuditPage["findings"][number]["evidence"][number] & { finding: AuditPage["findings"][number] }> }) {
+  const [verified, setVerified] = useState(false);
   const width = page.screenshotWidth || 1440;
   const height = page.screenshotHeight || 900;
-  return <div className="screenshotStage" style={{ aspectRatio: `${width} / ${height}` }}>
-    <svg className="evidenceSvg" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-label={`Full-page screenshot of ${page.url}`}>
-      <image href={page.screenshot} x="0" y="0" width={width} height={height} preserveAspectRatio="none" />
-      {evidence.map((item, index) => {
-        const x = item.x / 100 * width;
-        const y = item.y / 100 * height;
-        const w = item.width / 100 * width;
-        const h = item.height / 100 * height;
-        const cx = Math.max(28, Math.min(width - 28, x));
-        const cy = Math.max(28, Math.min(height - 28, y));
-        return <g key={`${item.finding.id}-${item.marker}-${index}`}>
-          <rect x={x} y={y} width={w} height={h} fill="none" stroke="#f5d547" strokeWidth="8" vectorEffect="non-scaling-stroke" />
-          <circle cx={cx} cy={cy} r="28" fill="#f5d547" stroke="#111" strokeWidth="5" vectorEffect="non-scaling-stroke" />
-          <text x={cx} y={cy + 8} textAnchor="middle" fontSize="24" fontWeight="900" fill="#111">{item.marker}</text>
-        </g>;
-      })}
-    </svg>
+  return <div className="screenshotStage" data-evidence-verified={verified ? "true" : "false"}>
+    <img className="fullPageScreenshot" src={page.screenshot} width={width} height={height} alt={`Full-page screenshot of ${page.url}`} onLoad={() => setVerified(true)} />
+    <div className="evidenceOverlay" aria-hidden="true">
+      {evidence.map((item, index) => <div key={`${item.finding.id}-${item.marker}-${index}`} className="evidenceRegion" style={{ left: `${item.x}%`, top: `${item.y}%`, width: `${item.width}%`, height: `${item.height}%` }}>
+        <span className="evidenceMarker">{item.marker}</span>
+      </div>)}
+    </div>
   </div>;
 }
 
@@ -43,7 +34,7 @@ export default function Home() {
     <section className="hero"><div className="eyebrow">Website experience intelligence</div><h1>Find the friction before your users do.</h1><p className="lede">Enter a website and get a visual landing-page audit with highlighted evidence, UX laws, explanations, and implementation tasks.</p><form className="auditForm" onSubmit={runAudit}><input className="urlInput" type="text" inputMode="url" placeholder="https://yourwebsite.com" value={url} onChange={(event) => setUrl(event.target.value)} aria-label="Website URL" /><button className="auditButton" type="submit" disabled={loading}>{loading ? "Analysing…" : "Run audit"}</button></form>{error && <div className="error">{error}</div>}</section>
     {result && page && <section className="results" aria-live="polite">
       <div className="reportHeader"><div><div className="muted">LANDING PAGE AUDIT</div><h2>{page.title}</h2><a href={page.url} target="_blank" rel="noreferrer">{page.url}</a></div><div className="reportScore"><span>UX score</span><strong>{score}</strong><small>/100</small></div></div><p className="reportSummary">{summary}</p>
-      <div className="card screenshotCard"><div className="sectionHeader"><div><div className="muted">VISUAL EVIDENCE</div><h3>Landing page screenshot</h3></div><span className="pill">{evidence.length} highlighted region{evidence.length === 1 ? "" : "s"}</span></div><p className="screenshotHint">Yellow boxes show the regions referenced by the analysis. Region numbers correspond to the explanations below.</p><EvidenceMap page={page} evidence={evidence} /></div>
+      <div className="card screenshotCard"><div className="sectionHeader"><div><div className="muted">VISUAL EVIDENCE</div><h3>Landing page screenshot</h3></div><span className="pill">{evidence.length} highlighted region{evidence.length === 1 ? "" : "s"}</span></div><p className="screenshotHint">The full-page screenshot is shown at its original aspect ratio. Regions are verified against the captured page before they are displayed.</p><EvidenceMap page={page} evidence={evidence} /></div>
       <div className="summary"><div className="card scoreCard"><div className="muted">PAGE SUMMARY</div><div className="metric">{score}/100</div><p>{summary}</p></div><div className="card"><div className="muted">High priority</div><div className="metric">{high}</div></div><div className="card"><div className="muted">Medium priority</div><div className="metric">{medium}</div></div><div className="card"><div className="muted">Low priority</div><div className="metric">{low}</div></div></div>
       <div className="regionExplanations"><div className="sectionHeader"><div><div className="muted">REGION-BY-REGION ANALYSIS</div><h3>What each highlighted region is saying</h3></div></div>{page.findings.map((finding) => <article className="card regionFinding" key={finding.id}><div className={`severity ${finding.severity}`}>{finding.severity}</div><div className="findingBody"><div className="findingTop"><div><div className="category">Category: {finding.category}</div><h3>{finding.title}</h3></div><div className="pill">{finding.uxPerspective.law}</div></div><p>{finding.description}</p><div className="regionList">{finding.evidence.map((item, index) => <div className="regionRow" key={`${item.marker}-${index}`}><span className="marker">{item.marker}</span><div><strong>Region {item.marker}: {item.label}</strong><p>{item.detail}</p></div></div>)}</div><div className="detailGrid"><section className="detailBlock"><h4>ScreenRoot / UX tasks</h4><ul>{finding.screenrootTasks.map((task) => <li key={task}>{task}</li>)}</ul></section><section className="detailBlock"><h4>Development tasks</h4><ul>{finding.devTasks.map((task) => <li key={task}>{task}</li>)}</ul></section><section className="detailBlock lawBlock"><h4>UX law / principle</h4><div className="lawName">{finding.uxPerspective.law}</div><p><strong>Definition:</strong> {finding.uxPerspective.definition}</p><p><strong>Assessment:</strong> {finding.uxPerspective.assessment}</p></section></div><p className="recommendation"><strong>Recommended change:</strong> {finding.recommendation}</p></div></article>)}</div>
     </section>}
