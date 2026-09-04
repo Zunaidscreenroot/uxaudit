@@ -11,9 +11,18 @@ export type AuditStage = { id: string; label: string; detail: string; status: "a
 type Capture = { buffer: Buffer; width: number; height: number; analysisBuffer: Buffer };
 type RegionBox = [number, number, number, number];
 
-const MODEL = "minimax/minimax-m3:free";
+// Free OpenRouter models from the supplied list that support image input.
+// OpenRouter tries these in order if the primary model/provider is unavailable.
+const VISION_MODELS = [
+  "google/gemma-4-31b-it:free",
+  "thinkingmachines/inkling:free",
+  "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+  "google/gemma-4-26b-a4b-it:free",
+] as const;
+
 const BROWSERLESS_TIMEOUT_MS = 9000;
-const ANALYSIS_TIMEOUT_MS = 44000;
+const ANALYSIS_TIMEOUT_MS = 38000;
+const GEMINI_ENRICH_TIMEOUT_MS = 9000;
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
 function extractJsonObject(text: string): unknown | null {
@@ -99,31 +108,55 @@ async function captureScreenshot(url: string): Promise<Capture> {
   return { buffer, width, height, analysisBuffer };
 }
 
-async function callMiniMax(apiKey: string, prompt: string, image: Buffer, maxTokens: number, timeout: number): Promise<string> {
-  const client = new OpenAI({ baseURL: "https://openrouter.ai/api/v1", apiKey, timeout, maxRetries: 0 });
+async function callVisionModel(apiKey: string, prompt: string, image: Buffer): Promise<string> {
+  const client = new OpenAI({ baseURL: "https://openrouter.ai/api/v1", apiKey, timeout: ANALYSIS_TIMEOUT_MS, maxRetries: 0 });
   const response = await client.chat.completions.create({
-    model: MODEL,
+    model: VISION_MODELS[0],
     messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:image/jpeg;base64,${image.toString("base64")}` } }] }],
     reasoning: { enabled: false },
-    max_tokens: maxTokens,
+    max_tokens: 1800,
     temperature: 0.1,
     response_format: { type: "json_object" },
     provider: { allow_fallbacks: true, sort: "latency" },
+    extra_body: { models: VISION_MODELS.slice(1) },
   } as any);
   const raw: any = (response.choices?.[0]?.message as any)?.content;
   const text = typeof raw === "string" ? raw : Array.isArray(raw) ? raw.map((part: any) => typeof part === "object" && part && "text" in part ? String(part.text ?? "") : "").join("") : "";
-  if (!text) throw new Error("MiniMax M3 returned an empty response.");
+  if (!text) throw new Error("OpenRouter returned an empty visual-audit response.");
   return text;
 }
 
-async function analyseWithMiniMax(url: string, capture: Capture): Promise<Finding[]> {
+async function analyseWithFreeVision(url: string, capture: Capture): Promise<Finding[]> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("OPENROUTER_API_KEY is not configured on this deployment.");
-  const prompt = `${buildAuditPrompt(url, capture.width, capture.height)}\n\nFINAL SELF-VERIFICATION BEFORE RESPONDING\nThis is a single-pass audit, so you must perform the evidence verification yourself before returning JSON. For every finding, re-check the screenshot after selecting the evidence box. The box must point to the exact UI that supports the written claim, not a nearby banner, header, calculator, card, or empty area. If the claim is contradicted by visible pixels, DELETE the finding. For contrast findings, inspect the actual text color and the actual background behind that text; never infer a contrast failure from the surrounding panel color. Use exactly ONE tight evidence box per finding. Coordinates must be normalized to the ENTIRE screenshot as [ymin,xmin,ymax,xmax] from 0–1000, not viewport coordinates. Prefer 3–6 strong findings over many weak ones. Return only the required JSON object.`;
-  const text = await callMiniMax(apiKey, prompt, capture.analysisBuffer, 1800, ANALYSIS_TIMEOUT_MS);
+  const prompt = `${buildAuditPrompt(url, capture.width, capture.height)}\n\nFINAL SELF-VERIFICATION BEFORE RESPONDING\nThis is a single-pass audit. For every finding, re-check the screenshot after selecting the evidence box. The box must point to the exact UI that supports the written claim, not a nearby banner, header, calculator, card, or empty area. If the claim is contradicted by visible pixels, DELETE the finding. For contrast findings, inspect the actual text color and actual background behind that text; never infer a contrast failure from a surrounding panel color. Use exactly ONE tight evidence box per finding. Coordinates must be normalized to the ENTIRE screenshot as [ymin,xmin,ymax,xmax] from 0–1000, not viewport coordinates. Prefer 3–6 strong findings over many weak ones. Return only the required JSON object.`;
+  const text = await callVisionModel(apiKey, prompt, capture.analysisBuffer);
   const json = extractJsonObject(text) as { findings?: unknown[] } | null;
-  if (!json || !Array.isArray(json.findings)) throw new Error("MiniMax M3 returned invalid audit JSON.");
+  if (!json || !Array.isArray(json.findings)) throw new Error("OpenRouter returned invalid audit JSON.");
   return json.findings.map((item, index) => normalizeFinding(item, index)).filter((finding) => finding.evidence.length > 0).slice(0, 6);
+}
+
+async function enrichWithGemini(findings: Finding[]): Promise<Finding[]> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || !findings.length) return findings;
+  const compact = findings.map((finding) => ({ id: finding.id, severity: finding.severity, category: finding.category, title: finding.title, description: finding.description, recommendation: finding.recommendation }));
+  const prompt = `You are the UX standards/enrichment layer for a ScreenRoot UX audit. Do not invent or change the visual finding. Based only on the supplied finding text, enrich each item with: (1) the most appropriate recognized UX law/principle, (2) a concise accurate definition, (3) a client-friendly assessment explaining why the stated issue relates to that principle, (4) up to 3 practical ScreenRoot design tasks, and (5) up to 3 practical developer tasks. Do not add new findings. Do not change severity, category, title, description, recommendation, or IDs. Return JSON only in this shape: {"findings":[{"id":"...","uxPerspective":{"law":"...","definition":"...","assessment":"..."},"screenrootTasks":["..."],"devTasks":["..."]}]}. Findings: ${JSON.stringify(compact)}`;
+  try {
+    const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent", { method: "POST", headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey }, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { thinkingConfig: { thinkingLevel: "low" }, responseMimeType: "application/json", maxOutputTokens: 1400 } }), signal: AbortSignal.timeout(GEMINI_ENRICH_TIMEOUT_MS) });
+    if (!response.ok) return findings;
+    const payload: any = await response.json();
+    const text = (payload?.candidates?.[0]?.content?.parts ?? []).map((part: any) => typeof part?.text === "string" ? part.text : "").join("");
+    const json = extractJsonObject(text) as { findings?: unknown[] } | null;
+    if (!json || !Array.isArray(json.findings)) return findings;
+    const enrichments = new Map(json.findings.map((item: any) => [String(item?.id ?? ""), item]));
+    return findings.map((finding) => {
+      const item: any = enrichments.get(finding.id);
+      if (!item) return finding;
+      return { ...finding, screenrootTasks: Array.isArray(item.screenrootTasks) ? item.screenrootTasks.filter((task: any): task is string => typeof task === "string").slice(0, 3) : finding.screenrootTasks, devTasks: Array.isArray(item.devTasks) ? item.devTasks.filter((task: any): task is string => typeof task === "string").slice(0, 3) : finding.devTasks, uxPerspective: { law: typeof item.uxPerspective?.law === "string" ? item.uxPerspective.law : finding.uxPerspective.law, definition: typeof item.uxPerspective?.definition === "string" ? item.uxPerspective.definition : finding.uxPerspective.definition, assessment: typeof item.uxPerspective?.assessment === "string" ? item.uxPerspective.assessment : finding.uxPerspective.assessment } };
+    });
+  } catch {
+    return findings;
+  }
 }
 
 function escapeXml(value: string): string { return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;").replace(/'/g, "&apos;"); }
@@ -145,10 +178,13 @@ export async function createAudit(url: string, onStage?: (stage: AuditStage) => 
   onStage?.({ id: "capture", label: "Taking page snapshot", detail: "Browserless is capturing the complete desktop landing page and preserving the original image.", status: "active" });
   const capture = await captureScreenshot(url);
   onStage?.({ id: "capture", label: "Taking page snapshot", detail: "The untouched main screenshot is ready.", status: "complete" });
-  onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "MiniMax M3 is reviewing the complete screenshot and self-checking every evidence region against the visible UI.", status: "active" });
-  const findings = await analyseWithMiniMax(url, capture);
+  onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "A free multimodal OpenRouter model is reviewing the complete screenshot and self-checking every evidence region.", status: "active" });
+  let findings = await analyseWithFreeVision(url, capture);
   onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "Visual UX analysis and evidence self-verification completed.", status: "complete" });
-  onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "Only the evidence coordinates returned by the self-verified audit are being rendered.", status: "active" });
+  onStage?.({ id: "enrich", label: "Applying UX standards", detail: "Gemini is mapping each verified finding to an appropriate UX law, definition, assessment, and implementation tasks.", status: "active" });
+  findings = await enrichWithGemini(findings);
+  onStage?.({ id: "enrich", label: "Applying UX standards", detail: "UX standards and client-facing tasks prepared without changing the visual evidence.", status: "complete" });
+  onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "Only the evidence coordinates returned by the visual audit are being rendered.", status: "active" });
   const annotated = await renderRegions(capture.buffer, capture.width, capture.height, findings);
   onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "The final highlighted image is generated from the untouched original screenshot.", status: "complete" });
   onStage?.({ id: "complete", label: "Finalising verified audit", detail: "Preparing the final client-facing report.", status: "active" });
