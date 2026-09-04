@@ -14,10 +14,11 @@ type VerificationItem = { findingId: string; valid: boolean; regions: Array<{ ev
 type VerificationResult = { findings: VerificationItem[] };
 
 const MODEL = "minimax/minimax-m3:free";
-const BROWSERLESS_TIMEOUT_MS = 14000;
-const ANALYSIS_TIMEOUT_MS = 14000;
-const VERIFY_TIMEOUT_MS = 12000;
-const MAX_EVIDENCE_VERIFICATION_PASSES = 2;
+// Keep the full audit comfortably below Vercel's function duration while allowing
+// MiniMax enough time for two multimodal calls.
+const BROWSERLESS_TIMEOUT_MS = 11000;
+const ANALYSIS_TIMEOUT_MS = 16000;
+const VERIFY_TIMEOUT_MS = 16000;
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
 function extractJsonObject(text: string): unknown | null {
@@ -52,7 +53,7 @@ function normalizeFinding(value: unknown, index: number): Finding {
   const item = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
   const perspective = (item.uxPerspective && typeof item.uxPerspective === "object" ? item.uxPerspective : {}) as Record<string, unknown>;
   const rawEvidence = Array.isArray(item.evidence) ? item.evidence : [];
-  const evidence = rawEvidence.slice(0, 3).map((raw, evidenceIndex) => {
+  const evidence = rawEvidence.slice(0, 2).map((raw, evidenceIndex) => {
     const entry = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
     const box = normalizeBox(entry.box);
     if (!box) return null;
@@ -73,19 +74,19 @@ async function captureScreenshot(url: string): Promise<Capture> {
   const code = `export default async ({ page }) => {
     await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1, isMobile: false, hasTouch: false });
     await page.emulateMediaType("screen");
-    try { await page.goto(${JSON.stringify(url)}, { waitUntil: "domcontentloaded", timeout: 6000 }); } catch (error) { console.warn("Navigation did not finish before the capture budget; continuing", error); }
+    try { await page.goto(${JSON.stringify(url)}, { waitUntil: "domcontentloaded", timeout: 5000 }); } catch (error) { console.warn("Navigation did not finish before the capture budget; continuing", error); }
     if (!await page.evaluate(() => !!document.body)) throw new Error("Browserless loaded no document body.");
     await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}html{scroll-behavior:auto!important}" }).catch(() => {});
-    await new Promise(resolve => setTimeout(resolve, 600));
+    await new Promise(resolve => setTimeout(resolve, 350));
     await page.evaluate(async () => {
       const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
       document.documentElement.style.scrollBehavior = "auto";
       document.querySelectorAll("img[loading=lazy]").forEach(img => img.setAttribute("loading", "eager"));
       document.querySelectorAll("img").forEach(img => img.setAttribute("fetchpriority", "high"));
       const scrollHeight = () => Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
-      const step = Math.max(850, Math.floor(window.innerHeight * 0.95));
-      for (let y = 0; y <= scrollHeight(); y += step) { window.scrollTo(0, y); await wait(80); }
-      window.scrollTo(0, scrollHeight()); await wait(300); window.scrollTo(0, 0); await wait(180);
+      const step = Math.max(900, Math.floor(window.innerHeight * 1.05));
+      for (let y = 0; y <= scrollHeight(); y += step) { window.scrollTo(0, y); await wait(35); }
+      window.scrollTo(0, scrollHeight()); await wait(120); window.scrollTo(0, 0); await wait(100);
     });
     const width = 1440;
     const height = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight, 900);
@@ -100,15 +101,25 @@ async function captureScreenshot(url: string): Promise<Capture> {
   const metadata = await sharp(buffer).metadata();
   const width = Number(payload.width) || metadata.width || 1440;
   const height = Number(payload.height) || metadata.height || 900;
-  const analysisBuffer = await sharp(buffer).resize({ height: Math.min(6000, height), withoutEnlargement: true }).png().toBuffer();
+  // Keep visual detail high enough for text/layout inspection while controlling
+  // the multimodal request size. Coordinates remain normalized to the full image.
+  const analysisBuffer = await sharp(buffer).resize({ height: Math.min(5000, height), withoutEnlargement: true }).png({ compressionLevel: 6 }).toBuffer();
   return { buffer, width, height, analysisBuffer };
 }
 
 async function callMiniMax(apiKey: string, prompt: string, images: Buffer[], maxTokens: number, timeout: number): Promise<string> {
   const content: any[] = [{ type: "text", text: prompt }];
   for (const image of images) content.push({ type: "image_url", image_url: { url: `data:image/png;base64,${image.toString("base64")}` } });
-  const client = new OpenAI({ baseURL: "https://openrouter.ai/api/v1", apiKey, timeout });
-  const response = await client.chat.completions.create({ model: MODEL, messages: [{ role: "user", content }], reasoning: { enabled: true }, max_tokens: maxTokens, temperature: 0.1, response_format: { type: "json_object" }, provider: { allow_fallbacks: true, sort: "latency" } } as any);
+  const client = new OpenAI({ baseURL: "https://openrouter.ai/api/v1", apiKey, timeout, maxRetries: 0 });
+  const response = await client.chat.completions.create({
+    model: MODEL,
+    messages: [{ role: "user", content }],
+    reasoning: { enabled: false },
+    max_tokens: maxTokens,
+    temperature: 0.1,
+    response_format: { type: "json_object" },
+    provider: { allow_fallbacks: true, sort: "latency" },
+  } as any);
   const raw: any = (response.choices?.[0]?.message as any)?.content;
   const text = typeof raw === "string" ? raw : Array.isArray(raw) ? raw.map((part: any) => typeof part === "object" && part && "text" in part ? String(part.text ?? "") : "").join("") : "";
   if (!text) throw new Error("MiniMax M3 returned an empty response.");
@@ -118,10 +129,10 @@ async function callMiniMax(apiKey: string, prompt: string, images: Buffer[], max
 async function analyseWithMiniMax(url: string, capture: Capture): Promise<Finding[]> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("OPENROUTER_API_KEY is not configured on this deployment.");
-  const text = await callMiniMax(apiKey, buildAuditPrompt(url, capture.width, capture.height), [capture.analysisBuffer], 4500, ANALYSIS_TIMEOUT_MS);
+  const text = await callMiniMax(apiKey, buildAuditPrompt(url, capture.width, capture.height), [capture.analysisBuffer], 3000, ANALYSIS_TIMEOUT_MS);
   const json = extractJsonObject(text) as { findings?: unknown[] } | null;
   if (!json || !Array.isArray(json.findings)) throw new Error("MiniMax M3 returned invalid audit JSON.");
-  return json.findings.map((item, index) => normalizeFinding(item, index)).filter((finding) => finding.evidence.length > 0).slice(0, 8);
+  return json.findings.map((item, index) => normalizeFinding(item, index)).filter((finding) => finding.evidence.length > 0).slice(0, 6);
 }
 
 function escapeXml(value: string): string { return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;").replace(/'/g, "&apos;"); }
@@ -169,38 +180,23 @@ async function verifyAndCorrectRegions(capture: Capture, findings: Finding[], on
   if (!findings.length) return { findings: [], annotated: capture.buffer };
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("OPENROUTER_API_KEY is not configured on this deployment.");
-  let current = findings.map((finding) => ({ ...finding, evidence: finding.evidence.map((e) => ({ ...e })) }));
-  let annotated = await renderRegions(capture.buffer, capture.width, capture.height, current);
-  let lastError = "Evidence verification could not be completed.";
-  for (let pass = 1; pass <= MAX_EVIDENCE_VERIFICATION_PASSES; pass++) {
-    onStage?.({ id: "verify", label: pass === 1 ? "Analysing highlighted regions" : "Analysing highlighted regions (correction pass)", detail: "MiniMax M3 is independently validating each finding and its exact evidence against the untouched screenshot.", status: "active" });
-    const prompt = `${buildRegionVerificationPrompt()}\n\nAUDIT FINDINGS AND CURRENT REGION DATA\n${JSON.stringify(flattenRegions(current))}\n\nVerification pass: ${pass}. Image 1 is MAIN. Image 2 is the annotated image rendered from MAIN.`;
-    try {
-      const annotatedAnalysis = await sharp(annotated).resize({ height: Math.min(6000, capture.height), withoutEnlargement: true }).png().toBuffer();
-      const text = await callMiniMax(apiKey, prompt, [capture.analysisBuffer, annotatedAnalysis], 3500, VERIFY_TIMEOUT_MS);
-      const json = extractJsonObject(text) as VerificationResult | null;
-      if (!json || !Array.isArray(json.findings)) { lastError = "MiniMax M3 returned invalid evidence verification JSON."; continue; }
-      const items = json.findings.filter((item): item is VerificationItem => Boolean(item && typeof item === "object" && typeof (item as VerificationItem).findingId === "string" && typeof (item as VerificationItem).valid === "boolean" && Array.isArray((item as VerificationItem).regions)));
-      if (!hasCompleteVerification(current, items)) { lastError = "MiniMax M3 did not independently verify every finding and evidence item."; continue; }
-      const stillValid = removeInvalidFindings(current, { findings: items });
-      if (stillValid.length !== current.length) {
-        onStage?.({ id: "correct", label: "Correcting highlighted regions", detail: "Unsupported findings are being removed rather than being assigned to unrelated UI.", status: "active" });
-        current = stillValid;
-        if (!current.length) return { findings: [], annotated: capture.buffer };
-        annotated = await renderRegions(capture.buffer, capture.width, capture.height, current);
-        continue;
-      }
-      const needsCorrection = items.some((item) => item.valid && item.regions.some((region) => !region.correct));
-      if (!needsCorrection) return { findings: current, annotated };
-      onStage?.({ id: "correct", label: `Correcting highlighted regions (pass ${pass})`, detail: "Evidence coordinates are being recalculated from the untouched screenshot.", status: "active" });
-      current = applyVerificationBoxes(current, items);
-      annotated = await renderRegions(capture.buffer, capture.width, capture.height, current);
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : lastError;
-      if (pass === MAX_EVIDENCE_VERIFICATION_PASSES) break;
-    }
+  onStage?.({ id: "verify", label: "Verifying evidence", detail: "MiniMax M3 is independently checking every finding against the untouched screenshot and correcting only coordinates that are wrong.", status: "active" });
+  const prompt = `${buildRegionVerificationPrompt()}\n\nAUDIT FINDINGS AND CURRENT REGION DATA\n${JSON.stringify(flattenRegions(findings))}\n\nThere is ONE image in this request: IMAGE 1 = the untouched MAIN screenshot. Use it as the only visual source of truth. Do not expect an annotation image.`;
+  let text: string;
+  try {
+    text = await callMiniMax(apiKey, prompt, [capture.analysisBuffer], 2200, VERIFY_TIMEOUT_MS);
+  } catch (error) {
+    throw new Error(error instanceof Error ? error.message : "MiniMax M3 evidence verification timed out.");
   }
-  throw new Error(`Evidence verification failed: ${lastError}`);
+  const json = extractJsonObject(text) as VerificationResult | null;
+  if (!json || !Array.isArray(json.findings)) throw new Error("MiniMax M3 returned invalid evidence verification JSON.");
+  const items = json.findings.filter((item): item is VerificationItem => Boolean(item && typeof item === "object" && typeof (item as VerificationItem).findingId === "string" && typeof (item as VerificationItem).valid === "boolean" && Array.isArray((item as VerificationItem).regions)));
+  if (!hasCompleteVerification(findings, items)) throw new Error("MiniMax M3 did not independently verify every finding and evidence item.");
+  const validFindings = removeInvalidFindings(findings, { findings: items });
+  if (!validFindings.length) return { findings: [], annotated: capture.buffer };
+  const corrected = applyVerificationBoxes(validFindings, items);
+  const annotated = await renderRegions(capture.buffer, capture.width, capture.height, corrected);
+  return { findings: corrected, annotated };
 }
 
 export async function createAudit(url: string, onStage?: (stage: AuditStage) => void): Promise<AuditResult> {
@@ -210,7 +206,7 @@ export async function createAudit(url: string, onStage?: (stage: AuditStage) => 
   onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "MiniMax M3 is reviewing the complete screenshot for meaningful UX problems against the ScreenRoot framework.", status: "active" });
   const findings = await analyseWithMiniMax(url, capture);
   onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "Initial visual UX analysis completed.", status: "complete" });
-  onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "Creating evidence annotations from the untouched screenshot.", status: "active" });
+  onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "Evidence coordinates are being independently checked before annotations are rendered.", status: "active" });
   const verified = await verifyAndCorrectRegions(capture, findings, onStage);
   onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "The final annotated image contains only independently verified evidence.", status: "complete" });
   onStage?.({ id: "complete", label: "Finalising verified audit", detail: "Preparing the final verified report.", status: "active" });
