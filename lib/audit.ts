@@ -9,16 +9,7 @@ type TextRegion = { text: string; x: number; y: number; width: number; height: n
 type GeminiAnalysis = { findings: Finding[]; model: string };
 
 const GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"] as const;
-const AUDIT_CATEGORIES = [
-  "Language & tone",
-  "Navigation",
-  "Information hierarchy",
-  "Visual design",
-  "Usability & interaction",
-  "Responsiveness",
-  "User engagement",
-  "Web performance"
-] as const;
+const AUDIT_CATEGORIES = ["Language & tone", "Navigation", "Information hierarchy", "Visual design", "Usability & interaction", "Responsiveness", "User engagement", "Web performance"] as const;
 const BROWSERLESS_TIMEOUT_MS = 24000;
 const VERIFY_BROWSERLESS_TIMEOUT_MS = 3000;
 const GEMINI_ANALYSIS_TIMEOUT_MS = 14000;
@@ -87,15 +78,7 @@ function normalizeFinding(value: unknown, index: number, imageWidth: number, ima
         height = clamp((y2 - y1) / 1000 * imageHeight, 12, imageHeight - y);
       }
     }
-    return {
-      label: typeof entry.label === "string" ? entry.label : `Region ${evidenceIndex + 1}`,
-      detail: typeof entry.detail === "string" ? entry.detail : "Visual evidence identified in the screenshot.",
-      marker: typeof entry.marker === "string" ? entry.marker : String(evidenceIndex + 1),
-      x: x / imageWidth * 100,
-      y: y / imageHeight * 100,
-      width: width / imageWidth * 100,
-      height: height / imageHeight * 100
-    };
+    return { label: typeof entry.label === "string" ? entry.label : `Region ${evidenceIndex + 1}`, detail: typeof entry.detail === "string" ? entry.detail : "Visual evidence identified in the screenshot.", marker: typeof entry.marker === "string" ? entry.marker : String(evidenceIndex + 1), x: x / imageWidth * 100, y: y / imageHeight * 100, width: width / imageWidth * 100, height: height / imageHeight * 100 };
   });
   const requestedCategory = typeof item.category === "string" ? item.category : "Visual design";
   const category = AUDIT_CATEGORIES.find((candidate) => candidate.toLowerCase() === requestedCategory.trim().toLowerCase()) ?? "Visual design";
@@ -108,11 +91,7 @@ function normalizeFinding(value: unknown, index: number, imageWidth: number, ima
     recommendation: typeof item.recommendation === "string" ? item.recommendation : "Review this area against established UX principles.",
     screenrootTasks: Array.isArray(item.screenrootTasks) ? item.screenrootTasks.filter((task): task is string => typeof task === "string") : [],
     devTasks: Array.isArray(item.devTasks) ? item.devTasks.filter((task): task is string => typeof task === "string") : [],
-    uxPerspective: {
-      law: typeof perspective.law === "string" ? perspective.law : "UX principle",
-      definition: typeof perspective.definition === "string" ? perspective.definition : "A usability principle used to evaluate interface design.",
-      assessment: typeof perspective.assessment === "string" ? perspective.assessment : "This visible area deserves review based on the supplied screenshot."
-    },
+    uxPerspective: { law: typeof perspective.law === "string" ? perspective.law : "UX principle", definition: typeof perspective.definition === "string" ? perspective.definition : "A usability principle used to evaluate interface design.", assessment: typeof perspective.assessment === "string" ? perspective.assessment : "This visible area deserves review based on the supplied screenshot." },
     evidence
   };
 }
@@ -130,7 +109,7 @@ async function captureScreenshot(url: string): Promise<{ buffer: Buffer; width: 
       console.warn("Navigation timeout; continuing with the rendered document", error);
     }
     if (!await page.evaluate(() => !!document.body)) throw new Error("Browserless loaded no document body.");
-    await page.addStyleTag({ content: `*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}html{scroll-behavior:auto!important}` }).catch(() => {});
+    await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}html{scroll-behavior:auto!important}" }).catch(() => {});
     await new Promise(resolve => setTimeout(resolve, 1400));
     await page.evaluate(async () => {
       const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -175,12 +154,8 @@ async function captureScreenshot(url: string): Promise<{ buffer: Buffer; width: 
 
 async function callGemini(apiKey: string, model: string, prompt: string, buffer: Buffer, maxOutputTokens: number, timeoutMs: number): Promise<string> {
   const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: "image/png", data: buffer.toString("base64") } }] }],
-      generationConfig: { responseMimeType: "application/json", maxOutputTokens, thinkingConfig: { thinkingLevel: "low" }, media_resolution: "MEDIA_RESOLUTION_MEDIUM" }
-    }),
+    method: "POST", headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
+    body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: "image/png", data: buffer.toString("base64") } }] }], generationConfig: { responseMimeType: "application/json", maxOutputTokens, thinkingConfig: { thinkingLevel: "low" }, media_resolution: "MEDIA_RESOLUTION_MEDIUM" } }),
     signal: AbortSignal.timeout(timeoutMs)
   });
   const detail = await response.text();
@@ -212,9 +187,7 @@ JSON shape: {"findings":[{"id":"finding-1","severity":"high","category":"Usabili
       const json = extractJsonObject(text);
       if (!json) { lastError = `Gemini ${model} returned invalid JSON.`; continue; }
       const rawFindings = Array.isArray((json as { findings?: unknown }).findings) ? (json as { findings: unknown[] }).findings : [];
-      const findings = rawFindings
-        .map((item: unknown, index: number) => normalizeFinding(item, index, width, height, textRegions))
-        .filter((finding) => finding.severity === "high" && finding.evidence.length > 0);
+      const findings = rawFindings.map((item: unknown, index: number) => normalizeFinding(item, index, width, height, textRegions)).filter((finding) => finding.severity === "high" && finding.evidence.length > 0);
       if (findings.length) return { findings, model };
       lastError = `Gemini ${model} returned no high-priority findings with evidence.`;
     } catch (error) {
@@ -282,14 +255,5 @@ export async function createAudit(url: string): Promise<AuditResult> {
   const title = new URL(url).hostname;
   const analysis = await analyseWithGemini(url, title, capture);
   const verified = await verifyEvidence(capture, analysis.findings, analysis.model);
-  return {
-    pages: [{
-      url,
-      title,
-      screenshot: `data:image/png;base64,${verified.annotated.toString("base64")}`,
-      screenshotWidth: capture.width,
-      screenshotHeight: capture.height,
-      findings: verified.findings
-    }]
-  };
+  return { pages: [{ url, title, screenshot: `data:image/png;base64,${verified.annotated.toString("base64")}`, screenshotWidth: capture.width, screenshotHeight: capture.height, findings: verified.findings }] };
 }
