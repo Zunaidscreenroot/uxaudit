@@ -19,11 +19,22 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-      - name: Commit lockfile
+      - name: Fix audit TypeScript syntax
         run: |
-          if git diff --quiet -- package-lock.json; then exit 0; fi
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('lib/audit.ts')
+          s = p.read_text()
+          old = 'box.style.cssText = `position:absolute;left:${item.x}%;top:${item.y}%;width:${item.width}%;height:${item.height}%;border:3px solid #ffd400;background:rgba(255,212,0,.12);box-sizing:border-box;font:700 16px Arial;color:#111;`;'
+          new = 'box.style.cssText = "position:absolute;left:" + item.x + "%;top:" + item.y + "%;width:" + item.width + "%;height:" + item.height + "%;border:3px solid #ffd400;background:rgba(255,212,0,.12);box-sizing:border-box;font:700 16px Arial;color:#111;";'
+          if old in s:
+              p.write_text(s.replace(old, new))
+          PY
+      - name: Commit changes
+        run: |
+          if git diff --quiet -- package-lock.json lib/audit.ts; then exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package-lock.json
-          git commit -m "chore: add npm lockfile for faster Vercel builds"
+          git add package-lock.json lib/audit.ts
+          git commit -m "chore: fix audit build syntax and lock dependencies"
           git push
