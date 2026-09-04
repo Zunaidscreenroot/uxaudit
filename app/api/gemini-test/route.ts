@@ -9,7 +9,12 @@ export async function GET() {
 
   if (!apiKey) {
     return NextResponse.json(
-      { ok: false, configured: false, model: GEMINI_MODEL, error: "GEMINI_API_KEY is not configured on this deployment." },
+      {
+        ok: false,
+        configured: false,
+        model: GEMINI_MODEL,
+        error: "GEMINI_API_KEY is not configured on this deployment.",
+      },
       { status: 503 },
     );
   }
@@ -24,41 +29,70 @@ export async function GET() {
           "X-goog-api-key": apiKey,
         },
         body: JSON.stringify({
-          contents: [{
-            role: "user",
-            parts: [{ text: "Reply with exactly: GEMINI_OK" }],
-          }],
-          generationConfig: { temperature: 0, maxOutputTokens: 10 },
+          contents: [
+            {
+              role: "user",
+              parts: [{ text: "Reply with exactly: GEMINI_OK" }],
+            },
+          ],
+          generationConfig: {
+            temperature: 0,
+            maxOutputTokens: 20,
+          },
         }),
         signal: AbortSignal.timeout(15000),
       },
     );
 
     const detail = await response.text();
+    let parsed: any = null;
+
+    try {
+      parsed = JSON.parse(detail);
+    } catch {}
 
     if (!response.ok) {
-      let message = `Gemini returned HTTP ${response.status}.`;
-      try {
-        const parsed = JSON.parse(detail);
-        message = parsed?.error?.message || message;
-      } catch {}
-
       return NextResponse.json(
-        { ok: false, configured: true, model: GEMINI_MODEL, status: response.status, error: message },
+        {
+          ok: false,
+          configured: true,
+          model: GEMINI_MODEL,
+          status: response.status,
+          error: parsed?.error?.message || `Gemini returned HTTP ${response.status}.`,
+          raw: parsed,
+        },
         { status: 502 },
       );
     }
 
-    let text = "";
-    try {
-      const parsed = JSON.parse(detail);
-      text = parsed?.candidates?.[0]?.content?.parts?.map((part: any) => part.text || "").join("") || "";
-    } catch {}
+    const candidate = parsed?.candidates?.[0];
+    const parts = candidate?.content?.parts ?? [];
+    const text = parts
+      .map((part: any) => (typeof part?.text === "string" ? part.text : ""))
+      .join("");
 
-    return NextResponse.json({ ok: true, configured: true, model: GEMINI_MODEL, response: text });
+    return NextResponse.json({
+      ok: text.trim() === "GEMINI_OK",
+      configured: true,
+      model: GEMINI_MODEL,
+      response: text,
+      modelVersion: parsed?.modelVersion ?? null,
+      responseId: parsed?.responseId ?? null,
+      finishReason: candidate?.finishReason ?? null,
+      finishMessage: candidate?.finishMessage ?? null,
+      promptFeedback: parsed?.promptFeedback ?? null,
+      usageMetadata: parsed?.usageMetadata ?? null,
+      candidateCount: Array.isArray(parsed?.candidates) ? parsed.candidates.length : 0,
+      raw: parsed,
+    });
   } catch (error) {
     return NextResponse.json(
-      { ok: false, configured: true, model: GEMINI_MODEL, error: error instanceof Error ? error.message : "Gemini connection failed." },
+      {
+        ok: false,
+        configured: true,
+        model: GEMINI_MODEL,
+        error: error instanceof Error ? error.message : "Gemini connection failed.",
+      },
       { status: 502 },
     );
   }
