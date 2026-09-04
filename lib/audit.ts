@@ -8,6 +8,24 @@ export type AuditResult = { pages: AuditPage[] };
 type TextRegion = { text: string; x: number; y: number; width: number; height: number };
 type GeminiAnalysis = { findings: Finding[]; model: string };
 
+const GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"] as const;
+const AUDIT_CATEGORIES = [
+  "Language & tone",
+  "Navigation",
+  "Information hierarchy",
+  "Visual design",
+  "Usability & interaction",
+  "Responsiveness",
+  "User engagement",
+  "Web performance"
+] as const;
+const BROWSERLESS_TIMEOUT_MS = 24000;
+const VERIFY_BROWSERLESS_TIMEOUT_MS = 3000;
+const GEMINI_ANALYSIS_TIMEOUT_MS = 14000;
+const GEMINI_VERIFY_TIMEOUT_MS = 3000;
+const MAX_EVIDENCE_VERIFICATION_PASSES = 3;
+const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
+
 function extractJsonObject(text: string): unknown | null {
   const cleaned = text.replace(/```(?:json)?/gi, "").replace(/```/g, "").trim();
   try { return JSON.parse(cleaned); } catch {}
@@ -36,82 +54,65 @@ function extractJsonObject(text: string): unknown | null {
   return null;
 }
 
-
-const GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"] as const;
-const BROWSERLESS_TIMEOUT_MS = 24000;
-const VERIFY_BROWSERLESS_TIMEOUT_MS = 3500;
-const GEMINI_ANALYSIS_TIMEOUT_MS = 14000;
-const GEMINI_VERIFY_TIMEOUT_MS = 3500;
-const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
-
 function normalizeFinding(value: unknown, index: number, imageWidth: number, imageHeight: number, textRegions: TextRegion[]): Finding {
   const item = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
   const perspective = (item.uxPerspective && typeof item.uxPerspective === "object" ? item.uxPerspective : {}) as Record<string, unknown>;
   const rawEvidence = Array.isArray(item.evidence) ? item.evidence : [];
-  const context = `${String(item.title ?? "")} ${String(item.description ?? "")}`.toLowerCase();
   const resolveAnchor = (anchor: string): TextRegion | null => {
     const needle = anchor.trim().toLowerCase();
     if (!needle) return null;
     const exact = textRegions.find((r) => r.text.toLowerCase() === needle);
     if (exact) return exact;
-    const candidates = textRegions.filter((r) => r.text.toLowerCase().includes(needle) || needle.includes(r.text.toLowerCase().slice(0, Math.min(needle.length, 80))));
+    const candidates = textRegions.filter((r) => r.text.toLowerCase().includes(needle) || needle.includes(r.text.toLowerCase()));
     return candidates.sort((a, b) => Math.abs(a.text.length - needle.length) - Math.abs(b.text.length - needle.length))[0] ?? null;
-  };
-  const cluster = (anchor: string): TextRegion[] | null => {
-    const target = resolveAnchor(anchor);
-    if (!target) return null;
-    const cx = target.x + target.width / 2;
-    const cy = target.y + target.height / 2;
-    const footer = /footer|sitemap|footer links|secondary paths/.test(context);
-    const top = /hero|top navigation|upper fold/.test(context);
-    const nearby = textRegions.filter((r) => Math.abs(r.x + r.width / 2 - cx) <= 520 && Math.abs(r.y + r.height / 2 - cy) <= 180);
-    if (footer) {
-      const footerNearby = nearby.filter((r) => r.y + r.height > imageHeight * 0.62);
-      return footerNearby.length ? footerNearby : [target];
-    }
-    if (top) {
-      const topNearby = nearby.filter((r) => r.y < imageHeight * 0.38);
-      return topNearby.length ? topNearby : [target];
-    }
-    return nearby.length ? nearby : [target];
   };
   const evidence = rawEvidence.map((raw, evidenceIndex) => {
     const entry = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-    const anchored = typeof entry.anchor === "string" ? cluster(entry.anchor) : null;
-    let x = imageWidth * 0.05, y = imageHeight * 0.05, width = imageWidth * 0.2, height = imageHeight * 0.1;
-    if (anchored?.length) {
-      const left = Math.min(...anchored.map((r) => r.x));
-      const top = Math.min(...anchored.map((r) => r.y));
-      const right = Math.max(...anchored.map((r) => r.x + r.width));
-      const bottom = Math.max(...anchored.map((r) => r.y + r.height));
-      const padX = clamp((right - left) * 0.08, 10, 32);
-      const padY = clamp((bottom - top) * 0.2, 8, 24);
-      x = clamp(left - padX, 0, imageWidth);
-      y = clamp(top - padY, 0, imageHeight);
-      width = clamp(right - left + padX * 2, 4, imageWidth - x);
-      height = clamp(bottom - top + padY * 2, 4, imageHeight - y);
+    let x = imageWidth * 0.05, y = imageHeight * 0.05, width = imageWidth * 0.2, height = imageHeight * 0.08;
+    const anchor = typeof entry.anchor === "string" ? resolveAnchor(entry.anchor) : null;
+    if (anchor) {
+      const padX = clamp(anchor.width * 0.14, 8, 28);
+      const padY = clamp(anchor.height * 0.35, 6, 20);
+      x = clamp(anchor.x - padX, 0, imageWidth);
+      y = clamp(anchor.y - padY, 0, imageHeight);
+      width = clamp(anchor.width + padX * 2, 12, imageWidth - x);
+      height = clamp(anchor.height + padY * 2, 12, imageHeight - y);
     } else {
       const box = Array.isArray(entry.box) ? entry.box.map(Number) : [];
       if (box.length === 4 && box.every(Number.isFinite)) {
         const [y1, x1, y2, x2] = box.map((n) => clamp(n, 0, 1000));
         x = x1 / 1000 * imageWidth;
         y = y1 / 1000 * imageHeight;
-        width = clamp((x2 - x1) / 1000 * imageWidth, 4, imageWidth - x);
-        height = clamp((y2 - y1) / 1000 * imageHeight, 4, imageHeight - y);
+        width = clamp((x2 - x1) / 1000 * imageWidth, 12, imageWidth - x);
+        height = clamp((y2 - y1) / 1000 * imageHeight, 12, imageHeight - y);
       }
     }
-    return { label: typeof entry.label === "string" ? entry.label : `Region ${evidenceIndex + 1}`, detail: typeof entry.detail === "string" ? entry.detail : "Visual evidence identified in the screenshot.", marker: typeof entry.marker === "string" ? entry.marker : String(index + 1), x: x / imageWidth * 100, y: y / imageHeight * 100, width: width / imageWidth * 100, height: height / imageHeight * 100 };
+    return {
+      label: typeof entry.label === "string" ? entry.label : `Region ${evidenceIndex + 1}`,
+      detail: typeof entry.detail === "string" ? entry.detail : "Visual evidence identified in the screenshot.",
+      marker: typeof entry.marker === "string" ? entry.marker : String(evidenceIndex + 1),
+      x: x / imageWidth * 100,
+      y: y / imageHeight * 100,
+      width: width / imageWidth * 100,
+      height: height / imageHeight * 100
+    };
   });
+  const requestedCategory = typeof item.category === "string" ? item.category : "Visual design";
+  const category = AUDIT_CATEGORIES.find((candidate) => candidate.toLowerCase() === requestedCategory.trim().toLowerCase()) ?? "Visual design";
   return {
     id: typeof item.id === "string" ? item.id : `finding-${index + 1}`,
     severity: item.severity === "high" || item.severity === "low" ? item.severity : "medium",
-    category: typeof item.category === "string" ? item.category : "UX",
+    category,
     title: typeof item.title === "string" ? item.title : "UX issue",
-    description: typeof item.description === "string" ? item.description : "The visual design may create friction for users.",
+    description: typeof item.description === "string" ? item.description : "The visible interface may create friction for users.",
     recommendation: typeof item.recommendation === "string" ? item.recommendation : "Review this area against established UX principles.",
     screenrootTasks: Array.isArray(item.screenrootTasks) ? item.screenrootTasks.filter((task): task is string => typeof task === "string") : [],
     devTasks: Array.isArray(item.devTasks) ? item.devTasks.filter((task): task is string => typeof task === "string") : [],
-    uxPerspective: { law: typeof perspective.law === "string" ? perspective.law : "UX principle", definition: typeof perspective.definition === "string" ? perspective.definition : "A usability principle used to evaluate interface design.", assessment: typeof perspective.assessment === "string" ? perspective.assessment : "This area deserves review based on the visible interface." },
+    uxPerspective: {
+      law: typeof perspective.law === "string" ? perspective.law : "UX principle",
+      definition: typeof perspective.definition === "string" ? perspective.definition : "A usability principle used to evaluate interface design.",
+      assessment: typeof perspective.assessment === "string" ? perspective.assessment : "This visible area deserves review based on the supplied screenshot."
+    },
     evidence
   };
 }
@@ -123,13 +124,32 @@ async function captureScreenshot(url: string): Promise<{ buffer: Buffer; width: 
   const code = `export default async ({ page }) => {
     await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1, isMobile: false, hasTouch: false });
     await page.emulateMediaType("screen");
-    await page.goto(${JSON.stringify(url)}, { waitUntil: "networkidle2", timeout: 20000 });
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    try {
+      await page.goto(${JSON.stringify(url)}, { waitUntil: "domcontentloaded", timeout: 10000 });
+    } catch (error) {
+      console.warn("Navigation timeout; continuing with the rendered document", error);
+    }
+    if (!await page.evaluate(() => !!document.body)) throw new Error("Browserless loaded no document body.");
+    await page.addStyleTag({ content: `*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}html{scroll-behavior:auto!important}` }).catch(() => {});
+    await new Promise(resolve => setTimeout(resolve, 1400));
     await page.evaluate(async () => {
-      const step = Math.max(500, Math.floor(window.innerHeight * 0.8));
-      for (let y = 0; y < document.body.scrollHeight; y += step) { window.scrollTo(0, y); await new Promise(resolve => setTimeout(resolve, 60)); }
+      const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+      document.querySelectorAll("img[loading=lazy]").forEach(img => img.setAttribute("loading", "eager"));
+      document.querySelectorAll("img").forEach(img => img.setAttribute("fetchpriority", "high"));
+      const scrollHeight = () => Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
+      const step = Math.max(600, Math.floor(window.innerHeight * 0.72));
+      for (let pass = 0; pass < 2; pass++) {
+        for (let y = 0; y <= scrollHeight(); y += step) { window.scrollTo(0, y); await wait(180); }
+        window.scrollTo(0, scrollHeight());
+        await wait(600);
+      }
+      const images = Array.from(document.images);
+      await Promise.all(images.map(async img => {
+        try { if (!img.complete) await new Promise(resolve => { img.addEventListener("load", resolve, { once:true }); img.addEventListener("error", resolve, { once:true }); }); await img.decode?.(); } catch {}
+      }));
+      await wait(700);
       window.scrollTo(0, 0);
-      await new Promise(resolve => setTimeout(resolve, 250));
+      await wait(500);
     });
     const textRegions = await page.evaluate(() => Array.from(document.querySelectorAll("body *")).map(el => {
       const text = (el.textContent || "").replace(/\\s+/g, " ").trim();
@@ -139,7 +159,7 @@ async function captureScreenshot(url: string): Promise<{ buffer: Buffer; width: 
       const childText = Array.from(el.children).some(child => (child.textContent || "").replace(/\\s+/g, " ").trim() === text);
       if (childText) return null;
       return { text, x: rect.left + window.scrollX, y: rect.top + window.scrollY, width: rect.width, height: rect.height };
-    }).filter(Boolean).slice(0, 700));
+    }).filter(Boolean).slice(0, 900));
     const width = 1440;
     const height = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight, 900);
     const screenshot = await page.screenshot({ fullPage: true, type: "png", captureBeyondViewport: true, encoding: "base64" });
@@ -149,7 +169,8 @@ async function captureScreenshot(url: string): Promise<{ buffer: Buffer; width: 
   if (!response.ok) { const detail = await response.text().catch(() => ""); throw new Error(`Browserless returned HTTP ${response.status}${detail ? `: ${detail.slice(0, 300)}` : "."}`); }
   const payload = await response.json() as { screenshot?: string; width?: number; height?: number; textRegions?: TextRegion[] };
   if (!payload.screenshot) throw new Error("Browserless returned no screenshot data.");
-  return { buffer: Buffer.from(payload.screenshot, "base64"), width: Number(payload.width) || 1440, height: Number(payload.height) || 900, textRegions: Array.isArray(payload.textRegions) ? payload.textRegions : [] };
+  const buffer = Buffer.from(payload.screenshot, "base64");
+  return { buffer, width: Number(payload.width) || 1440, height: Number(payload.height) || 900, textRegions: Array.isArray(payload.textRegions) ? payload.textRegions : [] };
 }
 
 async function callGemini(apiKey: string, model: string, prompt: string, buffer: Buffer, maxOutputTokens: number, timeoutMs: number): Promise<string> {
@@ -172,27 +193,30 @@ async function analyseWithGemini(url: string, title: string, capture: { buffer: 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY is not configured on this deployment.");
   const { width, height, buffer, textRegions } = capture;
-  const anchorList = textRegions.slice(0, 300).map((r) => `${r.text.slice(0, 120)} @ [${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}]`).join("\n");
-  const prompt = `You are a senior UX auditor for ScreenRoot. Analyze ONLY the supplied desktop landing-page screenshot for ${url} (title: ${title}). It is one complete full-page image captured at a fixed 1440px desktop viewport, with mobile/responsive emulation disabled. Identify 3 to 6 meaningful, visually evidenced UX issues. Do not infer hidden interactions or inspect source code.
+  const anchorList = textRegions.slice(0, 420).map((r) => `${r.text.slice(0, 140)} @ [${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}]`).join("\n");
+  const prompt = `You are a senior UX auditor for ScreenRoot. Analyze ONLY the supplied complete desktop landing-page screenshot for ${url}. Do not infer hidden interactions, source-code behavior, analytics, or performance metrics that are not visibly evidenced. The screenshot is one native 1440px desktop capture and may be several thousand pixels tall.
 
-For every finding return severity, category, title, description, recommendation, screenrootTasks, devTasks, uxPerspective (law, definition, assessment), and evidence. Evidence localization is critical. The image may be much taller than one viewport. For text-based evidence, ALWAYS return evidence.anchor as an EXACT visible text snippet from the supplied DOM text-anchor list. The server resolves that anchor to its actual full-page pixel location. Do not return viewport-relative coordinates. For non-text visual evidence, use the closest relevant text anchor when possible; otherwise use box:[ymin,xmin,ymax,xmax] normalized 0-1000 across the ENTIRE image. Keep boxes tight. Never create a footer box spanning the whole footer merely because the issue is footer-related; anchor to the specific relevant link/group. Footer evidence must be in the bottom portion of the full image. Hero evidence must be in the top portion. Banner evidence must cover the actual banner. Use UX laws/principles only when genuinely applicable. Return ONLY valid JSON.
+Use ONLY these assessment categories: ${AUDIT_CATEGORIES.join(", ")}.
+Return ONLY HIGH-priority findings. Ignore medium and low issues completely. A high finding must represent substantial user friction or risk and must be directly visible in the screenshot. Aim for 1 to 5 strong findings rather than padding the report. Do not force every category to appear. In particular, do not claim Web performance or Responsiveness from a single desktop screenshot unless the visible screenshot itself contains direct evidence; otherwise omit them.
+
+For each finding return severity="high", one exact category from the allowed list, title, description, recommendation, screenrootTasks, devTasks, uxPerspective (law, definition, assessment), and evidence. Evidence localization is critical. For text evidence, ALWAYS choose evidence.anchor as an EXACT visible text snippet from the supplied DOM text-anchor list. The server resolves that exact anchor to full-page pixels. Never use viewport-relative coordinates. For non-text evidence, use box:[ymin,xmin,ymax,xmax] normalized 0-1000 across the ENTIRE screenshot. Keep each box tight around the actual offending UI, not the whole section. Never use a generic large region.
 
 DOM text-anchor list:
 ${anchorList}
 
-JSON shape: {"findings":[{"id":"finding-1","severity":"medium","category":"...","title":"...","description":"...","recommendation":"...","screenrootTasks":["..."],"devTasks":["..."],"uxPerspective":{"law":"...","definition":"...","assessment":"..."},"evidence":[{"label":"...","detail":"...","marker":"1","anchor":"exact visible text snippet","box":[120,80,280,620]}]}]}`;
+JSON shape: {"findings":[{"id":"finding-1","severity":"high","category":"Usability & interaction","title":"...","description":"...","recommendation":"...","screenrootTasks":["..."],"devTasks":["..."],"uxPerspective":{"law":"...","definition":"...","assessment":"..."},"evidence":[{"label":"...","detail":"...","marker":"1","anchor":"exact visible text snippet","box":[120,80,220,320]}]}]}`;
   let lastError = "Gemini analysis could not be completed.";
   for (const model of GEMINI_MODELS) {
     try {
       const text = await callGemini(apiKey, model, prompt, buffer, 3000, GEMINI_ANALYSIS_TIMEOUT_MS);
-      if (!text) { lastError = `Gemini ${model} returned an empty analysis.`; continue; }
-      let json: unknown;
-      json = extractJsonObject(text);
+      const json = extractJsonObject(text);
       if (!json) { lastError = `Gemini ${model} returned invalid JSON.`; continue; }
       const rawFindings = Array.isArray((json as { findings?: unknown }).findings) ? (json as { findings: unknown[] }).findings : [];
-      const findings = rawFindings.map((item: unknown, index: number) => normalizeFinding(item, index, width, height, textRegions));
+      const findings = rawFindings
+        .map((item: unknown, index: number) => normalizeFinding(item, index, width, height, textRegions))
+        .filter((finding) => finding.severity === "high" && finding.evidence.length > 0);
       if (findings.length) return { findings, model };
-      lastError = `Gemini ${model} returned no findings.`;
+      lastError = `Gemini ${model} returned no high-priority findings with evidence.`;
     } catch (error) {
       lastError = error instanceof Error ? error.message : `Gemini ${model} failed.`;
       console.warn("Gemini model failed", model, lastError);
@@ -204,10 +228,10 @@ JSON shape: {"findings":[{"id":"finding-1","severity":"medium","category":"...",
 async function renderEvidenceVerificationScreenshot(capture: { buffer: Buffer; width: number; height: number }, findings: Finding[]): Promise<Buffer> {
   const token = process.env.BROWSERLESS_API_TOKEN;
   if (!token) throw new Error("BROWSERLESS_API_TOKEN is not configured on this deployment.");
-  const boxes = findings.flatMap((finding) => finding.evidence.map((e) => `<div style="position:absolute;left:${e.x}%;top:${e.y}%;width:${e.width}%;height:${e.height}%;border:4px solid #ffd400;background:rgba(255,212,0,.12);box-sizing:border-box;font:700 16px Arial;color:#111;">${e.marker}</div>`)).join("");
-  const html = `<!doctype html><html><head><style>*{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff}#stage{position:relative;width:${capture.width}px}#stage img{display:block;width:100%;height:auto}#overlay{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}</style></head><body><div id="stage"><img src="data:image/png;base64,${capture.buffer.toString("base64")}"/><div id="overlay">${boxes}</div></div></body></html>`;
+  const boxes = findings.flatMap((finding) => finding.evidence.map((e) => `<div style="position:absolute;left:${e.x}%;top:${e.y}%;width:${e.width}%;height:${e.height}%;border:5px solid #ffd400;background:rgba(255,212,0,.10);box-sizing:border-box;font:700 18px Arial;color:#111;z-index:3"><span style="position:absolute;left:-3px;top:-30px;min-width:28px;height:28px;padding:4px 7px;border:2px solid #111;border-radius:999px;background:#ffd400;line-height:16px;text-align:center">${e.marker}</span></div>`)).join("");
+  const html = `<!doctype html><html><head><style>*{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff}#stage{position:relative;width:${capture.width}px;height:${capture.height}px;overflow:hidden}#stage img{display:block;position:absolute;left:0;top:0;width:${capture.width}px;height:${capture.height}px;max-width:none;object-fit:fill}#overlay{position:absolute;left:0;top:0;width:${capture.width}px;height:${capture.height}px;pointer-events:none;z-index:2}</style></head><body><div id="stage"><img src="data:image/png;base64,${capture.buffer.toString("base64")}"/><div id="overlay">${boxes}</div></div></body></html>`;
   const endpoint = `https://production-sfo.browserless.io/function?token=${encodeURIComponent(token)}&timeout=${VERIFY_BROWSERLESS_TIMEOUT_MS}`;
-  const code = `export default async ({ page }) => { await page.setViewport({ width: ${capture.width}, height: 900, deviceScaleFactor: 1, isMobile: false, hasTouch: false }); await page.setContent(${JSON.stringify(html)}, { waitUntil: "load", timeout: ${VERIFY_BROWSERLESS_TIMEOUT_MS - 1000} }); await new Promise(resolve => setTimeout(resolve, 100)); return { screenshot: await page.screenshot({ fullPage: true, type: "png", captureBeyondViewport: true, encoding: "base64" }) }; }`;
+  const code = `export default async ({ page }) => { await page.setViewport({ width: ${capture.width}, height: 900, deviceScaleFactor: 1, isMobile: false, hasTouch: false }); await page.setContent(${JSON.stringify(html)}, { waitUntil: "load", timeout: ${VERIFY_BROWSERLESS_TIMEOUT_MS - 800} }); await new Promise(resolve => setTimeout(resolve, 120)); return { screenshot: await page.screenshot({ fullPage: true, type: "png", captureBeyondViewport: true, encoding: "base64" }) }; }`;
   const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/javascript", "Cache-Control": "no-cache" }, body: code, signal: AbortSignal.timeout(VERIFY_BROWSERLESS_TIMEOUT_MS + 1000) });
   if (!response.ok) throw new Error(`Evidence verification screenshot failed with HTTP ${response.status}.`);
   const payload = await response.json() as { screenshot?: string };
@@ -215,45 +239,57 @@ async function renderEvidenceVerificationScreenshot(capture: { buffer: Buffer; w
   return Buffer.from(payload.screenshot, "base64");
 }
 
-async function verifyEvidence(capture: { buffer: Buffer; width: number; height: number }, findings: Finding[], model: string): Promise<Finding[]> {
+async function verifyEvidence(capture: { buffer: Buffer; width: number; height: number }, findings: Finding[], model: string): Promise<{ findings: Finding[]; annotated: Buffer }> {
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || !findings.some((f) => f.evidence.length)) return findings;
-  try {
-    const verificationScreenshot = await renderEvidenceVerificationScreenshot(capture, findings);
-    const regions = findings.flatMap((finding) => finding.evidence.map((e, evidenceIndex) => ({ findingId: finding.id, evidenceIndex, marker: e.marker, label: e.label, detail: e.detail, box: [e.y * 10, e.x * 10, (e.y + e.height) * 10, (e.x + e.width) * 10] })));
-    const prompt = `Verify every yellow evidence rectangle in this full-page UX audit screenshot. A rectangle is correct only when it tightly covers the relevant UI described by its label/detail and does not cover unrelated content. Return ONLY JSON: {"verified":true|false,"corrections":[{"findingId":"...","evidenceIndex":0,"box":[ymin,xmin,ymax,xmax]}]}. Coordinates are normalized 0-1000 against the ENTIRE image, never viewport-relative. If all are correct, return verified:true with no corrections. Audit regions:\n${JSON.stringify(regions)}`;
-    const text = await callGemini(apiKey, model, prompt, verificationScreenshot, 1600, GEMINI_VERIFY_TIMEOUT_MS);
-    let parsed: { verified?: boolean; corrections?: Array<{ findingId?: string; evidenceIndex?: number; box?: unknown }> } = {};
-    const recovered = extractJsonObject(text);
-    if (recovered && typeof recovered === "object") parsed = recovered as typeof parsed;
-    const corrections = Array.isArray(parsed.corrections) ? parsed.corrections : [];
-    if (parsed.verified === true || corrections.length === 0) return findings;
-    const next = findings.map((finding) => ({ ...finding, evidence: finding.evidence.map((e) => ({ ...e })) }));
-    for (const correction of corrections) {
-      const evidenceIndex = correction.evidenceIndex;
-      if (typeof correction.findingId !== "string" || typeof evidenceIndex !== "number" || !Number.isInteger(evidenceIndex) || !Array.isArray(correction.box) || correction.box.length !== 4) continue;
-      const nums = correction.box.map(Number);
-      if (!nums.every(Number.isFinite)) continue;
-      const [y1, x1, y2, x2] = nums.map((n) => clamp(n, 0, 1000));
-      const finding = next.find((f) => f.id === correction.findingId);
-      if (!finding || evidenceIndex < 0 || evidenceIndex >= finding.evidence.length || x2 <= x1 || y2 <= y1) continue;
-      const evidence = finding.evidence[evidenceIndex];
-      evidence.x = x1 / 10;
-      evidence.y = y1 / 10;
-      evidence.width = (x2 - x1) / 10;
-      evidence.height = (y2 - y1) / 10;
+  let current = findings.map((finding) => ({ ...finding, evidence: finding.evidence.map((e) => ({ ...e })) }));
+  let annotated = await renderEvidenceVerificationScreenshot(capture, current);
+  if (!apiKey || !current.some((f) => f.evidence.length)) return { findings: current, annotated };
+
+  for (let pass = 1; pass <= MAX_EVIDENCE_VERIFICATION_PASSES; pass++) {
+    try {
+      const regions = current.flatMap((finding) => finding.evidence.map((e, evidenceIndex) => ({ findingId: finding.id, evidenceIndex, marker: e.marker, label: e.label, detail: e.detail, box: [e.y * 10, e.x * 10, (e.y + e.height) * 10, (e.x + e.width) * 10] })));
+      const prompt = `You are the final evidence verifier for a UX audit. Inspect the supplied full-page screenshot with yellow numbered rectangles. Verify EVERY rectangle. It is correct only if it tightly covers the exact UI described by its label/detail and does not cover unrelated UI. Return ONLY JSON. If every rectangle is correct, return {"verified":true,"corrections":[]}. If any rectangle is wrong, return verified:false and one correction for each wrong rectangle using box:[ymin,xmin,ymax,xmax] normalized 0-1000 against the ENTIRE screenshot. Keep corrected boxes tight. Do not invent new findings or change finding text.\n\nAudit regions:\n${JSON.stringify(regions)}`;
+      const text = await callGemini(apiKey, model, prompt, annotated, 1400, GEMINI_VERIFY_TIMEOUT_MS);
+      const parsed = extractJsonObject(text) as { verified?: boolean; corrections?: Array<{ findingId?: string; evidenceIndex?: number; box?: unknown }> } | null;
+      const corrections = Array.isArray(parsed?.corrections) ? parsed.corrections : [];
+      if (parsed?.verified === true || corrections.length === 0) return { findings: current, annotated };
+      for (const correction of corrections) {
+        const evidenceIndex = correction.evidenceIndex;
+        if (typeof correction.findingId !== "string" || typeof evidenceIndex !== "number" || !Number.isInteger(evidenceIndex) || !Array.isArray(correction.box) || correction.box.length !== 4) continue;
+        const nums = correction.box.map(Number);
+        if (!nums.every(Number.isFinite)) continue;
+        const [y1, x1, y2, x2] = nums.map((n) => clamp(n, 0, 1000));
+        const finding = current.find((f) => f.id === correction.findingId);
+        if (!finding || evidenceIndex < 0 || evidenceIndex >= finding.evidence.length || x2 <= x1 || y2 <= y1) continue;
+        const evidence = finding.evidence[evidenceIndex];
+        evidence.x = x1 / 10;
+        evidence.y = y1 / 10;
+        evidence.width = (x2 - x1) / 10;
+        evidence.height = (y2 - y1) / 10;
+      }
+      annotated = await renderEvidenceVerificationScreenshot(capture, current);
+      if (pass === MAX_EVIDENCE_VERIFICATION_PASSES) return { findings: current, annotated };
+    } catch (error) {
+      console.warn("Evidence verification skipped", error);
+      return { findings: current, annotated };
     }
-    return next;
-  } catch (error) {
-    console.warn("Evidence verification skipped", error);
-    return findings;
   }
+  return { findings: current, annotated };
 }
 
 export async function createAudit(url: string): Promise<AuditResult> {
   const capture = await captureScreenshot(url);
   const title = new URL(url).hostname;
   const analysis = await analyseWithGemini(url, title, capture);
-  const findings = await verifyEvidence(capture, analysis.findings, analysis.model);
-  return { pages: [{ url, title, screenshot: `data:image/png;base64,${capture.buffer.toString("base64")}`, screenshotWidth: capture.width, screenshotHeight: capture.height, findings }] };
+  const verified = await verifyEvidence(capture, analysis.findings, analysis.model);
+  return {
+    pages: [{
+      url,
+      title,
+      screenshot: `data:image/png;base64,${verified.annotated.toString("base64")}`,
+      screenshotWidth: capture.width,
+      screenshotHeight: capture.height,
+      findings: verified.findings
+    }]
+  };
 }
