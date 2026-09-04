@@ -18,55 +18,13 @@ jobs:
         with:
           node-version: 20
       - run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-      - name: Patch audit runtime
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          import re
-          p = Path('lib/audit.ts')
-          s = p.read_text()
-
-          s = re.sub(r'const BROWSERLESS_TIMEOUT_MS = \d+;', 'const BROWSERLESS_TIMEOUT_MS = 20000;', s)
-          s = re.sub(r'const VERIFY_BROWSERLESS_TIMEOUT_MS = \d+;', 'const VERIFY_BROWSERLESS_TIMEOUT_MS = 2200;', s)
-          s = re.sub(r'const GEMINI_VERIFY_TIMEOUT_MS = \d+;', 'const GEMINI_VERIFY_TIMEOUT_MS = 2200;', s)
-          s = re.sub(r'const MAX_EVIDENCE_VERIFICATION_PASSES = \d+;', 'const MAX_EVIDENCE_VERIFICATION_PASSES = 2;', s)
-
-          s = s.replace('timeout: 10000 });', 'timeout: 8000 });')
-          s = s.replace('await new Promise(resolve => setTimeout(resolve, 1400));', 'await new Promise(resolve => setTimeout(resolve, 800));')
-
-          start = s.find('    await page.evaluate(async () => {', s.find('async function captureScreenshot'))
-          end = s.find('    const textRegions = await page.evaluate', start)
-          if start >= 0 and end > start:
-              fast_scroll = '''    await page.evaluate(async () => {
-      const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-      document.querySelectorAll("img[loading=lazy]").forEach(img => img.setAttribute("loading", "eager"));
-      document.querySelectorAll("img").forEach(img => img.setAttribute("fetchpriority", "high"));
-      const scrollHeight = () => Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
-      const step = Math.max(700, Math.floor(window.innerHeight * 0.9));
-      for (let y = 0; y <= scrollHeight(); y += step) {
-        window.scrollTo(0, y);
-        await wait(90);
-      }
-      window.scrollTo(0, scrollHeight());
-      await wait(300);
-      window.scrollTo(0, 0);
-      await wait(300);
-    });
-'''
-              s = s[:start] + fast_scroll + s[end:]
-
-          s = re.sub(r'const maxPasses = \d+;', 'const maxPasses = 2;', s)
-          s = re.sub(r'for \(let pass = 1; pass <= maxPasses; pass\+\+\)', 'for (let pass = 1; pass <= maxPasses; pass++)', s)
-
-          p.write_text(s)
-          PY
       - name: Validate TypeScript
         run: npm run build
-      - name: Commit changes
+      - name: Commit lockfile
         run: |
-          if git diff --quiet -- package-lock.json lib/audit.ts; then exit 0; fi
+          if git diff --quiet -- package-lock.json; then exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package-lock.json lib/audit.ts
-          git commit -m "fix: prevent Browserless audit timeout"
+          git add package-lock.json
+          git commit -m "chore: update npm lockfile"
           git push
