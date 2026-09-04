@@ -12,9 +12,8 @@ type Capture = { buffer: Buffer; width: number; height: number; analysisBuffer: 
 type RegionBox = [number, number, number, number];
 
 const MODEL = "minimax/minimax-m3:free";
-const BROWSERLESS_TIMEOUT_MS = 10000;
-const ANALYSIS_TIMEOUT_MS = 22000;
-const RETRY_TIMEOUT_MS = 12000;
+const BROWSERLESS_TIMEOUT_MS = 9000;
+const ANALYSIS_TIMEOUT_MS = 44000;
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
 function extractJsonObject(text: string): unknown | null {
@@ -70,18 +69,18 @@ async function captureScreenshot(url: string): Promise<Capture> {
   const code = `export default async ({ page }) => {
     await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1, isMobile: false, hasTouch: false });
     await page.emulateMediaType("screen");
-    try { await page.goto(${JSON.stringify(url)}, { waitUntil: "domcontentloaded", timeout: 4500 }); } catch {}
+    try { await page.goto(${JSON.stringify(url)}, { waitUntil: "domcontentloaded", timeout: 4000 }); } catch {}
     if (!await page.evaluate(() => !!document.body)) throw new Error("Browserless loaded no document body.");
     await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}html{scroll-behavior:auto!important}" }).catch(() => {});
-    await new Promise(resolve => setTimeout(resolve, 250));
+    await new Promise(resolve => setTimeout(resolve, 200));
     await page.evaluate(async () => {
       const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
       document.querySelectorAll("img[loading=lazy]").forEach(img => img.setAttribute("loading", "eager"));
       document.querySelectorAll("img").forEach(img => img.setAttribute("fetchpriority", "high"));
       const scrollHeight = () => Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
       const step = Math.max(1000, Math.floor(window.innerHeight * 1.2));
-      for (let y = 0; y <= scrollHeight(); y += step) { window.scrollTo(0, y); await wait(20); }
-      window.scrollTo(0, scrollHeight()); await wait(70); window.scrollTo(0, 0); await wait(60);
+      for (let y = 0; y <= scrollHeight(); y += step) { window.scrollTo(0, y); await wait(15); }
+      window.scrollTo(0, scrollHeight()); await wait(50); window.scrollTo(0, 0); await wait(50);
     });
     const width = 1440;
     const height = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight, 900);
@@ -96,7 +95,7 @@ async function captureScreenshot(url: string): Promise<Capture> {
   const metadata = await sharp(buffer).metadata();
   const width = Number(payload.width) || metadata.width || 1440;
   const height = Number(payload.height) || metadata.height || 900;
-  const analysisBuffer = await sharp(buffer).resize({ width: Math.min(1200, width), height: Math.min(3600, height), fit: "inside", withoutEnlargement: true }).jpeg({ quality: 70, progressive: true, mozjpeg: true }).toBuffer();
+  const analysisBuffer = await sharp(buffer).resize({ width: Math.min(1100, width), height: Math.min(3200, height), fit: "inside", withoutEnlargement: true }).jpeg({ quality: 65, progressive: true, mozjpeg: true }).toBuffer();
   return { buffer, width, height, analysisBuffer };
 }
 
@@ -121,18 +120,7 @@ async function analyseWithMiniMax(url: string, capture: Capture): Promise<Findin
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("OPENROUTER_API_KEY is not configured on this deployment.");
   const prompt = `${buildAuditPrompt(url, capture.width, capture.height)}\n\nFINAL SELF-VERIFICATION BEFORE RESPONDING\nThis is a single-pass audit, so you must perform the evidence verification yourself before returning JSON. For every finding, re-check the screenshot after selecting the evidence box. The box must point to the exact UI that supports the written claim, not a nearby banner, header, calculator, card, or empty area. If the claim is contradicted by visible pixels, DELETE the finding. For contrast findings, inspect the actual text color and the actual background behind that text; never infer a contrast failure from the surrounding panel color. Use exactly ONE tight evidence box per finding. Coordinates must be normalized to the ENTIRE screenshot as [ymin,xmin,ymax,xmax] from 0–1000, not viewport coordinates. Prefer 3–6 strong findings over many weak ones. Return only the required JSON object.`;
-  let text: string;
-  try {
-    text = await callMiniMax(apiKey, prompt, capture.analysisBuffer, 2200, ANALYSIS_TIMEOUT_MS);
-  } catch (firstError) {
-    try {
-      const retryImage = await sharp(capture.analysisBuffer).resize({ width: 900, height: 2800, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 62, progressive: true, mozjpeg: true }).toBuffer();
-      text = await callMiniMax(apiKey, prompt, retryImage, 1600, RETRY_TIMEOUT_MS);
-    } catch (secondError) {
-      const message = secondError instanceof Error ? secondError.message : firstError instanceof Error ? firstError.message : "MiniMax M3 request timed out.";
-      throw new Error(message);
-    }
-  }
+  const text = await callMiniMax(apiKey, prompt, capture.analysisBuffer, 1800, ANALYSIS_TIMEOUT_MS);
   const json = extractJsonObject(text) as { findings?: unknown[] } | null;
   if (!json || !Array.isArray(json.findings)) throw new Error("MiniMax M3 returned invalid audit JSON.");
   return json.findings.map((item, index) => normalizeFinding(item, index)).filter((finding) => finding.evidence.length > 0).slice(0, 6);
