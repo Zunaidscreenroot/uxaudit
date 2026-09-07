@@ -32,9 +32,10 @@ async function extractBrandPalette(dataUri: string) {
     const current = buckets.get(key) || { count: 0, saturation: 0 };
     current.count += 1; current.saturation += saturation; buckets.set(key, current);
   }
-  const ranked = [...buckets.entries()].sort((a, b) => b[1].count - a[1].count || b[1].saturation - a[1].saturation);
-  const primary = ranked[0]?.[0] || "111111";
-  const secondary = ranked.find(([color]) => color !== primary)?.[0] || "F5D547";
+  const ranked = Array.from(buckets.entries()).sort((a, b) => b[1].count - a[1].count || b[1].saturation - a[1].saturation);
+  const primary = ranked.length ? ranked[0][0] : "111111";
+  const secondaryEntry = ranked.find(([color]) => color !== primary);
+  const secondary = secondaryEntry ? secondaryEntry[0] : "F5D547";
   return { primary, secondary, textOnPrimary: readableText(primary) };
 }
 
@@ -136,8 +137,7 @@ export async function GET(request: Request) {
       slide.addShape(PptxGenJS.ShapeType.roundRect, { x: 0.65, y: 4.62, w: 5.15, h: 1.15, fill: { color: "FFFDF3" }, line: { color: "E9DE9A", width: 0.7 } });
       addText(slide, `Business impact · ${f.businessAnalysis?.funnelStage || "Conversion"}`, 0.9, 4.87, 4.55, 0.23, { fontSize: 10, bold: true, color: "5D4B00" });
       addText(slide, `KPI at risk: ${f.businessAnalysis?.kpi || "Conversion rate"}`, 0.9, 5.22, 4.45, 0.22, { fontSize: 8.5, color: "686860" });
-      const marker = f.evidence?.[0]?.marker;
-      addScreenshot(slide, audit.screenshot, audit.screenshot_width, audit.screenshot_height, 6.15, 0.92, 6.55, 5.9, marker, accent, String(index + 1));
+      addScreenshot(slide, audit.screenshot, audit.screenshot_width, audit.screenshot_height, 6.15, 0.92, 6.55, 5.9, f.evidence?.[0]?.marker, accent, String(index + 1));
       addText(slide, "Evidence marker", 6.18, 6.5, 2.0, 0.18, { fontSize: 7, color: "77766E", italic: true });
       addText(slide, f.recommendation, 8.2, 6.45, 4.45, 0.35, { fontSize: 8, bold: true, color: "4D4C47", align: "right", breakLine: true });
       addFooter(slide, audit.client_name, accent, slideNo);
