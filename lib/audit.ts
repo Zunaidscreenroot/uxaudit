@@ -123,10 +123,12 @@ async function discoverFreeMultimodalModels(apiKey: string): Promise<string[]> {
     const discovered = Array.isArray(payload?.data) ? payload.data.filter((model: any) => {
       const id = typeof model?.id === "string" ? model.id : "";
       const inputs = model?.architecture?.input_modalities;
+      const outputs = model?.architecture?.output_modalities;
       const imageInput = Array.isArray(inputs) && inputs.includes("image");
+      const textOutput = !Array.isArray(outputs) || outputs.includes("text");
       const pricing = model?.pricing;
       const free = id.endsWith(":free") || (pricing && Number(pricing.prompt) === 0 && Number(pricing.completion) === 0);
-      return id && imageInput && free;
+      return id && imageInput && textOutput && free;
     }).map((model: any) => String(model.id)) : [];
     return Array.from(new Set([...CONFIGURED_VISION_MODELS, ...discovered])).slice(0, MAX_DISCOVERED_OPENROUTER_MODELS);
   } catch {
@@ -149,7 +151,7 @@ async function callOpenRouterModel(apiKey: string, model: string, prompt: string
   const raw: any = response.choices?.[0]?.message?.content;
   const text = typeof raw === "string" ? raw : Array.isArray(raw) ? raw.map((part: any) => typeof part === "object" && part && "text" in part ? String(part.text ?? "") : "").join("") : "";
   if (!text) throw new Error("empty response");
-  return parseFindings(text);
+  return parseFindings(text, true);
 }
 
 async function callGeminiVisionModel(apiKey: string, model: string, prompt: string, image: Buffer): Promise<Finding[]> {
@@ -164,7 +166,7 @@ async function callGeminiVisionModel(apiKey: string, model: string, prompt: stri
   const payload: any = await response.json();
   const text = (payload?.candidates?.[0]?.content?.parts ?? []).map((part: any) => typeof part?.text === "string" ? part.text : "").join("");
   if (!text) throw new Error("empty response");
-  return parseFindings(text);
+  return parseFindings(text, true);
 }
 
 async function runAllVisionModels(apiKey: string | undefined, geminiKey: string | undefined, prompt: string, image: Buffer): Promise<Candidate[]> {
@@ -184,7 +186,7 @@ async function runAllVisionModels(apiKey: string | undefined, geminiKey: string 
 async function qualityRun(geminiKey: string | undefined, candidates: Candidate[], capture: Capture): Promise<Finding[]> {
   if (!candidates.length) throw new Error("No vision model returned usable UX evidence. Please try the screenshot again or check the AI provider keys.");
   const compact = candidates.map((candidate) => ({ model: candidate.model, findings: candidate.findings.map((finding) => ({ severity: finding.severity, category: finding.category, title: finding.title, description: finding.description, recommendation: finding.recommendation, evidence: finding.evidence })) }));
-  const judgePrompt = `You are the final AI quality router for a client-facing ScreenRoot UX audit. You are given the original screenshot plus independent analyses from multiple vision models. Select and consolidate only the strongest, defensible findings.\n\nQUALITY RULES:\n- The screenshot is the source of truth. Re-check every selected finding against the image.\n- Prefer findings independently supported by multiple models, but a unique finding may survive if the screenshot clearly proves it.\n- Reject hallucinations, vague criticism, duplicate findings, speculative accessibility/performance claims, and claims contradicted by the screenshot.\n- Never invent evidence. Preserve precise section, element and detail language grounded in the screenshot.\n- Do not output scores, rankings, confidence percentages, or model commentary.\n- Keep 5–8 findings when defensible; fewer is correct when evidence is weak.\n- This is a redesign-opportunity audit, not a generic checklist.\n- For every evidence item, also return an INTERNAL crop box for the exact visible area being discussed. Coordinates are normalized from 0 to 1 relative to the supplied screenshot: x and y are the top-left, width and height are the crop size. Include enough surrounding context to make the issue understandable, but do not crop the entire page unless the evidence genuinely concerns the whole page.\n- These crop coordinates are internal metadata and will be used only to generate visual evidence thumbnails; they are not shown as coordinates to the client.\n\nReturn JSON only in this shape:\n{"findings":[{"id":"finding-1","severity":"high|medium|low","category":"...","title":"...","description":"...","recommendation":"...","evidence":[{"section":"...","element":"...","detail":"...","crop":{"x":0.0,"y":0.0,"width":0.0,"height":0.0}}]}]}\n\nMODEL ANALYSES:\n${JSON.stringify(compact)}`;
+  const judgePrompt = `You are the final AI quality router for a client-facing ScreenRoot UX audit. You are given the original screenshot plus independent analyses from multiple vision models. Select and consolidate only the strongest, defensible findings.\n\nQUALITY RULES:\n- The screenshot is the source of truth. Re-check every selected finding against the image.\n- Prefer findings independently supported by multiple models, but a unique finding may survive if the screenshot clearly proves it.\n- Reject hallucinations, vague criticism, duplicate findings, speculative accessibility/performance claims, and claims contradicted by the screenshot.\n- Never invent evidence. Preserve precise section, element and detail language grounded in the screenshot.\n- Do not output scores, rankings, confidence percentages, or model commentary.\n- Keep 5–8 findings when defensible; fewer is correct when evidence is weak.\n- This is a redesign-opportunity audit, not a generic checklist.\n- For every evidence item, also return an INTERNAL crop box for the exact visible area being discussed. Coordinates are normalized from 0 to 1 relative to the supplied screenshot: x and y are the top-left, width and height are the crop size. Include enough surrounding context to make the issue understandable, but do not crop the entire page unless the evidence genuinely concerns the whole page.\n- If a candidate analysis already supplies a crop for the same evidence, preserve that crop unless your visual inspection shows it is wrong.\n- These crop coordinates are internal metadata and will be used only to generate visual evidence thumbnails; they are not shown as coordinates to the client.\n\nReturn JSON only in this shape:\n{"findings":[{"id":"finding-1","severity":"high|medium|low","category":"...","title":"...","description":"...","recommendation":"...","evidence":[{"section":"...","element":"...","detail":"...","crop":{"x":0.0,"y":0.0,"width":0.0,"height":0.0}}]}]}\n\nMODEL ANALYSES:\n${JSON.stringify(compact)}`;
 
   if (geminiKey) {
     try {
@@ -213,6 +215,24 @@ async function qualityRun(geminiKey: string | undefined, candidates: Candidate[]
     }
   }
   return Array.from(groups.values()).sort((a, b) => b.models.size - a.models.size).slice(0, 8).map((entry, index) => ({ ...entry.finding, id: `finding-${index + 1}` }));
+}
+
+function transferCandidateCrops(selected: Finding[], candidates: Candidate[]): Finding[] {
+  const source = candidates.flatMap((candidate) => candidate.findings.map((finding) => ({ model: candidate.model, finding })));
+  return selected.map((finding) => {
+    const matches = source.filter(({ finding: candidate }) => candidate.title.toLowerCase().trim() === finding.title.toLowerCase().trim());
+    if (!matches.length) return finding;
+    return {
+      ...finding,
+      evidence: finding.evidence.map((item, evidenceIndex) => {
+        if (item.crop) return item;
+        const match = matches.find(({ finding: candidate }) => candidate.evidence.some((candidateEvidence) => candidateEvidence.section.toLowerCase() === item.section.toLowerCase() && candidateEvidence.element.toLowerCase() === item.element.toLowerCase() && Boolean(candidateEvidence.crop)));
+        if (!match) return item;
+        const candidateEvidence = match.finding.evidence.find((candidateEvidence) => candidateEvidence.section.toLowerCase() === item.section.toLowerCase() && candidateEvidence.element.toLowerCase() === item.element.toLowerCase() && Boolean(candidateEvidence.crop));
+        return candidateEvidence?.crop ? { ...item, crop: candidateEvidence.crop } : item;
+      })
+    };
+  });
 }
 
 function parseCrop(value: string | undefined): CropBox | null {
@@ -252,24 +272,23 @@ function normalizeLocatedCrop(value: unknown, analysisWidth: number, analysisHei
 
 async function locateEvidenceCrop(apiKey: string, findingId: string, evidenceIndex: number, evidence: Evidence, capture: Capture, analysisWidth: number, analysisHeight: number): Promise<{ key: string; crop: CropBox } | null> {
   const prompt = `Locate ONE exact visible UI region in this screenshot. This is not a UX evaluation task.\n\nFinding: ${findingId}\nEvidence index: ${evidenceIndex}\nSection: ${evidence.section}\nElement: ${evidence.element}\nDetail: ${evidence.detail}\n\nReturn only JSON: {"crop":{"x":0,"y":0,"width":0,"height":0}}. Coordinates may be normalized 0..1, percentages 0..100, or pixels relative to the supplied image. If using pixels, use the image dimensions ${analysisWidth}x${analysisHeight}. The crop MUST contain the exact element described plus a little surrounding context. Do not return a full-page crop. Do not explain your answer.`;
-  try {
-    const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
-      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }, { inline_data: { mime_type: "image/jpeg", data: capture.analysisBuffer.toString("base64") } }] }], generationConfig: { thinkingConfig: { thinkingLevel: "low" }, responseMimeType: "application/json", maxOutputTokens: 500, temperature: 0.0 } }),
-      signal: AbortSignal.timeout(12000)
-    });
-    if (!response.ok) { console.warn(`[EvidenceLocator] ${findingId}/${evidenceIndex} HTTP ${response.status}`); return null; }
-    const payload: any = await response.json();
-    const text = (payload?.candidates?.[0]?.content?.parts ?? []).map((part: any) => typeof part?.text === "string" ? part.text : "").join("");
-    const json = extractJsonObject(text) as { crop?: unknown } | null;
-    const crop = normalizeLocatedCrop(json?.crop, analysisWidth, analysisHeight);
-    if (!crop) { console.warn(`[EvidenceLocator] ${findingId}/${evidenceIndex} returned no valid crop`); return null; }
-    return { key: `${findingId}:${evidenceIndex}`, crop };
-  } catch (error) {
-    console.warn(`[EvidenceLocator] ${findingId}/${evidenceIndex} failed`, error);
-    return null;
+  for (const model of ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-3.8-flash"]) {
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
+        body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }, { inline_data: { mime_type: "image/jpeg", data: capture.analysisBuffer.toString("base64") } }] }], generationConfig: { thinkingConfig: { thinkingLevel: "low" }, responseMimeType: "application/json", maxOutputTokens: 500, temperature: 0.0 } }),
+        signal: AbortSignal.timeout(9000)
+      });
+      if (!response.ok) continue;
+      const payload: any = await response.json();
+      const text = (payload?.candidates?.[0]?.content?.parts ?? []).map((part: any) => typeof part?.text === "string" ? part.text : "").join("");
+      const json = extractJsonObject(text) as { crop?: unknown } | null;
+      const crop = normalizeLocatedCrop(json?.crop, analysisWidth, analysisHeight);
+      if (crop) return { key: `${findingId}:${evidenceIndex}`, crop };
+    } catch {}
   }
+  return null;
 }
 
 async function locateMissingEvidenceCrops(apiKey: string | undefined, findings: Finding[], capture: Capture): Promise<Finding[]> {
@@ -277,12 +296,16 @@ async function locateMissingEvidenceCrops(apiKey: string | undefined, findings: 
   const analysisMetadata = await sharp(capture.analysisBuffer).metadata();
   const analysisWidth = analysisMetadata.width ?? 1400;
   const analysisHeight = analysisMetadata.height ?? 5000;
-  const jobs = findings.flatMap((finding) => finding.evidence.map((item, evidenceIndex) => ({ finding, item, evidenceIndex })));
-  console.log(`[EvidenceLocator] locating ${jobs.length} evidence regions in parallel`);
+  const jobs = findings.flatMap((finding) => finding.evidence.map((item, evidenceIndex) => ({ finding, item, evidenceIndex }))).filter((job) => !job.item.crop);
+  if (!jobs.length) {
+    console.log("[EvidenceLocator] all selected evidence already has model-generated crop coordinates");
+    return findings;
+  }
+  console.log(`[EvidenceLocator] locating ${jobs.length} remaining evidence regions in parallel`);
   const located = await Promise.all(jobs.map((job) => locateEvidenceCrop(apiKey, job.finding.id, job.evidenceIndex, job.item, capture, analysisWidth, analysisHeight)));
   const boxes = new Map<string, CropBox>();
   located.forEach((item) => { if (item) boxes.set(item.key, item.crop); });
-  console.log(`[EvidenceLocator] located ${boxes.size}/${jobs.length} evidence regions`);
+  console.log(`[EvidenceLocator] located ${boxes.size}/${jobs.length} remaining evidence regions`);
   return findings.map((finding) => ({
     ...finding,
     evidence: finding.evidence.map((item, evidenceIndex) => {
@@ -359,12 +382,14 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
 
   onStage?.({ id: "quality", label: "Running AI quality check", detail: "Comparing model findings and re-checking the strongest evidence against the screenshot.", status: "active" });
   const selected = await qualityRun(geminiKey, candidates, capture);
-  onStage?.({ id: "quality", label: "Running AI quality check", detail: `${selected.length} findings survived the quality check.`, status: "complete" });
+  const withModelCrops = transferCandidateCrops(selected, candidates);
+  onStage?.({ id: "quality", label: "Running AI quality check", detail: `${withModelCrops.length} findings survived the quality check.`, status: "complete" });
 
-  onStage?.({ id: "crops", label: "Preparing visual evidence", detail: "Locating the exact screenshot area for each selected evidence item.", status: "active" });
-  const located = await locateMissingEvidenceCrops(geminiKey, selected, capture);
+  onStage?.({ id: "crops", label: "Preparing visual evidence", detail: "Using model-provided evidence locations and locating only any remaining gaps.", status: "active" });
+  const located = await locateMissingEvidenceCrops(geminiKey, withModelCrops, capture);
   const cropped = await addEvidenceCrops(located, capture);
-  onStage?.({ id: "crops", label: "Preparing visual evidence", detail: `${cropped.reduce((count, finding) => count + finding.evidence.filter((item) => Boolean(item.crop)).length, 0)} visual evidence crops prepared.`, status: "complete" });
+  const cropCount = cropped.reduce((count, finding) => count + finding.evidence.filter((item) => Boolean(item.crop)).length, 0);
+  onStage?.({ id: "crops", label: "Preparing visual evidence", detail: `${cropCount} visual evidence crops prepared.`, status: "complete" });
 
   onStage?.({ id: "enrich", label: "Applying UX standards", detail: "Connecting selected findings to UX principles and practical redesign tasks.", status: "active" });
   const enriched = await enrichWithGemini(geminiKey, cropped);
