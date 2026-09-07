@@ -39,7 +39,7 @@ function extractJson(text: string): unknown | null {
 }
 
 async function geminiGenerate(apiKey: string, model: string, parts: Array<Record<string, unknown>>, maxOutputTokens = 6000) {
-  const fallbackModels = [...new Set([model, "gemini-3.5-flash-lite", "gemini-2.5-flash-lite"])];
+  const fallbackModels = Array.from(new Set([model, "gemini-3.5-flash-lite", "gemini-2.5-flash-lite"]));
   let lastError = "Gemini request failed.";
   for (const candidateModel of fallbackModels) {
     for (let attempt = 0; attempt < 2; attempt += 1) {
