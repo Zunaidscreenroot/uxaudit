@@ -22,7 +22,9 @@ export async function POST(request: Request) {
         try {
           send({ type: "start" });
           const result = await createAuditFromScreenshot(buffer, file.name || "uploaded-screenshot", stage);
-          const calibratedResult = process.env.GEMINI_API_KEY ? await calibrateMobileMarkers(process.env.GEMINI_API_KEY, result, buffer) : result;
+          const calibratedResult = process.env.GEMINI_API_KEY
+            ? await calibrateMobileMarkers(process.env.GEMINI_API_KEY, result, buffer, file.type)
+            : result;
           const auditId = await saveAudit(calibratedResult, file.name || "uploaded-screenshot");
           calibratedResult.pages = calibratedResult.pages.map((page) => ({ ...page, id: auditId, createdAt: new Date().toISOString() }));
           send({ type: "result", result: calibratedResult });
