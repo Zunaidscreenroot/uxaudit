@@ -1,4 +1,5 @@
 import type { AuditPage, AuditResult } from "@/lib/audit";
+import { buildClientReportHtml } from "@/lib/client-report";
 
 function config() {
   const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -46,7 +47,7 @@ export async function saveAudit(result: AuditResult, sourceFilename: string): Pr
   const audits = await supabaseRequest("audits", {
     method: "POST",
     headers: { Prefer: "return=representation" },
-    body: JSON.stringify({ client_id: client.id, client_name: clientName, title: page.title, screenshot: page.screenshot, screenshot_width: page.screenshotWidth, screenshot_height: page.screenshotHeight, source_filename: sourceFilename }),
+    body: JSON.stringify({ client_id: client.id, client_name: clientName, title: page.title, screenshot: page.screenshot, screenshot_width: page.screenshotWidth, screenshot_height: page.screenshotHeight, view_mode: page.viewMode || "unknown", source_filename: sourceFilename }),
   });
   const audit = Array.isArray(audits) ? audits[0] : null;
   if (!audit?.id) throw new Error("Supabase did not return the audit record.");
@@ -61,16 +62,29 @@ export async function saveAudit(result: AuditResult, sourceFilename: string): Pr
   return audit.id as string;
 }
 
+export async function generateClientReport(auditId: string) {
+  const audit = await getAudit(auditId);
+  if (!audit) throw new Error("Audit not found.");
+  const html = await buildClientReportHtml(audit);
+  const generatedAt = new Date().toISOString();
+  await supabaseRequest(`audits?id=eq.${encodeURIComponent(auditId)}`, {
+    method: "PATCH",
+    headers: { Prefer: "return=minimal" },
+    body: JSON.stringify({ report_html: html, report_generated_at: generatedAt }),
+  });
+  return { auditId, generatedAt, html };
+}
+
 export async function listClients() {
   return supabaseRequest("audit_clients?select=id,name,created_at,updated_at&order=name.asc");
 }
 
 export async function listAudits(clientId: string) {
-  return supabaseRequest(`audits?select=id,client_id,client_name,title,source_filename,created_at,screenshot_width,screenshot_height&client_id=eq.${encodeURIComponent(clientId)}&order=created_at.desc`);
+  return supabaseRequest(`audits?select=id,client_id,client_name,title,source_filename,created_at,screenshot_width,screenshot_height,view_mode,report_generated_at&client_id=eq.${encodeURIComponent(clientId)}&order=created_at.desc`);
 }
 
 export async function getAudit(auditId: string) {
-  const audits = await supabaseRequest(`audits?select=id,client_id,client_name,title,source_filename,created_at,screenshot,screenshot_width,screenshot_height&id=eq.${encodeURIComponent(auditId)}&limit=1`);
+  const audits = await supabaseRequest(`audits?select=id,client_id,client_name,title,source_filename,created_at,screenshot,screenshot_width,screenshot_height,view_mode,report_html,report_generated_at&id=eq.${encodeURIComponent(auditId)}&limit=1`);
   const audit = Array.isArray(audits) ? audits[0] : null;
   if (!audit) return null;
   const findings = await supabaseRequest(`audit_findings?select=id,finding_index,finding,created_at&audit_id=eq.${encodeURIComponent(auditId)}&order=finding_index.asc`);
