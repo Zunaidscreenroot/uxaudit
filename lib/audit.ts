@@ -230,45 +230,66 @@ function parseCrop(value: string | undefined): CropBox | null {
   } catch { return null; }
 }
 
-async function locateMissingEvidenceCrops(apiKey: string | undefined, findings: Finding[], capture: Capture): Promise<Finding[]> {
-  if (!apiKey) return findings;
-  const missing = findings.flatMap((finding) => finding.evidence.map((item, evidenceIndex) => ({ findingId: finding.id, evidenceIndex, section: item.section, element: item.element, detail: item.detail }))).filter((item) => !findings.find((finding) => finding.id === item.findingId)?.evidence[item.evidenceIndex]?.crop);
-  if (!missing.length) return findings;
+function normalizeLocatedCrop(value: unknown, analysisWidth: number, analysisHeight: number): CropBox | null {
+  if (!value || typeof value !== "object") return null;
+  const box = value as Record<string, unknown>;
+  const raw = [box.x, box.y, box.width, box.height];
+  if (!raw.every((item) => typeof item === "number" && Number.isFinite(item))) return null;
+  let [x, y, width, height] = raw as number[];
+  const maxValue = Math.max(x, y, width, height);
+  if (maxValue > 100) {
+    x /= analysisWidth; width /= analysisWidth; y /= analysisHeight; height /= analysisHeight;
+  } else if (maxValue > 1) {
+    x /= 100; width /= 100; y /= 100; height /= 100;
+  }
+  x = Math.max(0, Math.min(1, x));
+  y = Math.max(0, Math.min(1, y));
+  width = Math.max(0, Math.min(1 - x, width));
+  height = Math.max(0, Math.min(1 - y, height));
+  if (width < 0.04 || height < 0.02) return null;
+  return { x, y, width, height };
+}
 
-  const prompt = `You are a visual evidence locator for a UX audit. Inspect the supplied screenshot and locate each evidence item below. Return only normalized crop boxes for the exact visible area described. Do not evaluate the UX issue and do not rewrite the evidence. Coordinates must be normalized 0..1 relative to the screenshot, where x/y are top-left and width/height are the crop size. The crop should contain the relevant UI element and enough surrounding context to understand it. Never use a full-page crop unless the evidence genuinely refers to the whole page.\n\nEvidence items:\n${JSON.stringify(missing)}\n\nReturn exactly: {"crops":[{"findingId":"finding-1","evidenceIndex":0,"crop":{"x":0.0,"y":0.0,"width":0.0,"height":0.0}}]}`;
+async function locateEvidenceCrop(apiKey: string, findingId: string, evidenceIndex: number, evidence: Evidence, capture: Capture, analysisWidth: number, analysisHeight: number): Promise<{ key: string; crop: CropBox } | null> {
+  const prompt = `Locate ONE exact visible UI region in this screenshot. This is not a UX evaluation task.\n\nFinding: ${findingId}\nEvidence index: ${evidenceIndex}\nSection: ${evidence.section}\nElement: ${evidence.element}\nDetail: ${evidence.detail}\n\nReturn only JSON: {"crop":{"x":0,"y":0,"width":0,"height":0}}. Coordinates may be normalized 0..1, percentages 0..100, or pixels relative to the supplied image. If using pixels, use the image dimensions ${analysisWidth}x${analysisHeight}. The crop MUST contain the exact element described plus a little surrounding context. Do not return a full-page crop. Do not explain your answer.`;
   try {
     const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
-      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }, { inline_data: { mime_type: "image/jpeg", data: capture.analysisBuffer.toString("base64") } }] }], generationConfig: { thinkingConfig: { thinkingLevel: "low" }, responseMimeType: "application/json", maxOutputTokens: Math.min(1800, 250 + missing.length * 140), temperature: 0.05 } }),
-      signal: AbortSignal.timeout(9000)
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }, { inline_data: { mime_type: "image/jpeg", data: capture.analysisBuffer.toString("base64") } }] }], generationConfig: { thinkingConfig: { thinkingLevel: "low" }, responseMimeType: "application/json", maxOutputTokens: 500, temperature: 0.0 } }),
+      signal: AbortSignal.timeout(12000)
     });
-    if (!response.ok) return findings;
+    if (!response.ok) { console.warn(`[EvidenceLocator] ${findingId}/${evidenceIndex} HTTP ${response.status}`); return null; }
     const payload: any = await response.json();
     const text = (payload?.candidates?.[0]?.content?.parts ?? []).map((part: any) => typeof part?.text === "string" ? part.text : "").join("");
-    const json = extractJsonObject(text) as { crops?: unknown[] } | null;
-    if (!json || !Array.isArray(json.crops)) return findings;
-    const boxes = new Map<string, CropBox>();
-    for (const item of json.crops) {
-      if (!item || typeof item !== "object") continue;
-      const value = item as Record<string, unknown>;
-      const findingId = typeof value.findingId === "string" ? value.findingId : "";
-      const evidenceIndex = typeof value.evidenceIndex === "number" ? value.evidenceIndex : -1;
-      const cropValue = value.crop && typeof value.crop === "object" ? value.crop as Record<string, unknown> : null;
-      if (!findingId || evidenceIndex < 0 || !cropValue) continue;
-      const numbers = [cropValue.x, cropValue.y, cropValue.width, cropValue.height];
-      if (!numbers.every((number) => typeof number === "number" && Number.isFinite(number))) continue;
-      const x = Math.max(0, Math.min(1, Number(cropValue.x)));
-      const y = Math.max(0, Math.min(1, Number(cropValue.y)));
-      const width = Math.max(0, Math.min(1 - x, Number(cropValue.width)));
-      const height = Math.max(0, Math.min(1 - y, Number(cropValue.height)));
-      if (width >= 0.04 && height >= 0.02) boxes.set(`${findingId}:${evidenceIndex}`, { x, y, width, height });
-    }
-    return findings.map((finding) => ({ ...finding, evidence: finding.evidence.map((item, evidenceIndex) => item.crop ? item : ({ ...item, crop: boxes.has(`${finding.id}:${evidenceIndex}`) ? JSON.stringify(boxes.get(`${finding.id}:${evidenceIndex}`)) : undefined })) }));
+    const json = extractJsonObject(text) as { crop?: unknown } | null;
+    const crop = normalizeLocatedCrop(json?.crop, analysisWidth, analysisHeight);
+    if (!crop) { console.warn(`[EvidenceLocator] ${findingId}/${evidenceIndex} returned no valid crop`); return null; }
+    return { key: `${findingId}:${evidenceIndex}`, crop };
   } catch (error) {
-    console.warn("AI evidence crop locator failed", error);
-    return findings;
+    console.warn(`[EvidenceLocator] ${findingId}/${evidenceIndex} failed`, error);
+    return null;
   }
+}
+
+async function locateMissingEvidenceCrops(apiKey: string | undefined, findings: Finding[], capture: Capture): Promise<Finding[]> {
+  if (!apiKey || !findings.length) return findings;
+  const analysisMetadata = await sharp(capture.analysisBuffer).metadata();
+  const analysisWidth = analysisMetadata.width ?? 1400;
+  const analysisHeight = analysisMetadata.height ?? 5000;
+  const jobs = findings.flatMap((finding) => finding.evidence.map((item, evidenceIndex) => ({ finding, item, evidenceIndex })));
+  console.log(`[EvidenceLocator] locating ${jobs.length} evidence regions in parallel`);
+  const located = await Promise.all(jobs.map((job) => locateEvidenceCrop(apiKey, job.finding.id, job.evidenceIndex, job.item, capture, analysisWidth, analysisHeight)));
+  const boxes = new Map<string, CropBox>();
+  located.forEach((item) => { if (item) boxes.set(item.key, item.crop); });
+  console.log(`[EvidenceLocator] located ${boxes.size}/${jobs.length} evidence regions`);
+  return findings.map((finding) => ({
+    ...finding,
+    evidence: finding.evidence.map((item, evidenceIndex) => {
+      const crop = boxes.get(`${finding.id}:${evidenceIndex}`);
+      return crop ? { ...item, crop: JSON.stringify(crop) } : item;
+    })
+  }));
 }
 
 async function addEvidenceCrops(findings: Finding[], capture: Capture): Promise<Finding[]> {
