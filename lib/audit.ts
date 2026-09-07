@@ -118,21 +118,36 @@ async function captureScreenshot(url: string): Promise<Capture> {
 }
 
 async function callVisionModel(apiKey: string, prompt: string, image: Buffer): Promise<string> {
+  const failures: string[] = [];
+  const imageUrl = `data:image/jpeg;base64,${image.toString("base64")}`;
   const client = new OpenAI({ baseURL: "https://openrouter.ai/api/v1", apiKey, timeout: ANALYSIS_TIMEOUT_MS, maxRetries: 0 });
-  const response = await client.chat.completions.create({
-    model: VISION_MODELS[0],
-    messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:image/jpeg;base64,${image.toString("base64")}` } }] }],
-    reasoning: { enabled: false },
-    max_tokens: 1800,
-    temperature: 0.1,
-    response_format: { type: "json_object" },
-    provider: { allow_fallbacks: true, sort: "latency" },
-    extra_body: { models: VISION_MODELS.slice(1) },
-  } as any);
-  const raw: any = (response.choices?.[0]?.message as any)?.content;
-  const text = typeof raw === "string" ? raw : Array.isArray(raw) ? raw.map((part: any) => typeof part === "object" && part && "text" in part ? String(part.text ?? "") : "").join("") : "";
-  if (!text) throw new Error("OpenRouter returned an empty visual-audit response.");
-  return text;
+
+  // Do explicit model-level failover. Free endpoints are independently rate-limited,
+  // and a 429 from one model must not abort the whole audit.
+  for (const model of VISION_MODELS) {
+    try {
+      const response = await client.chat.completions.create({
+        model,
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: imageUrl } }] }],
+        reasoning: { enabled: false },
+        max_tokens: 1800,
+        temperature: 0.1,
+        response_format: { type: "json_object" },
+        provider: { allow_fallbacks: true, sort: "latency" },
+      } as any);
+      const raw: any = (response.choices?.[0]?.message as any)?.content;
+      const text = typeof raw === "string" ? raw : Array.isArray(raw) ? raw.map((part: any) => typeof part === "object" && part && "text" in part ? String(part.text ?? "") : "").join("") : "";
+      if (text) return text;
+      failures.push(`${model}: empty response`);
+    } catch (error: any) {
+      const status = Number(error?.status ?? error?.code ?? 0);
+      const message = String(error?.error?.message ?? error?.message ?? "request failed").slice(0, 180);
+      failures.push(`${model}: ${status || "error"} ${message}`);
+      // Briefly back off only for rate limiting; move immediately to the next model for other failures.
+      if (status === 429) await new Promise((resolve) => setTimeout(resolve, 350));
+    }
+  }
+  throw new Error(`All OpenRouter vision models failed. ${failures.join(" | ")}`);
 }
 
 async function analyseWithFreeVision(url: string, capture: Capture): Promise<Finding[]> {
