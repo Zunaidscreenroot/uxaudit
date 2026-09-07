@@ -65,7 +65,7 @@ export default function Home() {
       <form className="auditForm" onSubmit={runAudit}><input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={selectFile} hidden /><button className="uploadButton" type="button" onClick={() => inputRef.current?.click()} disabled={loading}>{file ? "Change screenshot" : "Upload screenshot"}</button><button className="auditButton" type="submit" disabled={loading || !file}>{loading ? "Running two-stage audit…" : "Run UX audit"}</button></form>
       {file && <div className="uploadInfo"><span><strong>{file.name}</strong> · {(file.size / 1024 / 1024).toFixed(1)} MB{file.size > MAX_UPLOAD_BYTES ? " · will be optimized before upload" : ""}</span><button type="button" onClick={clearFile} disabled={loading}>Remove</button></div>}
       {preview && !loading && !result && <div className="uploadPreview"><img src={preview} alt="Uploaded website screenshot preview" /></div>}
-      {!file && <p className="uploadHint">PNG, JPG, JPEG or WebP · full-page desktop screenshots work best.</p>}
+      {!file && <p className="uploadHint">PNG, JPG, JPEG or WebP · full-page desktop or mobile responsive screenshots work best.</p>}
       {error && <div className="error">{error}</div>}
     </section>
     {loading && <section className="results progressResults"><ProgressPanel stages={stages} /></section>}
