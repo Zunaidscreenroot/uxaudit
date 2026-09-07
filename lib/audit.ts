@@ -17,9 +17,9 @@ const VISION_MODELS = [
   "google/gemma-4-26b-a4b-it:free",
 ] as const;
 
-const BROWSERLESS_TIMEOUT_MS = 16000;
 const ANALYSIS_TIMEOUT_MS = 28000;
 const GEMINI_ENRICH_TIMEOUT_MS = 5500;
+const MAX_SCREENSHOT_BYTES = 15 * 1024 * 1024;
 
 function extractJsonObject(text: string): unknown | null {
   const cleaned = text.replace(/```(?:json)?/gi, "").replace(/```/g, "").trim();
@@ -45,7 +45,7 @@ function normalizeFinding(value: unknown, index: number): Finding {
     const entry = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
     const section = typeof entry.section === "string" ? entry.section.trim() : "Unspecified section";
     const element = typeof entry.element === "string" ? entry.element.trim() : "Visible interface element";
-    const detail = typeof entry.detail === "string" ? entry.detail.trim() : "Visible evidence identified in the landing-page screenshot.";
+    const detail = typeof entry.detail === "string" ? entry.detail.trim() : "Visible evidence identified in the supplied screenshot.";
     if (!section || !element || !detail) return null;
     return { section, element, detail };
   }).filter((entry): entry is Evidence => Boolean(entry));
@@ -71,47 +71,19 @@ function normalizeFinding(value: unknown, index: number): Finding {
   };
 }
 
-async function captureScreenshot(url: string): Promise<Capture> {
-  const token = process.env.BROWSERLESS_API_TOKEN;
-  if (!token) throw new Error("BROWSERLESS_API_TOKEN is not configured on this deployment.");
-  const endpoint = `https://production-sfo.browserless.io/function?token=${encodeURIComponent(token)}&timeout=${BROWSERLESS_TIMEOUT_MS}`;
-  const code = `export default async ({ page }) => {
-    await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1, isMobile: false, hasTouch: false });
-    await page.emulateMediaType("screen");
-    try { await page.goto(${JSON.stringify(url)}, { waitUntil: "domcontentloaded", timeout: 7000 }); } catch {}
-    if (!await page.evaluate(() => !!document.body)) throw new Error("Browserless loaded no document body.");
-    await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}html{scroll-behavior:auto!important}" }).catch(() => {});
-    await new Promise(resolve => setTimeout(resolve, 350));
-    await page.evaluate(async () => {
-      const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-      document.querySelectorAll("img[loading=lazy]").forEach(img => img.setAttribute("loading", "eager"));
-      document.querySelectorAll("img").forEach(img => img.setAttribute("fetchpriority", "high"));
-      const scrollHeight = () => Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
-      const step = Math.max(1000, Math.floor(window.innerHeight * 1.5));
-      for (let i = 0; i < 10; i++) {
-        const y = Math.min(i * step, Math.max(0, scrollHeight() - window.innerHeight));
-        window.scrollTo(0, y);
-        await wait(25);
-      }
-      window.scrollTo(0, 0);
-      await wait(100);
-    });
-    const width = 1440;
-    const height = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight, 900);
-    const title = document.title || "Landing page";
-    const screenshot = await page.screenshot({ fullPage: true, type: "png", captureBeyondViewport: true, encoding: "base64" });
-    return { screenshot, width, height, title };
-  };`;
-  const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/javascript", "Cache-Control": "no-cache" }, body: code, signal: AbortSignal.timeout(BROWSERLESS_TIMEOUT_MS + 1000) });
-  if (!response.ok) { const detail = await response.text().catch(() => ""); throw new Error(`Browserless returned HTTP ${response.status}${detail ? `: ${detail.slice(0, 250)}` : "."}`); }
-  const payload = await response.json() as { screenshot?: string; width?: number; height?: number; title?: string };
-  if (!payload.screenshot) throw new Error("Browserless returned no screenshot data.");
-  const buffer = Buffer.from(payload.screenshot, "base64");
+async function prepareScreenshot(buffer: Buffer, title: string): Promise<Capture> {
+  if (buffer.byteLength > MAX_SCREENSHOT_BYTES) throw new Error("Screenshot is too large. Please upload an image smaller than 15 MB.");
   const metadata = await sharp(buffer).metadata();
-  const width = Number(payload.width) || metadata.width || 1440;
-  const height = Number(payload.height) || metadata.height || 900;
-  const analysisBuffer = await sharp(buffer).resize({ width: Math.min(1100, width), height: Math.min(3200, height), fit: "inside", withoutEnlargement: true }).jpeg({ quality: 65, progressive: true, mozjpeg: true }).toBuffer();
-  return { buffer, width, height, analysisBuffer, title: payload.title || "Landing page" };
+  const width = metadata.width ?? 0;
+  const height = metadata.height ?? 0;
+  if (!width || !height) throw new Error("The uploaded file is not a valid image.");
+  if (width < 320 || height < 200) throw new Error("Please upload a larger screenshot so the UX evidence can be reviewed reliably.");
+  if (width > 20000 || height > 20000) throw new Error("Screenshot dimensions are too large. Please upload a smaller screenshot.");
+  const analysisBuffer = await sharp(buffer)
+    .resize({ width: Math.min(1400, width), height: Math.min(5000, height), fit: "inside", withoutEnlargement: true })
+    .jpeg({ quality: 72, progressive: true, mozjpeg: true })
+    .toBuffer();
+  return { buffer, width, height, analysisBuffer, title: title || "Uploaded screenshot" };
 }
 
 async function callVisionModel(apiKey: string, prompt: string, image: Buffer): Promise<string> {
@@ -119,8 +91,6 @@ async function callVisionModel(apiKey: string, prompt: string, image: Buffer): P
   const imageUrl = `data:image/jpeg;base64,${image.toString("base64")}`;
   const client = new OpenAI({ baseURL: "https://openrouter.ai/api/v1", apiKey, timeout: ANALYSIS_TIMEOUT_MS, maxRetries: 0 });
 
-  // Do explicit model-level failover. Free endpoints are independently rate-limited,
-  // and a 429 from one model must not abort the whole audit.
   for (const model of VISION_MODELS) {
     try {
       const response = await client.chat.completions.create({
@@ -140,17 +110,16 @@ async function callVisionModel(apiKey: string, prompt: string, image: Buffer): P
       const status = Number(error?.status ?? error?.code ?? 0);
       const message = String(error?.error?.message ?? error?.message ?? "request failed").slice(0, 180);
       failures.push(`${model}: ${status || "error"} ${message}`);
-      // Briefly back off only for rate limiting; move immediately to the next model for other failures.
       if (status === 429) await new Promise((resolve) => setTimeout(resolve, 350));
     }
   }
   throw new Error(`All OpenRouter vision models failed. ${failures.join(" | ")}`);
 }
 
-async function analyseWithFreeVision(url: string, capture: Capture): Promise<Finding[]> {
+async function analyseWithFreeVision(sourceName: string, capture: Capture): Promise<Finding[]> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("OPENROUTER_API_KEY is not configured on this deployment.");
-  const text = await callVisionModel(apiKey, buildAuditPrompt(url, capture.width, capture.height), capture.analysisBuffer);
+  const text = await callVisionModel(apiKey, buildAuditPrompt(`the uploaded screenshot (${sourceName})`, capture.width, capture.height), capture.analysisBuffer);
   const json = extractJsonObject(text) as { findings?: unknown[] } | null;
   if (!json || !Array.isArray(json.findings)) throw new Error("OpenRouter returned invalid audit JSON.");
   return json.findings.map((item, index) => normalizeFinding(item, index)).filter((finding) => finding.evidence.length > 0).slice(0, 8);
@@ -179,13 +148,13 @@ async function enrichWithGemini(findings: Finding[]): Promise<Finding[]> {
   } catch { return findings; }
 }
 
-export async function createAudit(url: string, onStage?: (stage: AuditStage) => void): Promise<AuditResult> {
-  onStage?.({ id: "capture", label: "Capturing landing page", detail: "Rendering the complete desktop landing page for visual review.", status: "active" });
-  const capture = await captureScreenshot(url);
-  onStage?.({ id: "capture", label: "Capturing landing page", detail: "Desktop screenshot captured successfully.", status: "complete" });
+export async function createAuditFromScreenshot(buffer: Buffer, filename: string, onStage?: (stage: AuditStage) => void): Promise<AuditResult> {
+  onStage?.({ id: "capture", label: "Preparing screenshot", detail: "Validating and preparing the uploaded screenshot for visual review.", status: "active" });
+  const capture = await prepareScreenshot(buffer, filename.replace(/\.[^.]+$/, "") || "Uploaded screenshot");
+  onStage?.({ id: "capture", label: "Preparing screenshot", detail: `Screenshot ready at ${capture.width}×${capture.height}px.`, status: "complete" });
 
   onStage?.({ id: "analyse", label: "Finding UX evidence", detail: "Reviewing the screenshot for concrete, visible UX problems.", status: "active" });
-  const findings = await analyseWithFreeVision(url, capture);
+  const findings = await analyseWithFreeVision(filename, capture);
   onStage?.({ id: "analyse", label: "Finding UX evidence", detail: `${findings.length} evidence-backed finding${findings.length === 1 ? "" : "s"} identified.`, status: "complete" });
 
   onStage?.({ id: "enrich", label: "Applying UX standards", detail: "Connecting findings to UX principles and practical redesign tasks.", status: "active" });
@@ -193,7 +162,7 @@ export async function createAudit(url: string, onStage?: (stage: AuditStage) => 
   onStage?.({ id: "enrich", label: "Applying UX standards", detail: "UX principles and implementation guidance added.", status: "complete" });
 
   onStage?.({ id: "complete", label: "Finalising evidence report", detail: "Preparing the client-facing evidence report.", status: "active" });
-  const page: AuditPage = { url, title: capture.title, screenshot: `data:image/png;base64,${capture.buffer.toString("base64")}`, screenshotWidth: capture.width, screenshotHeight: capture.height, findings: enriched };
+  const page: AuditPage = { url: "Uploaded screenshot", title: capture.title, screenshot: `data:image/png;base64,${capture.buffer.toString("base64")}`, screenshotWidth: capture.width, screenshotHeight: capture.height, findings: enriched };
   onStage?.({ id: "complete", label: "Finalising evidence report", detail: `${enriched.length} evidence-backed findings ready for review.`, status: "complete" });
   return { pages: [page] };
 }
