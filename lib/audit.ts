@@ -14,7 +14,7 @@ type Capture = { buffer: Buffer; width: number; height: number; analysisBuffer: 
 type VisualObservation = { id: string; section: string; element: string; issue: string; whyItMatters: string; marker: MarkerPoint };
 type VisualPass = { pageSummary: string; observations: VisualObservation[] };
 
-const DEFAULT_VISION_MODEL = "gemini-3.5-flash";
+const DEFAULT_VISION_MODEL = "gemini-3.5-flash-lite";
 const DEFAULT_TEXT_MODEL = "gemini-3.1-flash-lite";
 const GEMINI_TIMEOUT_MS = 30000;
 const MAX_SCREENSHOT_BYTES = 15 * 1024 * 1024;
@@ -39,17 +39,30 @@ function extractJson(text: string): unknown | null {
 }
 
 async function geminiGenerate(apiKey: string, model: string, parts: Array<Record<string, unknown>>, maxOutputTokens = 6000) {
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
-    body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { responseMimeType: "application/json", maxOutputTokens, temperature: 0.1 } }),
-    signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
-  });
-  if (!response.ok) throw new Error(`Gemini ${model} returned HTTP ${response.status}`);
-  const payload: any = await response.json();
-  const text = (payload?.candidates?.[0]?.content?.parts ?? []).map((part: any) => typeof part?.text === "string" ? part.text : "").join("");
-  if (!text) throw new Error(`Gemini ${model} returned an empty response.`);
-  return text;
+  const fallbackModels = [...new Set([model, "gemini-3.5-flash-lite", "gemini-2.5-flash-lite"])];
+  let lastError = "Gemini request failed.";
+  for (const candidateModel of fallbackModels) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${candidateModel}:generateContent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
+        body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { responseMimeType: "application/json", maxOutputTokens, temperature: 0.1 } }),
+        signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+      });
+      if (response.ok) {
+        const payload: any = await response.json();
+        const text = (payload?.candidates?.[0]?.content?.parts ?? []).map((part: any) => typeof part?.text === "string" ? part.text : "").join("");
+        if (text) return text;
+        lastError = `Gemini ${candidateModel} returned an empty response.`;
+        break;
+      }
+      const body = await response.text().catch(() => "");
+      lastError = `Gemini ${candidateModel} returned HTTP ${response.status}${body ? `: ${body.slice(0, 220)}` : ""}`;
+      if (response.status !== 429) break;
+      if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 1500));
+    }
+  }
+  throw new Error(lastError);
 }
 
 function normalizeMarker(value: unknown): MarkerPoint {
