@@ -9,6 +9,8 @@ const PIPELINE = [
   { id: "complete", label: "Finalising evidence report" },
 ];
 
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+
 function ProgressPanel({ stages }: { stages: Record<string, AuditStage> }) {
   const active = Object.values(stages).find((stage) => stage.status === "active");
   const activeIndex = Math.max(0, PIPELINE.findIndex((item) => item.id === active?.id));
@@ -19,9 +21,52 @@ function ProgressPanel({ stages }: { stages: Record<string, AuditStage> }) {
   </div>;
 }
 
+function loadImage(file: File): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => { URL.revokeObjectURL(url); resolve(image); };
+    image.onerror = () => { URL.revokeObjectURL(url); reject(new Error("The screenshot could not be read in the browser.")); };
+    image.src = url;
+  });
+}
+
+async function prepareAuditUpload(file: File): Promise<File> {
+  if (file.size <= MAX_UPLOAD_BYTES) return file;
+
+  const image = await loadImage(file);
+  const scale = Math.min(1, 1600 / image.naturalWidth, 10000 / image.naturalHeight);
+  let width = Math.max(1, Math.round(image.naturalWidth * scale));
+  let height = Math.max(1, Math.round(image.naturalHeight * scale));
+
+  // Keep iterating so even very large PNGs stay below Vercel's function request limit.
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Your browser could not prepare the screenshot for upload.");
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(image, 0, 0, width, height);
+
+    const quality = Math.max(0.5, 0.82 - attempt * 0.05);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+    if (blob && blob.size <= MAX_UPLOAD_BYTES) {
+      return new File([blob], file.name.replace(/\.(png|jpe?g|webp)$/i, "") + ".jpg", { type: "image/jpeg", lastModified: Date.now() });
+    }
+
+    width = Math.max(900, Math.round(width * 0.85));
+    height = Math.max(560, Math.round(height * 0.85));
+  }
+
+  throw new Error("This screenshot is too large to upload safely. Please use a slightly smaller screenshot.");
+}
+
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState("");
+  const [previewUrl, setPreviewUrl] = useState("");
   const [result, setResult] = useState<AuditResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -32,12 +77,14 @@ export default function Home() {
   function selectFile(event: ChangeEvent<HTMLInputElement>) {
     const selected = event.target.files?.[0];
     if (!selected) return;
-    setError(""); setResult(null); setFile(selected);
-    setPreview(URL.createObjectURL(selected));
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    const url = URL.createObjectURL(selected);
+    setError(""); setResult(null); setFile(selected); setPreview(url); setPreviewUrl(url);
   }
 
   function clearFile() {
-    setFile(null); setPreview("");
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setFile(null); setPreview(""); setPreviewUrl("");
     if (inputRef.current) inputRef.current.value = "";
   }
 
@@ -46,8 +93,9 @@ export default function Home() {
     if (!file) { setError("Upload a screenshot first."); return; }
     setLoading(true); setError(""); setResult(null); setStages({});
     try {
+      const upload = await prepareAuditUpload(file);
       const body = new FormData();
-      body.append("screenshot", file);
+      body.append("screenshot", upload);
       const response = await fetch("/api/audit", { method: "POST", body });
       if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.error ?? "Audit failed."); }
       if (!response.body) throw new Error("The audit server did not return a progress stream.");
@@ -75,9 +123,9 @@ export default function Home() {
         <button className="uploadButton" type="button" onClick={() => inputRef.current?.click()} disabled={loading}>{file ? "Change screenshot" : "Upload screenshot"}</button>
         <button className="auditButton" type="submit" disabled={loading || !file}>{loading ? "Reviewing screenshot…" : "Run UX audit"}</button>
       </form>
-      {file && <div className="uploadInfo"><span><strong>{file.name}</strong> · {(file.size / 1024 / 1024).toFixed(1)} MB</span><button type="button" onClick={clearFile} disabled={loading}>Remove</button></div>}
+      {file && <div className="uploadInfo"><span><strong>{file.name}</strong> · {(file.size / 1024 / 1024).toFixed(1)} MB{file.size > MAX_UPLOAD_BYTES ? " · will be optimized before upload" : ""}</span><button type="button" onClick={clearFile} disabled={loading}>Remove</button></div>}
       {preview && !loading && !result && <div className="uploadPreview"><img src={preview} alt="Uploaded website screenshot preview" /></div>}
-      {!file && <p className="uploadHint">PNG, JPG, JPEG or WebP · maximum 15 MB · full-page desktop screenshots work best.</p>}
+      {!file && <p className="uploadHint">PNG, JPG, JPEG or WebP · large screenshots are automatically optimized before upload · full-page desktop screenshots work best.</p>}
       {error && <div className="error">{error}</div>}
     </section>
     {loading && <section className="results progressResults"><ProgressPanel stages={stages} /></section>}
