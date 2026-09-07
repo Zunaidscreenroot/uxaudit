@@ -91,6 +91,8 @@ async function callVisionModel(apiKey: string, prompt: string, image: Buffer): P
   const imageUrl = `data:image/jpeg;base64,${image.toString("base64")}`;
   const client = new OpenAI({ baseURL: "https://openrouter.ai/api/v1", apiKey, timeout: ANALYSIS_TIMEOUT_MS, maxRetries: 0 });
 
+  // Do explicit model-level failover. Free endpoints are independently rate-limited,
+  // and a 429 from one model must not abort the whole audit.
   for (const model of VISION_MODELS) {
     try {
       const response = await client.chat.completions.create({
@@ -110,6 +112,7 @@ async function callVisionModel(apiKey: string, prompt: string, image: Buffer): P
       const status = Number(error?.status ?? error?.code ?? 0);
       const message = String(error?.error?.message ?? error?.message ?? "request failed").slice(0, 180);
       failures.push(`${model}: ${status || "error"} ${message}`);
+      // Briefly back off only for rate limiting; move immediately to the next model for other failures.
       if (status === 429) await new Promise((resolve) => setTimeout(resolve, 350));
     }
   }
