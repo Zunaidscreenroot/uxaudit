@@ -230,6 +230,47 @@ function parseCrop(value: string | undefined): CropBox | null {
   } catch { return null; }
 }
 
+async function locateMissingEvidenceCrops(apiKey: string | undefined, findings: Finding[], capture: Capture): Promise<Finding[]> {
+  if (!apiKey) return findings;
+  const missing = findings.flatMap((finding) => finding.evidence.map((item, evidenceIndex) => ({ findingId: finding.id, evidenceIndex, section: item.section, element: item.element, detail: item.detail }))).filter((item) => !findings.find((finding) => finding.id === item.findingId)?.evidence[item.evidenceIndex]?.crop);
+  if (!missing.length) return findings;
+
+  const prompt = `You are a visual evidence locator for a UX audit. Inspect the supplied screenshot and locate each evidence item below. Return only normalized crop boxes for the exact visible area described. Do not evaluate the UX issue and do not rewrite the evidence. Coordinates must be normalized 0..1 relative to the screenshot, where x/y are top-left and width/height are the crop size. The crop should contain the relevant UI element and enough surrounding context to understand it. Never use a full-page crop unless the evidence genuinely refers to the whole page.\n\nEvidence items:\n${JSON.stringify(missing)}\n\nReturn exactly: {"crops":[{"findingId":"finding-1","evidenceIndex":0,"crop":{"x":0.0,"y":0.0,"width":0.0,"height":0.0}}]}`;
+  try {
+    const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }, { inline_data: { mime_type: "image/jpeg", data: capture.analysisBuffer.toString("base64") } }] }], generationConfig: { thinkingConfig: { thinkingLevel: "low" }, responseMimeType: "application/json", maxOutputTokens: Math.min(1800, 250 + missing.length * 140), temperature: 0.05 } }),
+      signal: AbortSignal.timeout(9000)
+    });
+    if (!response.ok) return findings;
+    const payload: any = await response.json();
+    const text = (payload?.candidates?.[0]?.content?.parts ?? []).map((part: any) => typeof part?.text === "string" ? part.text : "").join("");
+    const json = extractJsonObject(text) as { crops?: unknown[] } | null;
+    if (!json || !Array.isArray(json.crops)) return findings;
+    const boxes = new Map<string, CropBox>();
+    for (const item of json.crops) {
+      if (!item || typeof item !== "object") continue;
+      const value = item as Record<string, unknown>;
+      const findingId = typeof value.findingId === "string" ? value.findingId : "";
+      const evidenceIndex = typeof value.evidenceIndex === "number" ? value.evidenceIndex : -1;
+      const cropValue = value.crop && typeof value.crop === "object" ? value.crop as Record<string, unknown> : null;
+      if (!findingId || evidenceIndex < 0 || !cropValue) continue;
+      const numbers = [cropValue.x, cropValue.y, cropValue.width, cropValue.height];
+      if (!numbers.every((number) => typeof number === "number" && Number.isFinite(number))) continue;
+      const x = Math.max(0, Math.min(1, Number(cropValue.x)));
+      const y = Math.max(0, Math.min(1, Number(cropValue.y)));
+      const width = Math.max(0, Math.min(1 - x, Number(cropValue.width)));
+      const height = Math.max(0, Math.min(1 - y, Number(cropValue.height)));
+      if (width >= 0.04 && height >= 0.02) boxes.set(`${findingId}:${evidenceIndex}`, { x, y, width, height });
+    }
+    return findings.map((finding) => ({ ...finding, evidence: finding.evidence.map((item, evidenceIndex) => item.crop ? item : ({ ...item, crop: boxes.has(`${finding.id}:${evidenceIndex}`) ? JSON.stringify(boxes.get(`${finding.id}:${evidenceIndex}`)) : undefined })) }));
+  } catch (error) {
+    console.warn("AI evidence crop locator failed", error);
+    return findings;
+  }
+}
+
 async function addEvidenceCrops(findings: Finding[], capture: Capture): Promise<Finding[]> {
   const metadata = await sharp(capture.buffer).metadata();
   const sourceWidth = metadata.width ?? capture.width;
@@ -299,8 +340,9 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   const selected = await qualityRun(geminiKey, candidates, capture);
   onStage?.({ id: "quality", label: "Running AI quality check", detail: `${selected.length} findings survived the quality check.`, status: "complete" });
 
-  onStage?.({ id: "crops", label: "Preparing visual evidence", detail: "Generating a focused screenshot crop for each selected evidence item.", status: "active" });
-  const cropped = await addEvidenceCrops(selected, capture);
+  onStage?.({ id: "crops", label: "Preparing visual evidence", detail: "Locating the exact screenshot area for each selected evidence item.", status: "active" });
+  const located = await locateMissingEvidenceCrops(geminiKey, selected, capture);
+  const cropped = await addEvidenceCrops(located, capture);
   onStage?.({ id: "crops", label: "Preparing visual evidence", detail: `${cropped.reduce((count, finding) => count + finding.evidence.filter((item) => Boolean(item.crop)).length, 0)} visual evidence crops prepared.`, status: "complete" });
 
   onStage?.({ id: "enrich", label: "Applying UX standards", detail: "Connecting selected findings to UX principles and practical redesign tasks.", status: "active" });
