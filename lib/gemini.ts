@@ -14,6 +14,17 @@ Analyze ONLY the supplied desktop landing-page screenshot. The screenshot is the
 PRIMARY MVP GOAL
 The purpose of this audit is to produce persuasive, client-ready EVIDENCE of UX problems that can justify a redesign engagement. Do not focus on scoring the website. Do not produce a generic checklist. Find concrete visible problems and explain exactly what a client can see on their page.
 
+MULTI-MODEL ANALYSIS CONTRACT
+This analysis is one independent opinion in a multi-model audit router. Be rigorous rather than agreeable. Inspect the screenshot systematically from top to bottom and assess each major visible area independently. At minimum consider:
+1. Header / primary navigation
+2. Hero / first impression / primary CTA
+3. Main content sections and information hierarchy
+4. Cards, calculators, forms, filters, controls or product modules when present
+5. Conversion / CTA areas and trust signals when present
+6. Footer / secondary navigation when visible
+7. Overall visual system, repetition, spacing, density and scanning across the full page
+A finding must name the specific area it came from. Do not let a strong issue in one area cause you to ignore the rest of the screenshot.
+
 SCREENROOT FRAMEWORK
 1. Language & tone — Evaluate tone of voice, narrative flow, clarity and consistency of copy.
 2. Navigation — Assess ease of use, logical flow, effectiveness of menus, and visible in-page cues.
@@ -52,5 +63,5 @@ The section and element must be specific enough that a client can locate the evi
 `;
 
 export function buildAuditPrompt(url: string, width: number, height: number): string {
-  return `${GEMINI_AUDIT_INSTRUCTIONS}\n\nTASK\nAudit the complete desktop landing page for ${url}. The supplied image is ${width}×${height}px. Review it from top to bottom.\n\nFor every candidate issue:\n1. Identify the exact visible UI that proves it.\n2. Name the page section where that UI appears.\n3. Describe the visible evidence in concrete client-friendly language.\n4. Explain the UX consequence without inventing hidden behavior.\n5. Assign HIGH, MEDIUM, or LOW based on user impact.\n6. Omit it if the screenshot does not clearly support it.\n\nThe strongest findings should make a prospective client immediately understand: "this is a problem on our website, this is where it happens, and this is why it matters."\n\nReturn 5–8 findings when defensible, otherwise return the defensible number. Return JSON only in this shape:\n{"findings":[{"id":"finding-1","severity":"high","category":"Information hierarchy","title":"...","description":"...","recommendation":"...","screenrootTasks":["..."],"devTasks":["..."],"uxPerspective":{"law":"...","definition":"...","assessment":"..."},"evidence":[{"section":"Hero","element":"Primary headline and CTA group","detail":"The hero presents ..."}]}]}\n\nAllowed categories: ${AUDIT_CATEGORIES.join(", ")}. Severity must be exactly high, medium, or low. Return an empty findings array only when no meaningful visible UX issue can be defended from the screenshot.`;
+  return `${GEMINI_AUDIT_INSTRUCTIONS}\n\nTASK\nAudit the complete desktop landing page for ${url}. The supplied image is ${width}×${height}px. Review it from top to bottom. Treat header, hero, main content, conversion areas and footer as separate audit passes before forming your final findings.\n\nFor every candidate issue:\n1. Identify the exact visible UI that proves it.\n2. Name the page section where that UI appears.\n3. Describe the visible evidence in concrete client-friendly language.\n4. Explain the UX consequence without inventing hidden behavior.\n5. Assign HIGH, MEDIUM, or LOW based on user impact.\n6. Omit it if the screenshot does not clearly support it.\n\nThe strongest findings should make a prospective client immediately understand: "this is a problem on our website, this is where it happens, and this is why it matters."\n\nReturn 5–8 findings when defensible, otherwise return the defensible number. Return JSON only in this shape:\n{"findings":[{"id":"finding-1","severity":"high","category":"Information hierarchy","title":"...","description":"...","recommendation":"...","screenrootTasks":["..."],"devTasks":["..."],"uxPerspective":{"law":"...","definition":"...","assessment":"..."},"evidence":[{"section":"Hero","element":"Primary headline and CTA group","detail":"The hero presents ..."}]}]}\n\nAllowed categories: ${AUDIT_CATEGORIES.join(", ")}. Severity must be exactly high, medium, or low. Return an empty findings array only when no meaningful visible UX issue can be defended from the screenshot.`;
 }
