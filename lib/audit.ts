@@ -20,9 +20,11 @@ const VISION_MODELS = [
   "google/gemma-4-26b-a4b-it:free",
 ] as const;
 
-const BROWSERLESS_TIMEOUT_MS = 9000;
-const ANALYSIS_TIMEOUT_MS = 38000;
-const GEMINI_ENRICH_TIMEOUT_MS = 9000;
+// Keep the complete audit safely inside Vercel's 60s function limit while giving
+// Browserless enough time to render real-world landing pages.
+const BROWSERLESS_TIMEOUT_MS = 16000;
+const ANALYSIS_TIMEOUT_MS = 30000;
+const GEMINI_ENRICH_TIMEOUT_MS = 6000;
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
 function extractJsonObject(text: string): unknown | null {
@@ -78,25 +80,32 @@ async function captureScreenshot(url: string): Promise<Capture> {
   const code = `export default async ({ page }) => {
     await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1, isMobile: false, hasTouch: false });
     await page.emulateMediaType("screen");
-    try { await page.goto(${JSON.stringify(url)}, { waitUntil: "domcontentloaded", timeout: 4000 }); } catch {}
+    try { await page.goto(${JSON.stringify(url)}, { waitUntil: "domcontentloaded", timeout: 7000 }); } catch {}
     if (!await page.evaluate(() => !!document.body)) throw new Error("Browserless loaded no document body.");
     await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}html{scroll-behavior:auto!important}" }).catch(() => {});
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise(resolve => setTimeout(resolve, 350));
     await page.evaluate(async () => {
       const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
       document.querySelectorAll("img[loading=lazy]").forEach(img => img.setAttribute("loading", "eager"));
       document.querySelectorAll("img").forEach(img => img.setAttribute("fetchpriority", "high"));
       const scrollHeight = () => Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
-      const step = Math.max(1000, Math.floor(window.innerHeight * 1.2));
-      for (let y = 0; y <= scrollHeight(); y += step) { window.scrollTo(0, y); await wait(15); }
-      window.scrollTo(0, scrollHeight()); await wait(50); window.scrollTo(0, 0); await wait(50);
+      const step = Math.max(1000, Math.floor(window.innerHeight * 1.5));
+      // Trigger lazy content without allowing an unusually long page to consume the whole Browserless budget.
+      const maxSteps = 10;
+      for (let i = 0; i < maxSteps; i++) {
+        const y = Math.min(i * step, Math.max(0, scrollHeight() - window.innerHeight));
+        window.scrollTo(0, y);
+        await wait(25);
+      }
+      window.scrollTo(0, 0);
+      await wait(100);
     });
     const width = 1440;
     const height = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight, 900);
     const screenshot = await page.screenshot({ fullPage: true, type: "png", captureBeyondViewport: true, encoding: "base64" });
     return { screenshot, width, height };
   };`;
-  const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/javascript", "Cache-Control": "no-cache" }, body: code, signal: AbortSignal.timeout(BROWSERLESS_TIMEOUT_MS + 700) });
+  const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/javascript", "Cache-Control": "no-cache" }, body: code, signal: AbortSignal.timeout(BROWSERLESS_TIMEOUT_MS + 1000) });
   if (!response.ok) { const detail = await response.text().catch(() => ""); throw new Error(`Browserless returned HTTP ${response.status}${detail ? `: ${detail.slice(0, 250)}` : "."}`); }
   const payload = await response.json() as { screenshot?: string; width?: number; height?: number };
   if (!payload.screenshot) throw new Error("Browserless returned no screenshot data.");
@@ -148,47 +157,40 @@ async function enrichWithGemini(findings: Finding[]): Promise<Finding[]> {
     const text = (payload?.candidates?.[0]?.content?.parts ?? []).map((part: any) => typeof part?.text === "string" ? part.text : "").join("");
     const json = extractJsonObject(text) as { findings?: unknown[] } | null;
     if (!json || !Array.isArray(json.findings)) return findings;
-    const enrichments = new Map(json.findings.map((item: any) => [String(item?.id ?? ""), item]));
+    const byId = new Map<string, any>();
+    json.findings.forEach((item: any) => { if (item && typeof item.id === "string") byId.set(item.id, item); });
     return findings.map((finding) => {
-      const item: any = enrichments.get(finding.id);
-      if (!item) return finding;
-      return { ...finding, screenrootTasks: Array.isArray(item.screenrootTasks) ? item.screenrootTasks.filter((task: any): task is string => typeof task === "string").slice(0, 3) : finding.screenrootTasks, devTasks: Array.isArray(item.devTasks) ? item.devTasks.filter((task: any): task is string => typeof task === "string").slice(0, 3) : finding.devTasks, uxPerspective: { law: typeof item.uxPerspective?.law === "string" ? item.uxPerspective.law : finding.uxPerspective.law, definition: typeof item.uxPerspective?.definition === "string" ? item.uxPerspective.definition : finding.uxPerspective.definition, assessment: typeof item.uxPerspective?.assessment === "string" ? item.uxPerspective.assessment : finding.uxPerspective.assessment } };
+      const enrichment = byId.get(finding.id);
+      if (!enrichment) return finding;
+      return { ...finding, uxPerspective: { law: typeof enrichment.uxPerspective?.law === "string" ? enrichment.uxPerspective.law : finding.uxPerspective.law, definition: typeof enrichment.uxPerspective?.definition === "string" ? enrichment.uxPerspective.definition : finding.uxPerspective.definition, assessment: typeof enrichment.uxPerspective?.assessment === "string" ? enrichment.uxPerspective.assessment : finding.uxPerspective.assessment }, screenrootTasks: Array.isArray(enrichment.screenrootTasks) ? enrichment.screenrootTasks.filter((task: unknown): task is string => typeof task === "string").slice(0, 3) : finding.screenrootTasks, devTasks: Array.isArray(enrichment.devTasks) ? enrichment.devTasks.filter((task: unknown): task is string => typeof task === "string").slice(0, 3) : finding.devTasks };
     });
-  } catch {
-    return findings;
-  }
+  } catch { return findings; }
 }
 
-function escapeXml(value: string): string { return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;").replace(/'/g, "&apos;"); }
-function buildRegionSvg(width: number, height: number, findings: Finding[]): Buffer {
-  const elements = findings.flatMap((finding) => finding.evidence.map((e) => {
-    const x = clamp(e.x / 100 * width, 0, width - 1), y = clamp(e.y / 100 * height, 0, height - 1);
-    const w = clamp(e.width / 100 * width, 8, width - x), h = clamp(e.height / 100 * height, 8, height - y);
-    const markerW = 34, markerH = 34, markerX = x, markerY = Math.max(0, y - markerH - 4);
-    return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="3" fill="#ffd400" fill-opacity="0.12" stroke="#ffd400" stroke-width="5"/><rect x="${markerX}" y="${markerY}" width="${markerW}" height="${markerH}" rx="17" fill="#ffd400" stroke="#111" stroke-width="2"/><text x="${markerX + markerW / 2}" y="${markerY + 23}" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="700" fill="#111">${escapeXml(e.marker)}</text>`;
-  })).join("");
-  return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${elements}</svg>`);
-}
-async function renderRegions(mainImage: Buffer, width: number, height: number, findings: Finding[]): Promise<Buffer> {
-  if (!findings.length) return mainImage;
-  return sharp(mainImage).composite([{ input: buildRegionSvg(width, height, findings), left: 0, top: 0, blend: "over" }]).png().toBuffer();
+function renderEvidenceScreenshot(buffer: Buffer, width: number, height: number, findings: Finding[]): string {
+  const base64 = buffer.toString("base64");
+  const rects = findings.map((finding, index) => finding.evidence.map((evidence) => `<rect x="${evidence.x * width / 100}" y="${evidence.y * height / 100}" width="${evidence.width * width / 100}" height="${evidence.height * height / 100}" fill="none" stroke="#ff3b30" stroke-width="6"/><text x="${evidence.x * width / 100 + 8}" y="${Math.max(28, evidence.y * height / 100 + 26)}" font-size="24" font-family="Arial" font-weight="700" fill="#ff3b30">${index + 1}</text>`).join("")).join("");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><image href="data:image/png;base64,${base64}" width="${width}" height="${height}" preserveAspectRatio="none"/>${rects}</svg>`;
+  return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
 }
 
 export async function createAudit(url: string, onStage?: (stage: AuditStage) => void): Promise<AuditResult> {
-  onStage?.({ id: "capture", label: "Taking page snapshot", detail: "Browserless is capturing the complete desktop landing page and preserving the original image.", status: "active" });
+  onStage?.({ id: "capture", label: "Capturing page", detail: "Rendering the landing page in a desktop browser and preparing a full-page screenshot.", status: "active" });
   const capture = await captureScreenshot(url);
-  onStage?.({ id: "capture", label: "Taking page snapshot", detail: "The untouched main screenshot is ready.", status: "complete" });
-  onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "A free multimodal OpenRouter model is reviewing the complete screenshot and self-checking every evidence region.", status: "active" });
-  let findings = await analyseWithFreeVision(url, capture);
-  onStage?.({ id: "analyse", label: "Analysing screenshot", detail: "Visual UX analysis and evidence self-verification completed.", status: "complete" });
-  onStage?.({ id: "enrich", label: "Applying UX standards", detail: "Gemini is mapping each verified finding to an appropriate UX law, definition, assessment, and implementation tasks.", status: "active" });
-  findings = await enrichWithGemini(findings);
-  onStage?.({ id: "enrich", label: "Applying UX standards", detail: "UX standards and client-facing tasks prepared without changing the visual evidence.", status: "complete" });
-  onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "Only the evidence coordinates returned by the visual audit are being rendered.", status: "active" });
-  const annotated = await renderRegions(capture.buffer, capture.width, capture.height, findings);
-  onStage?.({ id: "highlight", label: "Highlighting evidence regions", detail: "The final highlighted image is generated from the untouched original screenshot.", status: "complete" });
-  onStage?.({ id: "complete", label: "Finalising verified audit", detail: "Preparing the final client-facing report.", status: "active" });
-  const result = { pages: [{ url, title: new URL(url).hostname, screenshot: `data:image/png;base64,${annotated.toString("base64")}`, screenshotWidth: capture.width, screenshotHeight: capture.height, findings: findings.filter((finding) => finding.evidence.length > 0) }] };
-  onStage?.({ id: "complete", label: "Finalising verified audit", detail: "Verified audit is ready.", status: "complete" });
-  return result;
+  onStage?.({ id: "capture", label: "Capturing page", detail: "Full-page screenshot captured.", status: "complete" });
+
+  onStage?.({ id: "analyse", label: "Analysing UX", detail: "A free multimodal OpenRouter model is inspecting the screenshot and selecting evidence regions.", status: "active" });
+  const rawFindings = await analyseWithFreeVision(url, capture);
+  onStage?.({ id: "analyse", label: "Analysing UX", detail: `${rawFindings.length} visually evidenced finding(s) identified.`, status: "complete" });
+
+  onStage?.({ id: "enrich", label: "Applying UX standards", detail: "Gemini is mapping findings to UX laws, definitions, assessments, design tasks, and developer tasks.", status: "active" });
+  const findings = await enrichWithGemini(rawFindings);
+  onStage?.({ id: "enrich", label: "Applying UX standards", detail: "UX standards and implementation guidance prepared.", status: "complete" });
+
+  onStage?.({ id: "highlight", label: "Building evidence", detail: "Placing the verified regions on the untouched original screenshot.", status: "active" });
+  const screenshot = renderEvidenceScreenshot(capture.buffer, capture.width, capture.height, findings);
+  onStage?.({ id: "highlight", label: "Building evidence", detail: "Evidence overlay generated without stretching the original screenshot.", status: "complete" });
+  onStage?.({ id: "complete", label: "Audit complete", detail: "Verified findings are ready for review.", status: "complete" });
+
+  return { pages: [{ url, title: url, screenshot, screenshotWidth: capture.width, screenshotHeight: capture.height, findings }] };
 }
