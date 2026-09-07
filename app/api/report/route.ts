@@ -77,7 +77,6 @@ export async function GET(request: Request) {
     pptx.company = "ScreenRoot";
     pptx.subject = `UX audit for ${audit.client_name}`;
     pptx.title = `${audit.client_name} — UX Audit`;
-    pptx.lang = "en-IN";
     pptx.theme = { headFontFace: "Aptos Display", bodyFontFace: "Aptos", lang: "en-IN" };
     pptx.defineSlideMaster({ title: "MASTER", background: { color: "F8F7F2" }, objects: [] });
 
