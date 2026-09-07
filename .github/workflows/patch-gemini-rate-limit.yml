@@ -1,0 +1,78 @@
+name: Patch Gemini rate-limit resilience
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]' && contains(github.event.head_commit.message, 'Trigger Gemini rate-limit patch')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch Gemini model fallback
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          p = Path('lib/audit.ts')
+          s = p.read_text()
+          s = s.replace('const DEFAULT_VISION_MODEL = "gemini-3.5-flash";', 'const DEFAULT_VISION_MODEL = "gemini-3.5-flash-lite";')
+          old = '''async function geminiGenerate(apiKey: string, model: string, parts: Array<Record<string, unknown>>, maxOutputTokens = 6000) {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
+    body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { responseMimeType: "application/json", maxOutputTokens, temperature: 0.1 } }),
+    signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`Gemini ${model} returned HTTP ${response.status}`);
+  const payload: any = await response.json();
+  const text = (payload?.candidates?.[0]?.content?.parts ?? []).map((part: any) => typeof part?.text === "string" ? part.text : "").join("");
+  if (!text) throw new Error(`Gemini ${model} returned an empty response.`);
+  return text;
+}'''
+          new = '''async function geminiGenerate(apiKey: string, model: string, parts: Array<Record<string, unknown>>, maxOutputTokens = 6000) {
+  const fallbackModels = [...new Set([model, "gemini-3.5-flash-lite", "gemini-2.5-flash-lite"])];
+  let lastError = "Gemini request failed.";
+  for (const candidateModel of fallbackModels) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${candidateModel}:generateContent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
+        body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { responseMimeType: "application/json", maxOutputTokens, temperature: 0.1 } }),
+        signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+      });
+      if (response.ok) {
+        const payload: any = await response.json();
+        const text = (payload?.candidates?.[0]?.content?.parts ?? []).map((part: any) => typeof part?.text === "string" ? part.text : "").join("");
+        if (text) return text;
+        lastError = `Gemini ${candidateModel} returned an empty response.`;
+        break;
+      }
+      const body = await response.text().catch(() => "");
+      lastError = `Gemini ${candidateModel} returned HTTP ${response.status}${body ? `: ${body.slice(0, 220)}` : ""}`;
+      if (response.status !== 429) break;
+      if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 1500));
+    }
+  }
+  throw new Error(lastError);
+}'''
+          if old not in s:
+            raise SystemExit('geminiGenerate block not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add lib/audit.ts
+          git commit -m "Fix Gemini 429 fallback and use lighter vision model"
+          git push
+      - name: Remove temporary patch workflow
+        if: success()
+        run: |
+          rm .github/workflows/patch-gemini-rate-limit.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/patch-gemini-rate-limit.yml
+          git commit -m "Remove temporary Gemini patch workflow"
+          git push
