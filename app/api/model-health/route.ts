@@ -3,17 +3,13 @@ import OpenAI from "openai";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-// Only models that returned a direct response in the latest diagnostic run.
+// Production allowlist: only models that currently return a direct response.
+// OpenRouter is intentionally limited to one concrete model; router aliases are not counted as separate models.
 const CONFIGURED_OPENROUTER_MODELS = [
-  "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-  "dots-studio/dots-3-not-preview:free",
-  "nvidia/nemotron-3.5-content-safety:free",
   "minimax/minimax-m3:free",
-  "openrouter/free",
 ] as const;
 
 const CONFIGURED_GEMINI_MODELS = [
-  "gemini-3.6-flash",
   "gemini-3.5-flash",
   "gemini-3.5-flash-lite",
   "gemini-3.1-flash-lite",
@@ -22,7 +18,7 @@ const CONFIGURED_GEMINI_MODELS = [
 const OPENROUTER_TIMEOUT = 12000;
 const GEMINI_TIMEOUT = 12000;
 
- type ModelResult = {
+type ModelResult = {
   model: string;
   provider: "OpenRouter" | "Gemini";
   configured: boolean;
@@ -115,7 +111,7 @@ export async function POST(request: Request) {
       ok,
       failed,
       keys: { openRouter: Boolean(openRouterKey), gemini: Boolean(geminiKey) },
-      note: "Only models that returned a direct response in the latest diagnostic run are included. OpenRouter tests use allow_fallbacks=false.",
+      note: "Health checks use only the production vision allowlist. OpenRouter tests use allow_fallbacks=false so a passing result always comes from the listed model.",
       results,
     });
   } catch (error) {
