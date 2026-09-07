@@ -1,9 +1,9 @@
 "use client";
-import { FormEvent, useState } from "react";
+import { ChangeEvent, FormEvent, useRef, useState } from "react";
 import type { AuditPage, AuditResult, AuditStage } from "@/lib/audit";
 
 const PIPELINE = [
-  { id: "capture", label: "Taking page snapshot" },
+  { id: "capture", label: "Preparing screenshot" },
   { id: "analyse", label: "Finding UX evidence" },
   { id: "enrich", label: "Applying UX standards" },
   { id: "complete", label: "Finalising evidence report" },
@@ -13,24 +13,42 @@ function ProgressPanel({ stages }: { stages: Record<string, AuditStage> }) {
   const active = Object.values(stages).find((stage) => stage.status === "active");
   const activeIndex = Math.max(0, PIPELINE.findIndex((item) => item.id === active?.id));
   return <div className="progressCard" role="status" aria-live="polite">
-    <div className="progressTop"><div><div className="muted">LIVE AUDIT PIPELINE</div><h2>{active?.label ?? "Preparing audit"}</h2><p>{active?.detail ?? "Starting the audit pipeline…"}</p></div><div className="progressSpinner" aria-hidden="true" /></div>
+    <div className="progressTop"><div><div className="muted">LIVE AUDIT PIPELINE</div><h2>{active?.label ?? "Preparing audit"}</h2><p>{active?.detail ?? "Starting the screenshot review…"}</p></div><div className="progressSpinner" aria-hidden="true" /></div>
     <div className="pipeline">{PIPELINE.map((item, index) => { const state = stages[item.id]; const done = index < activeIndex || state?.status === "complete"; const current = item.id === active?.id; return <div className={`pipelineStep ${done ? "done" : ""} ${current ? "current" : ""}`} key={item.id}><span className="pipelineIcon">{done ? "✓" : index + 1}</span><div><strong>{item.label}</strong><small>{done ? "Complete" : current ? "In progress" : "Waiting"}</small></div></div>; })}</div>
-    <div className="pipelineNote">The screenshot is used internally as the visual source of truth. The client-facing MVP focuses on concrete evidence and the exact page section where each issue appears. Region highlighting is intentionally disabled for now.</div>
+    <div className="pipelineNote">The uploaded screenshot is the source of truth. The audit focuses on concrete, client-ready UX evidence and tells you exactly which page section and visible element each finding refers to.</div>
   </div>;
 }
 
 export default function Home() {
-  const [url, setUrl] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState("");
   const [result, setResult] = useState<AuditResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [stages, setStages] = useState<Record<string, AuditStage>>({});
+  const inputRef = useRef<HTMLInputElement>(null);
   const page = result?.pages[0] as AuditPage | undefined;
 
+  function selectFile(event: ChangeEvent<HTMLInputElement>) {
+    const selected = event.target.files?.[0];
+    if (!selected) return;
+    setError(""); setResult(null); setFile(selected);
+    setPreview(URL.createObjectURL(selected));
+  }
+
+  function clearFile() {
+    setFile(null); setPreview("");
+    if (inputRef.current) inputRef.current.value = "";
+  }
+
   async function runAudit(event: FormEvent) {
-    event.preventDefault(); setLoading(true); setError(""); setResult(null); setStages({});
+    event.preventDefault();
+    if (!file) { setError("Upload a screenshot first."); return; }
+    setLoading(true); setError(""); setResult(null); setStages({});
     try {
-      const response = await fetch("/api/audit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) });
+      const body = new FormData();
+      body.append("screenshot", file);
+      const response = await fetch("/api/audit", { method: "POST", body });
       if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.error ?? "Audit failed."); }
       if (!response.body) throw new Error("The audit server did not return a progress stream.");
       const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
@@ -50,14 +68,24 @@ export default function Home() {
   const low = findings.filter((finding) => finding.severity === "low").length;
 
   return <main className="shell">
-    <nav className="nav"><div className="brandLockup"><div className="brand">UX Audit</div><div className="brandByline">by ScreenRoot</div></div><div className="navMeta">AI-assisted UX review</div></nav>
-    <section className="hero"><div className="eyebrow">Website experience intelligence</div><h1>Find the friction before your users do.</h1><p className="lede">Enter a website and get a visual landing-page audit with client-ready evidence, UX laws, explanations, and redesign tasks.</p><form className="auditForm" onSubmit={runAudit}><input className="urlInput" type="text" inputMode="url" placeholder="https://yourwebsite.com" value={url} onChange={(event) => setUrl(event.target.value)} aria-label="Website URL" /><button className="auditButton" type="submit" disabled={loading}>{loading ? "Running audit…" : "Run audit"}</button></form>{error && <div className="error">{error}</div>}</section>
+    <nav className="nav"><div className="brandLockup"><div className="brand">UX Audit</div><div className="brandByline">by ScreenRoot</div></div><div className="navMeta">Evidence-first UX review</div></nav>
+    <section className="hero"><div className="eyebrow">Screenshot → UX evidence</div><h1>Show clients exactly where the experience breaks.</h1><p className="lede">Upload a full-page website screenshot and get evidence-backed UX findings that a client can locate, understand, and act on.</p>
+      <form className="auditForm" onSubmit={runAudit}>
+        <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={selectFile} hidden />
+        <button className="uploadButton" type="button" onClick={() => inputRef.current?.click()} disabled={loading}>{file ? "Change screenshot" : "Upload screenshot"}</button>
+        <button className="auditButton" type="submit" disabled={loading || !file}>{loading ? "Reviewing screenshot…" : "Run UX audit"}</button>
+      </form>
+      {file && <div className="uploadInfo"><span><strong>{file.name}</strong> · {(file.size / 1024 / 1024).toFixed(1)} MB</span><button type="button" onClick={clearFile} disabled={loading}>Remove</button></div>}
+      {preview && !loading && !result && <div className="uploadPreview"><img src={preview} alt="Uploaded website screenshot preview" /></div>}
+      {!file && <p className="uploadHint">PNG, JPG, JPEG or WebP · maximum 15 MB · full-page desktop screenshots work best.</p>}
+      {error && <div className="error">{error}</div>}
+    </section>
     {loading && <section className="results progressResults"><ProgressPanel stages={stages} /></section>}
     {result && page && <section className="results" aria-live="polite">
-      <div className="reportHeader"><div><div className="muted">LANDING PAGE AUDIT</div><h2>{page.title}</h2><a href={page.url} target="_blank" rel="noreferrer">{page.url}</a></div><div className="reportOutcome"><span>Evidence-backed findings</span><strong>{findings.length}</strong><small>{evidenceCount} visible evidence items</small></div></div>
-      <p className="reportSummary">This audit identified {findings.length} evidence-backed UX finding{findings.length === 1 ? "" : "s"} that can be located directly on the landing page. No composite UX score is shown because this MVP is designed to demonstrate evidence, not declare a pass/fail grade.</p>
+      <div className="reportHeader"><div><div className="muted">SCREENSHOT UX AUDIT</div><h2>{page.title}</h2><span className="sourceLabel">Source: uploaded screenshot</span></div><div className="reportOutcome"><span>Evidence-backed findings</span><strong>{findings.length}</strong><small>{evidenceCount} visible evidence items</small></div></div>
+      <p className="reportSummary">This report is intentionally evidence-first. There is no composite UX score: each finding points to a specific page section and visible interface element so a prospective client can verify the problem themselves.</p>
 
-      <div className="summary"><div className="card scoreCard"><div className="muted">AUDIT EVIDENCE</div><div className="metric">{evidenceCount}</div><p>Specific visible evidence items linked to page sections.</p></div><div className="card"><div className="muted">High priority</div><div className="metric">{high}</div><p>Material UX problems</p></div><div className="card"><div className="muted">Medium priority</div><div className="metric">{medium}</div><p>Meaningful friction</p></div><div className="card"><div className="muted">Low priority</div><div className="metric">{low}</div><p>Secondary opportunities</p></div></div>
+      <div className="summary"><div className="card scoreCard"><div className="muted">AUDIT EVIDENCE</div><div className="metric">{evidenceCount}</div><p>Specific visible evidence items from the supplied screenshot.</p></div><div className="card"><div className="muted">High priority</div><div className="metric">{high}</div><p>Material UX problems</p></div><div className="card"><div className="muted">Medium priority</div><div className="metric">{medium}</div><p>Meaningful friction</p></div><div className="card"><div className="muted">Low priority</div><div className="metric">{low}</div><p>Secondary opportunities</p></div></div>
 
       <div className="evidenceSection"><div className="sectionHeader"><div><div className="muted">CLIENT-READY UX EVIDENCE</div><h3>What is wrong, where it happens, and why it matters</h3></div><span className="pill">{findings.length} findings · {evidenceCount} evidence items</span></div>
         {findings.map((finding, findingIndex) => <article className="card regionFinding" key={finding.id}>
