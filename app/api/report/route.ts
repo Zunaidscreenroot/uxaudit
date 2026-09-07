@@ -120,7 +120,8 @@ export async function GET(request: Request) {
 
     slide = pptx.addSlide("MASTER");
     slide.addText("Prioritized action plan", { x: 0.65, y: 0.55, w: 7, h: 0.5, fontSize: 25, bold: true, color: palette.primary });
-    const priorities = [...findings].sort((a: any, b: any) => ({ high: 0, medium: 1, low: 2 }[a.severity] ?? 1) - ({ high: 0, medium: 1, low: 2 }[b.severity] ?? 1));
+    const severityRank: Record<string, number> = { high: 0, medium: 1, low: 2 };
+    const priorities = [...findings].sort((a: any, b: any) => (severityRank[String(a.severity)] ?? 1) - (severityRank[String(b.severity)] ?? 1));
     priorities.slice(0, 8).forEach((finding: any, i: number) => {
       const y = 1.35 + i * 0.65;
       slide.addShape(pptx.ShapeType.roundRect, { x: 0.7, y, w: 0.5, h: 0.38, rectRadius: 0.04, fill: { color: palette.primary }, line: { color: palette.primary } });
