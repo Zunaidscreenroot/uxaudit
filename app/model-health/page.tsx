@@ -23,6 +23,47 @@ type HealthResponse = {
   results: ModelResult[];
 };
 
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+
+async function prepareUpload(file: File): Promise<File> {
+  if (file.size <= MAX_UPLOAD_BYTES) return file;
+  const bitmap = await createImageBitmap(file);
+  try {
+    const scale = Math.min(1, Math.sqrt(MAX_UPLOAD_BYTES / file.size));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Could not prepare the screenshot for upload.");
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+
+    let quality = 0.82;
+    let blob: Blob | null = null;
+    while (quality >= 0.5) {
+      blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+      if (blob && blob.size <= MAX_UPLOAD_BYTES) break;
+      quality -= 0.08;
+    }
+    if (!blob || blob.size > MAX_UPLOAD_BYTES) {
+      throw new Error("The screenshot could not be compressed below the upload limit. Please choose a smaller image.");
+    }
+    return new File([blob], file.name.replace(/\.[^.]+$/, "") + ".jpg", { type: "image/jpeg", lastModified: Date.now() });
+  } finally {
+    bitmap.close();
+  }
+}
+
+async function readResponse(response: Response): Promise<any> {
+  const text = await response.text();
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(response.ok
+      ? "The model health service returned an invalid response."
+      : `Model health service returned HTTP ${response.status}: ${text.slice(0, 220)}`);
+  }
+}
+
 export default function ModelHealth() {
   const [file, setFile] = useState<File | null>(null);
   const [data, setData] = useState<HealthResponse | null>(null);
@@ -34,13 +75,16 @@ export default function ModelHealth() {
     if (!file) { setError("Choose the same screenshot you use for the audit."); return; }
     setLoading(true); setError(""); setData(null);
     try {
-      const body = new FormData(); body.append("screenshot", file);
+      const upload = await prepareUpload(file);
+      const body = new FormData();
+      body.append("screenshot", upload);
       const response = await fetch("/api/model-health", { method: "POST", body });
-      const payload = await response.json();
+      const payload = await readResponse(response);
       if (!response.ok) throw new Error(payload.error ?? "Model health check failed.");
-      setData(payload);
-    } catch (err) { setError(err instanceof Error ? err.message : "Model health check failed."); }
-    finally { setLoading(false); }
+      setData(payload as HealthResponse);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Model health check failed.");
+    } finally { setLoading(false); }
   }
 
   const results = useMemo(() => data?.results.filter((item) => filter === "all" || item.status === filter) ?? [], [data, filter]);
@@ -59,13 +103,13 @@ export default function ModelHealth() {
       <section style={{ padding: "64px 0 34px" }}>
         <div style={{ display: "inline-block", background: "#f1d72e", padding: "7px 11px", borderRadius: 20, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1 }}>Internal diagnostic</div>
         <h1 style={{ fontSize: "clamp(42px, 7vw, 82px)", lineHeight: .95, maxWidth: 850, margin: "22px 0 18px", letterSpacing: -4 }}>Check every vision model.</h1>
-        <p style={{ maxWidth: 720, fontSize: 17, lineHeight: 1.55, color: "#666" }}>This runs the uploaded screenshot through every integrated free OpenRouter vision model plus every configured Gemini vision model. OpenRouter model tests disable provider fallback so a green result means that specific listed model returned a response.</p>
+        <p style={{ maxWidth: 720, fontSize: 17, lineHeight: 1.55, color: "#666" }}>This runs the uploaded screenshot through every integrated free OpenRouter vision model plus every configured Gemini vision model. OpenRouter model tests disable provider fallback, so a green result means that specific listed model returned a response. Large screenshots are compressed in the browser before the request.</p>
       </section>
 
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", marginBottom: 28 }}>
         <label style={{ border: "1px solid #bbb", background: "white", borderRadius: 10, padding: "13px 16px", cursor: "pointer", fontWeight: 700 }}>
           <input type="file" accept="image/*" onChange={choose} hidden />
-          {file ? file.name : "Choose screenshot"}
+          {file ? `${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)` : "Choose screenshot"}
         </label>
         <button onClick={runCheck} disabled={loading || !file} style={{ border: 0, borderRadius: 10, padding: "14px 20px", background: "#111", color: "white", fontWeight: 700, cursor: loading || !file ? "default" : "pointer", opacity: loading || !file ? .5 : 1 }}>{loading ? "Testing all models…" : "Check all models"}</button>
       </div>
@@ -88,7 +132,7 @@ export default function ModelHealth() {
         <div style={{ background: "white", border: "1px solid #ddd", borderRadius: 12, overflow: "hidden" }}>
           {results.map((item) => <div key={`${item.provider}-${item.model}`} style={{ display: "grid", gridTemplateColumns: "90px minmax(0, 1fr) 110px 100px", gap: 16, alignItems: "center", padding: "17px 20px", borderBottom: "1px solid #eee" }}>
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "#777" }}>{item.provider}</div>
-            <div style={{ minWidth: 0 }}><strong style={{ wordBreak: "break-word" }}>{item.model}</strong><div style={{ color: "#777", fontSize: 12, marginTop: 5 }}>{item.status === "ok" ? `Response: ${item.responseModel ?? item.model}` : item.error}</div></div>
+            <div style={{ minWidth: 0 }}><strong style={{ wordBreak: "break-word" }}>{item.model}</strong><div style={{ color: "#777", fontSize: 12, marginTop: 5 }}>{item.status === "ok" ? `Response: ${item.responseModel ?? item.model}${item.responsePreview ? ` · ${item.responsePreview}` : ""}` : item.error}</div></div>
             <div style={{ fontVariantNumeric: "tabular-nums", color: "#666" }}>{item.latencyMs} ms</div>
             <div style={{ fontWeight: 800, textAlign: "right", color: item.status === "ok" ? "#167a3d" : "#b42318" }}>{item.status === "ok" ? "✓ RESPONSE" : "✕ FAILED"}</div>
           </div>)}
