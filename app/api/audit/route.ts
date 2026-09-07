@@ -21,10 +21,8 @@ export async function POST(request: Request) {
         try {
           send({ type: "start" });
           const result = await createAuditFromScreenshot(buffer, file.name || "uploaded-screenshot", stage);
-          stage({ id: "storage", label: "Save to knowledge base", detail: `${result.pages[0]?.clientName || "Client"} analysis is being stored in Supabase.`, status: "active" });
           const auditId = await saveAudit(result, file.name || "uploaded-screenshot");
           result.pages = result.pages.map((page) => ({ ...page, id: auditId, createdAt: new Date().toISOString() }));
-          stage({ id: "storage", label: "Save to knowledge base", detail: "Analysis and findings are now available in the client knowledge base.", status: "complete" });
           send({ type: "result", result });
           controller.close();
         } catch (error) {
