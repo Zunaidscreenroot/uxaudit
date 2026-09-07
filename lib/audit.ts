@@ -13,23 +13,10 @@ type Capture = { buffer: Buffer; width: number; height: number; analysisBuffer: 
 type Candidate = { model: string; findings: Finding[] };
 
 const CONFIGURED_VISION_MODELS = [
-  "google/gemma-4-31b-it:free",
-  "thinkingmachines/inkling:free",
-  "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-  "google/gemma-4-26b-a4b-it:free",
-  "sourceful/Sourceful-MultiModal:free",
-  "xiaomi/mimo-v2-omni:free",
-  "allenai/molmo-2-8b:free",
-  "google/gemma-3-27b-it:free",
-  "nvidia/nemotron-nano-12b-v2-vl:free",
-  "google/gemma-3-12b-it:free",
-  "qwen/qwen3-vl-235b-a22b-thinking:free",
-  "qwen/qwen3-vl-235b-a22b-instruct:free",
+  "minimax/minimax-m3:free",
 ] as const;
 
 const GEMINI_VISION_MODELS = [
-  "gemini-3.8-flash",
-  "gemini-3.6-flash",
   "gemini-3.5-flash",
   "gemini-3.5-flash-lite",
   "gemini-3.1-flash-lite",
@@ -38,7 +25,6 @@ const GEMINI_VISION_MODELS = [
 const ANALYSIS_TIMEOUT_MS = 18000;
 const GEMINI_TIMEOUT_MS = 18000;
 const MAX_SCREENSHOT_BYTES = 15 * 1024 * 1024;
-const MAX_DISCOVERED_OPENROUTER_MODELS = 40;
 
 function extractJsonObject(text: string): unknown | null {
   const cleaned = text.replace(/```(?:json)?/gi, "").replace(/```/g, "").trim();
@@ -115,27 +101,6 @@ async function prepareScreenshot(buffer: Buffer, title: string): Promise<Capture
   return { buffer, width, height, analysisBuffer, title: title || "Uploaded screenshot" };
 }
 
-async function discoverFreeMultimodalModels(apiKey: string): Promise<string[]> {
-  try {
-    const response = await fetch("https://openrouter.ai/api/v1/models", { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(5000) });
-    if (!response.ok) return [...CONFIGURED_VISION_MODELS];
-    const payload: any = await response.json();
-    const discovered = Array.isArray(payload?.data) ? payload.data.filter((model: any) => {
-      const id = typeof model?.id === "string" ? model.id : "";
-      const inputs = model?.architecture?.input_modalities;
-      const outputs = model?.architecture?.output_modalities;
-      const imageInput = Array.isArray(inputs) && inputs.includes("image");
-      const textOutput = !Array.isArray(outputs) || outputs.includes("text");
-      const pricing = model?.pricing;
-      const free = id.endsWith(":free") || (pricing && Number(pricing.prompt) === 0 && Number(pricing.completion) === 0);
-      return id && imageInput && textOutput && free;
-    }).map((model: any) => String(model.id)) : [];
-    return Array.from(new Set([...CONFIGURED_VISION_MODELS, ...discovered])).slice(0, MAX_DISCOVERED_OPENROUTER_MODELS);
-  } catch {
-    return [...CONFIGURED_VISION_MODELS];
-  }
-}
-
 async function callOpenRouterModel(apiKey: string, model: string, prompt: string, image: Buffer): Promise<Finding[]> {
   const client = new OpenAI({ baseURL: "https://openrouter.ai/api/v1", apiKey, timeout: ANALYSIS_TIMEOUT_MS, maxRetries: 0 });
   const imageUrl = `data:image/jpeg;base64,${image.toString("base64")}`;
@@ -146,7 +111,7 @@ async function callOpenRouterModel(apiKey: string, model: string, prompt: string
     max_tokens: 1800,
     temperature: 0.1,
     response_format: { type: "json_object" },
-    provider: { allow_fallbacks: true, sort: "latency" },
+    provider: { allow_fallbacks: false },
   } as any);
   const raw: any = response.choices?.[0]?.message?.content;
   const text = typeof raw === "string" ? raw : Array.isArray(raw) ? raw.map((part: any) => typeof part === "object" && part && "text" in part ? String(part.text ?? "") : "").join("") : "";
@@ -170,7 +135,7 @@ async function callGeminiVisionModel(apiKey: string, model: string, prompt: stri
 }
 
 async function runAllVisionModels(apiKey: string | undefined, geminiKey: string | undefined, prompt: string, image: Buffer): Promise<Candidate[]> {
-  const openRouterModels = apiKey ? await discoverFreeMultimodalModels(apiKey) : [];
+  const openRouterModels = apiKey ? [...CONFIGURED_VISION_MODELS] : [];
   const openRouterRuns = apiKey ? openRouterModels.map(async (model): Promise<Candidate | null> => {
     try { return { model, findings: await callOpenRouterModel(apiKey, model, prompt, image) }; }
     catch (error) { console.warn(`OpenRouter vision model failed: ${model}`, error); return null; }
@@ -190,7 +155,7 @@ async function qualityRun(geminiKey: string | undefined, candidates: Candidate[]
 
   if (geminiKey) {
     try {
-      const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent", {
+      const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-goog-api-key": geminiKey },
         body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: judgePrompt }, { inline_data: { mime_type: "image/jpeg", data: capture.analysisBuffer.toString("base64") } }] }], generationConfig: { thinkingConfig: { thinkingLevel: "low" }, responseMimeType: "application/json", maxOutputTokens: 2400, temperature: 0.05 } }),
@@ -272,7 +237,7 @@ function normalizeLocatedCrop(value: unknown, analysisWidth: number, analysisHei
 
 async function locateEvidenceCrop(apiKey: string, findingId: string, evidenceIndex: number, evidence: Evidence, capture: Capture, analysisWidth: number, analysisHeight: number): Promise<{ key: string; crop: CropBox } | null> {
   const prompt = `Locate ONE exact visible UI region in this screenshot. This is not a UX evaluation task.\n\nFinding: ${findingId}\nEvidence index: ${evidenceIndex}\nSection: ${evidence.section}\nElement: ${evidence.element}\nDetail: ${evidence.detail}\n\nReturn only JSON: {"crop":{"x":0,"y":0,"width":0,"height":0}}. Coordinates may be normalized 0..1, percentages 0..100, or pixels relative to the supplied image. If using pixels, use the image dimensions ${analysisWidth}x${analysisHeight}. The crop MUST contain the exact element described plus a little surrounding context. Do not return a full-page crop. Do not explain your answer.`;
-  for (const model of ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-3.8-flash"]) {
+  for (const model of ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.5-flash"]) {
     try {
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
         method: "POST",
@@ -349,7 +314,7 @@ async function enrichWithGemini(apiKey: string | undefined, findings: Finding[])
   const compact = findings.map((finding) => ({ id: finding.id, severity: finding.severity, category: finding.category, title: finding.title, description: finding.description, recommendation: finding.recommendation }));
   const prompt = `You are the UX standards/enrichment layer for a ScreenRoot UX audit. Do not invent or change the visual finding or its evidence. Based only on the supplied finding text, enrich each item with the most appropriate recognized UX law/principle, a concise accurate definition, a client-friendly assessment explaining why the visible issue relates to that principle, up to 3 practical ScreenRoot design tasks, and up to 3 practical developer tasks. Do not add findings. Do not change severity, category, title, description, recommendation, evidence, or IDs. Return JSON only: {"findings":[{"id":"...","uxPerspective":{"law":"...","definition":"...","assessment":"..."},"screenrootTasks":["..."],"devTasks":["..."]}]}. Findings: ${JSON.stringify(compact)}`;
   try {
-    const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent", { method: "POST", headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey }, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { thinkingConfig: { thinkingLevel: "low" }, responseMimeType: "application/json", maxOutputTokens: 1400 } }), signal: AbortSignal.timeout(7000) });
+    const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent", { method: "POST", headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey }, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { thinkingConfig: { thinkingLevel: "low" }, responseMimeType: "application/json", maxOutputTokens: 1400 } }), signal: AbortSignal.timeout(7000) });
     if (!response.ok) return findings;
     const payload: any = await response.json();
     const text = (payload?.candidates?.[0]?.content?.parts ?? []).map((part: any) => typeof part?.text === "string" ? part.text : "").join("");
