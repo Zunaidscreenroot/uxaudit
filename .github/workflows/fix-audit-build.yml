@@ -1,4 +1,4 @@
-name: Fix audit build
+name: Sync audit model allowlist
 
 on:
   push:
@@ -8,62 +8,69 @@ permissions:
   contents: write
 
 jobs:
-  fix:
+  sync:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Make OpenRouter vision failover resilient
+
+      - name: Remove unavailable models from audit engine
+        shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
           import re
+
           p = Path('lib/audit.ts')
           s = p.read_text()
-          start = s.index('async function callVisionModel(')
-          end = s.index('async function analyseWithFreeVision(', start)
-          replacement = r'''async function callVisionModel(apiKey: string, prompt: string, image: Buffer): Promise<string> {
-            const failures: string[] = [];
-            const imageUrl = `data:image/jpeg;base64,${image.toString("base64")}`;
-            const client = new OpenAI({ baseURL: "https://openrouter.ai/api/v1", apiKey, timeout: ANALYSIS_TIMEOUT_MS, maxRetries: 0 });
 
-            // Do explicit model-level failover. Free endpoints are independently rate-limited,
-            // and a 429 from one model must not abort the whole audit.
-            for (const model of VISION_MODELS) {
-              try {
-                const response = await client.chat.completions.create({
-                  model,
-                  messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: imageUrl } }] }],
-                  reasoning: { enabled: false },
-                  max_tokens: 1800,
-                  temperature: 0.1,
-                  response_format: { type: "json_object" },
-                  provider: { allow_fallbacks: true, sort: "latency" },
-                } as any);
-                const raw: any = (response.choices?.[0]?.message as any)?.content;
-                const text = typeof raw === "string" ? raw : Array.isArray(raw) ? raw.map((part: any) => typeof part === "object" && part && "text" in part ? String(part.text ?? "") : "").join("") : "";
-                if (text) return text;
-                failures.push(`${model}: empty response`);
-              } catch (error: any) {
-                const status = Number(error?.status ?? error?.code ?? 0);
-                const message = String(error?.error?.message ?? error?.message ?? "request failed").slice(0, 180);
-                failures.push(`${model}: ${status || "error"} ${message}`);
-                // Briefly back off only for rate limiting; move immediately to the next model for other failures.
-                if (status === 429) await new Promise((resolve) => setTimeout(resolve, 350));
-              }
-            }
-            throw new Error(`All OpenRouter vision models failed. ${failures.join(" | ")}`);
-          }
+          # Keep the production candidate pool identical to the model-health allowlist.
+          s = re.sub(
+              r'const CONFIGURED_VISION_MODELS = \[[\s\S]*?\] as const;',
+              '''const CONFIGURED_VISION_MODELS = [\n  "minimax/minimax-m3:free",\n] as const;''',
+              s,
+              count=1,
+          )
+          s = re.sub(
+              r'const GEMINI_VISION_MODELS = \[[\s\S]*?\] as const;',
+              '''const GEMINI_VISION_MODELS = [\n  "gemini-3.5-flash",\n  "gemini-3.5-flash-lite",\n  "gemini-3.1-flash-lite",\n] as const;''',
+              s,
+              count=1,
+          )
+          s = re.sub(r'\nconst MAX_DISCOVERED_OPENROUTER_MODELS = 40;\n', '\n', s, count=1)
 
-          '''
-          s = s[:start] + replacement + s[end:]
+          # Discovery is intentionally disabled: it was reintroducing deprecated,
+          # unavailable and rate-limited free models after every deployment.
+          s = re.sub(
+              r'\nasync function discoverFreeMultimodalModels\([\s\S]*?\n}\n\nasync function callOpenRouterModel',
+              '\nasync function callOpenRouterModel',
+              s,
+              count=1,
+          )
+
+          s = s.replace('provider: { allow_fallbacks: true, sort: "latency" },', 'provider: { allow_fallbacks: false },')
+          s = s.replace('const openRouterModels = apiKey ? await discoverFreeMultimodalModels(apiKey) : [];', 'const openRouterModels = apiKey ? [...CONFIGURED_VISION_MODELS] : [];')
+
+          # Do not use the retired 3.8 model for judge/enrichment/crop location.
+          s = s.replace('gemini-3.8-flash', 'gemini-3.5-flash')
+          s = s.replace('["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-3.5-flash"]', '["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.5-flash"]')
+          s = s.replace('["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.5-flash"]', '["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.5-flash"]')
+
           p.write_text(s)
           PY
-      - name: Commit build fix
+
+      - name: Verify no retired model IDs remain
+        run: |
+          if grep -nE 'gemma-4-31b|inkling|gemma-4-26b|Sourceful|mimo-v2|molmo-2-8b|gemma-3-27b|nemotron-nano-12b|gemma-3-12b|qwen3-vl|gemini-3\.8-flash|gemini-3\.6-flash|discoverFreeMultimodalModels|MAX_DISCOVERED_OPENROUTER_MODELS' lib/audit.ts; then
+            echo "Retired model reference remains in lib/audit.ts"
+            exit 1
+          fi
+
+      - name: Commit synced audit engine
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add lib/audit.ts
           git diff --cached --quiet && exit 0
-          git commit -m "Fix OpenRouter vision model failover"
+          git commit -m "Sync audit engine with working vision models"
           git push
