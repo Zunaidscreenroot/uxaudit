@@ -61,10 +61,17 @@ export async function POST(request: Request) {
 
           const clientName = results.find((page) => page.clientName && page.clientName.trim() && page.clientName.trim().toLowerCase() !== "unknown client")?.clientName?.trim() || "Unknown client";
           const normalizedResults: AuditResult = { pages: results.map((page) => ({ ...page, clientName })) };
+
+          // Publish the complete analysis to the browser before the database write.
+          // This prevents a slow Supabase write from leaving the user stuck on the
+          // final pipeline step without any visible analysis.
+          send({ type: "result", result: normalizedResults });
+          stage({ id: "complete", label: "Finalise report", detail: "Saving the complete multi-page audit run.", status: "active" });
+
           const auditId = await saveAudit(normalizedResults, files.map((file) => file.name).join(", "));
           (normalizedResults as AuditResult & { auditId?: string }).auditId = auditId;
-          send({ type: "stage", stage: { id: "complete", label: "Finalise report", detail: `${normalizedResults.pages.length} pages saved as one audit run.`, status: "complete" } });
           send({ type: "result", result: normalizedResults });
+          send({ type: "stage", stage: { id: "complete", label: "Finalise report", detail: `${normalizedResults.pages.length} pages saved as one audit run.`, status: "complete" } });
           controller.close();
         } catch (error) {
           console.error("UX multi-page screenshot audit failed", error);
