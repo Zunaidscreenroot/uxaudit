@@ -1,4 +1,5 @@
 import { createAuditFromScreenshot, type AuditStage } from "@/lib/audit";
+import { calibrateMobileMarkers } from "@/lib/mobile-marker-calibration";
 import { saveAudit } from "@/lib/knowledge-base";
 
 export const runtime = "nodejs";
@@ -21,9 +22,10 @@ export async function POST(request: Request) {
         try {
           send({ type: "start" });
           const result = await createAuditFromScreenshot(buffer, file.name || "uploaded-screenshot", stage);
-          const auditId = await saveAudit(result, file.name || "uploaded-screenshot");
-          result.pages = result.pages.map((page) => ({ ...page, id: auditId, createdAt: new Date().toISOString() }));
-          send({ type: "result", result });
+          const calibratedResult = process.env.GEMINI_API_KEY ? await calibrateMobileMarkers(process.env.GEMINI_API_KEY, result, buffer) : result;
+          const auditId = await saveAudit(calibratedResult, file.name || "uploaded-screenshot");
+          calibratedResult.pages = calibratedResult.pages.map((page) => ({ ...page, id: auditId, createdAt: new Date().toISOString() }));
+          send({ type: "result", result: calibratedResult });
           controller.close();
         } catch (error) {
           console.error("UX screenshot audit failed", error);
