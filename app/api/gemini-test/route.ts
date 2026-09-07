@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-const GEMINI_MODEL = "gemini-3.8-flash";
+const GEMINI_MODEL = "gemini-3.5-flash-lite";
 
 export async function GET() {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -36,9 +36,6 @@ export async function GET() {
             },
           ],
           generationConfig: {
-            thinkingConfig: {
-              thinkingLevel: "low",
-            },
             maxOutputTokens: 100,
           },
         }),
