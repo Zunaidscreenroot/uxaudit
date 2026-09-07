@@ -12,12 +12,7 @@ async function supabaseRequest(path: string, init: RequestInit = {}) {
   const { url, key } = config();
   const response = await fetch(`${url}/rest/v1/${path}`, {
     ...init,
-    headers: {
-      apikey: key,
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-      ...(init.headers || {}),
-    },
+    headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...(init.headers || {}) },
     cache: "no-store",
   });
   const text = await response.text();
@@ -50,9 +45,7 @@ export async function saveAudit(result: AuditResult, sourceFilename: string): Pr
   const client = Array.isArray(clients) ? clients[0] : null;
   if (!client?.id) throw new Error("Supabase did not return the client record.");
 
-  const auditTitle = result.pages.length === 1
-    ? page.title
-    : `${result.pages.length} page audit · ${result.pages.map((item) => item.title).join(" · ")}`;
+  const auditTitle = result.pages.length === 1 ? page.title : `${result.pages.length} page audit · ${result.pages.map((item) => item.title).join(" · ")}`;
   const audits = await supabaseRequest("audits", {
     method: "POST",
     headers: { Prefer: "return=representation" },
@@ -74,7 +67,7 @@ export async function saveAudit(result: AuditResult, sourceFilename: string): Pr
   const pagesPayload = result.pages.map((item) => ({
     audit_id: audit.id,
     page_name: item.title,
-    source_filename: item.sourceFilename || item.title,
+    source_filename: item.title,
     title: item.title,
     screenshot: item.screenshot,
     screenshot_width: item.screenshotWidth,
@@ -82,35 +75,17 @@ export async function saveAudit(result: AuditResult, sourceFilename: string): Pr
     view_mode: item.viewMode || "unknown",
     created_at: createdAt,
   }));
-  const storedPages = await supabaseRequest("audit_pages", {
-    method: "POST",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify(pagesPayload),
-  });
+  const storedPages = await supabaseRequest("audit_pages", { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify(pagesPayload) });
   if (!Array.isArray(storedPages) || storedPages.length !== result.pages.length) throw new Error("Supabase did not return all audit pages.");
 
   const pageByTitle = new Map<string, any>();
   for (const storedPage of storedPages) pageByTitle.set(String(storedPage.page_name), storedPage);
-  const findingsPayload = result.pages.flatMap((item, pageIndex) => {
-    const storedPage = pageByTitle.get(item.title);
-    return item.findings.map((finding, findingIndex) => ({
-      audit_id: audit.id,
-      page_id: storedPage?.id,
-      finding_index: pageIndex * 100 + findingIndex,
-      finding,
-    }));
-  });
+  const findingsPayload = result.pages.flatMap((item, pageIndex) => item.findings.map((finding, findingIndex) => ({ audit_id: audit.id, page_id: pageByTitle.get(item.title)?.id, finding_index: pageIndex * 100 + findingIndex, finding })));
   if (findingsPayload.some((item) => !item.page_id)) throw new Error("Supabase did not return page IDs for all audit pages.");
-  if (findingsPayload.length) {
-    await supabaseRequest("audit_findings", {
-      method: "POST",
-      headers: { Prefer: "return=minimal" },
-      body: JSON.stringify(findingsPayload),
-    });
-  }
+  if (findingsPayload.length) await supabaseRequest("audit_findings", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify(findingsPayload) });
 
-  result.auditId = audit.id as string;
-  result.pages = result.pages.map((item, index) => ({ ...item, id: storedPages[index]?.id, auditId: audit.id, createdAt }));
+  (result as AuditResult & { auditId?: string }).auditId = audit.id as string;
+  result.pages = result.pages.map((item, index) => ({ ...item, id: storedPages[index]?.id, createdAt }));
   return audit.id as string;
 }
 
@@ -119,11 +94,7 @@ export async function generateClientReport(auditId: string) {
   if (!audit) throw new Error("Audit not found.");
   const html = await buildClientReportHtml(audit);
   const generatedAt = new Date().toISOString();
-  await supabaseRequest(`audits?id=eq.${encodeURIComponent(auditId)}`, {
-    method: "PATCH",
-    headers: { Prefer: "return=minimal" },
-    body: JSON.stringify({ report_html: html, report_generated_at: generatedAt }),
-  });
+  await supabaseRequest(`audits?id=eq.${encodeURIComponent(auditId)}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ report_html: html, report_generated_at: generatedAt }) });
   return { auditId, generatedAt, html };
 }
 
@@ -131,17 +102,9 @@ export async function deleteAudit(auditId: string) {
   const audit = await supabaseRequest(`audits?select=id,client_id&id=eq.${encodeURIComponent(auditId)}&limit=1`);
   const row = Array.isArray(audit) ? audit[0] : null;
   if (!row?.id) throw new Error("Audit not found.");
-  await supabaseRequest(`audits?id=eq.${encodeURIComponent(auditId)}`, {
-    method: "DELETE",
-    headers: { Prefer: "return=minimal" },
-  });
+  await supabaseRequest(`audits?id=eq.${encodeURIComponent(auditId)}`, { method: "DELETE", headers: { Prefer: "return=minimal" } });
   const remaining = await supabaseRequest(`audits?select=id&client_id=eq.${encodeURIComponent(row.client_id)}&limit=1`);
-  if (!Array.isArray(remaining) || remaining.length === 0) {
-    await supabaseRequest(`audit_clients?id=eq.${encodeURIComponent(row.client_id)}`, {
-      method: "DELETE",
-      headers: { Prefer: "return=minimal" },
-    });
-  }
+  if (!Array.isArray(remaining) || remaining.length === 0) await supabaseRequest(`audit_clients?id=eq.${encodeURIComponent(row.client_id)}`, { method: "DELETE", headers: { Prefer: "return=minimal" } });
   return { deleted: true, auditId };
 }
 
@@ -161,37 +124,31 @@ export async function getAudit(auditId: string) {
   const findingRows = await supabaseRequest(`audit_findings?select=id,page_id,finding_index,finding,created_at&audit_id=eq.${encodeURIComponent(auditId)}&order=finding_index.asc`);
   const rows = Array.isArray(findingRows) ? findingRows : [];
   const storedPages = Array.isArray(audit.audit_pages) ? audit.audit_pages : [];
-  const pages: Array<AuditPage & { auditId: string }> = storedPages.length
-    ? storedPages.map((page: any) => ({
-        id: page.id,
-        auditId: audit.id,
-        clientName: audit.client_name,
-        viewMode: page.view_mode,
-        url: "",
-        title: page.title || page.page_name,
-        screenshot: page.screenshot,
-        screenshotWidth: page.screenshot_width,
-        screenshotHeight: page.screenshot_height,
-        findings: rows.filter((row: any) => row.page_id === page.id).map((row: any) => row.finding as Finding),
-        createdAt: page.created_at || audit.created_at,
-      }))
-    : [{
-        id: audit.id,
-        auditId: audit.id,
-        clientName: audit.client_name,
-        viewMode: audit.view_mode,
-        url: "",
-        title: audit.title,
-        screenshot: audit.screenshot,
-        screenshotWidth: audit.screenshot_width,
-        screenshotHeight: audit.screenshot_height,
-        findings: rows.map((row: any) => row.finding as Finding),
-        createdAt: audit.created_at,
-      }];
+  const pages = storedPages.length ? storedPages.map((page: any) => ({
+    id: page.id,
+    auditId: audit.id,
+    clientName: audit.client_name,
+    viewMode: page.view_mode,
+    url: "",
+    title: page.title || page.page_name,
+    screenshot: page.screenshot,
+    screenshotWidth: page.screenshot_width,
+    screenshotHeight: page.screenshot_height,
+    findings: rows.filter((row: any) => row.page_id === page.id).map((row: any) => row.finding as Finding),
+    createdAt: page.created_at || audit.created_at,
+  })) : [{
+    id: audit.id,
+    auditId: audit.id,
+    clientName: audit.client_name,
+    viewMode: audit.view_mode,
+    url: "",
+    title: audit.title,
+    screenshot: audit.screenshot,
+    screenshotWidth: audit.screenshot_width,
+    screenshotHeight: audit.screenshot_height,
+    findings: rows.map((row: any) => row.finding as Finding),
+    createdAt: audit.created_at,
+  }];
 
-  return {
-    ...audit,
-    pages,
-    findings: rows,
-  };
+  return { ...audit, pages, findings: rows };
 }
