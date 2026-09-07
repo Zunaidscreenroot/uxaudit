@@ -15,15 +15,19 @@ PRIMARY MVP GOAL
 The purpose of this audit is to produce persuasive, client-ready EVIDENCE of UX problems that can justify a redesign engagement. Do not focus on scoring the website. Do not produce a generic checklist. Find concrete visible problems and explain exactly what a client can see on their page.
 
 MULTI-MODEL ANALYSIS CONTRACT
-This analysis is one independent opinion in a multi-model audit router. Be rigorous rather than agreeable. Inspect the screenshot systematically from top to bottom and assess each major visible area independently. At minimum consider:
+This analysis is one independent opinion in a multi-model audit router. Be rigorous rather than agreeable. Inspect the screenshot systematically from top to bottom and assess each major visible area independently. Do not stop after finding the single strongest issue.
+
+Coverage pass — explicitly inspect every applicable area before selecting findings:
 1. Header / primary navigation
 2. Hero / first impression / primary CTA
 3. Main content sections and information hierarchy
 4. Cards, calculators, forms, filters, controls or product modules when present
 5. Conversion / CTA areas and trust signals when present
-6. Footer / secondary navigation when visible
-7. Overall visual system, repetition, spacing, density and scanning across the full page
-A finding must name the specific area it came from. Do not let a strong issue in one area cause you to ignore the rest of the screenshot.
+6. Promotional/content banners when present
+7. Footer / secondary navigation when visible
+8. Overall visual system, repetition, spacing, density and scanning across the full page
+
+A finding must name the specific area it came from. Aim for approximately 7 distinct, independently useful findings when the screenshot supports them. Prefer breadth across different page regions over multiple observations about the same component. Never manufacture a finding merely to hit the target.
 
 SCREENROOT FRAMEWORK
 1. Language & tone — Evaluate tone of voice, narrative flow, clarity and consistency of copy.
@@ -36,7 +40,9 @@ SCREENROOT FRAMEWORK
 8. Web performance — Only report visible evidence such as obviously broken, unfinished, or missing content. Never infer load-time metrics.
 
 AUDIT DEPTH
-- Produce 5–8 strong, meaningful, client-facing UX findings when the screenshot supports them.
+- Target 6–8 strong, meaningful, client-facing UX findings when the screenshot supports them; approximately 7 is ideal.
+- Distribute findings across the page rather than clustering them in the hero.
+- A strong audit can contain separate findings for navigation, hero/CTA hierarchy, content/card systems, forms/calculators, promotional modules, messaging, and footer when those areas visibly exist.
 - Prefer findings that demonstrate a real redesign opportunity: unclear hierarchy, competing actions, excessive content density, confusing grouping, repetitive modules, weak CTA prioritization, ambiguous labels, poor visual scanning, inconsistent patterns, or unnecessary cognitive load.
 - Use HIGH when the issue materially harms comprehension, trust, task completion, discoverability, or decision-making.
 - Use MEDIUM for meaningful friction that should be addressed in a redesign.
@@ -53,15 +59,28 @@ STRICT EVIDENCE VALIDITY
 - Never use one component as evidence for a different component.
 - If the evidence is weak or ambiguous, omit the finding.
 
-EVIDENCE LOCATION
+EVIDENCE LOCATION + PRECISE VISUAL CROPS
 Each evidence item must contain both a human-readable location AND an INTERNAL visual crop box.
 - section: the page section, e.g. "Primary navigation", "Hero", "Loan calculator", "Product cards", "Footer"
-- element: the exact visible UI, e.g. "four competing CTA buttons", "EMI result card", "mega-menu labels"
+- element: the exact visible UI, e.g. "three competing CTA buttons", "EMI result card", "mega-menu labels"
 - detail: describe exactly what the client can see and why it demonstrates the UX issue.
-- crop: normalized coordinates from 0 to 1 relative to the supplied screenshot. x/y are the top-left and width/height define the crop size. Include the exact element plus a little surrounding context. Do not use a full-page crop unless the evidence genuinely concerns the whole page.
+- crop: normalized coordinates from 0 to 1 relative to the supplied screenshot. x/y are the top-left and width/height define the crop size.
+
+CROP PRECISION IS CRITICAL:
+- Crop the smallest useful rectangle that contains the exact evidence plus only a small amount of surrounding context.
+- If the finding is about hero/banner CTAs, crop the hero/banner headline and CTA group only. Do NOT include the rest of the page, lower cards, or unrelated sections.
+- If the finding is about a navigation bar, crop only the navigation/header row.
+- If the finding is about product cards, crop only the relevant card row.
+- If the finding is about a form/calculator, crop only the form/calculator module.
+- If the finding is about a promotional banner, crop only that banner.
+- If the finding is about the footer, crop only the footer.
+- For localized component findings, the crop should normally be no more than about 30% of the screenshot height. Larger crops are acceptable only for a genuinely large hero/banner or multi-region issue.
+- Never use a full-page or near-full-page crop for a localized finding.
+- Do not use the same crop for unrelated findings.
+- The crop should visually resemble a designer's screenshot selection around the exact problem, not a page thumbnail.
 The crop coordinates are INTERNAL metadata only. They will be used by the application to generate visual evidence thumbnails and will never be displayed as coordinates to the client.
 `;
 
 export function buildAuditPrompt(url: string, width: number, height: number): string {
-  return `${GEMINI_AUDIT_INSTRUCTIONS}\n\nTASK\nAudit the complete desktop landing page for ${url}. The supplied image is ${width}×${height}px. Review it from top to bottom. Treat header, hero, main content, conversion areas and footer as separate audit passes before forming your final findings.\n\nFor every candidate issue:\n1. Identify the exact visible UI that proves it.\n2. Name the page section where that UI appears.\n3. Describe the visible evidence in concrete client-friendly language.\n4. Explain the UX consequence without inventing hidden behavior.\n5. Assign HIGH, MEDIUM, or LOW based on user impact.\n6. Create an accurate internal crop box around the visible evidence.\n7. Omit it if the screenshot does not clearly support it.\n\nThe strongest findings should make a prospective client immediately understand: "this is a problem on our website, this is where it happens, and this is why it matters."\n\nReturn 5–8 findings when defensible, otherwise return the defensible number. Return JSON only in this shape:\n{"findings":[{"id":"finding-1","severity":"high","category":"Information hierarchy","title":"...","description":"...","recommendation":"...","screenrootTasks":["..."],"devTasks":["..."],"uxPerspective":{"law":"...","definition":"...","assessment":"..."},"evidence":[{"section":"Hero","element":"Primary headline and CTA group","detail":"The hero presents ...","crop":{"x":0.10,"y":0.05,"width":0.55,"height":0.20}}]}]}\n\nAllowed categories: ${AUDIT_CATEGORIES.join(", ")}. Severity must be exactly high, medium, or low. Crop values must be numeric and normalized 0..1. Return an empty findings array only when no meaningful visible UX issue can be defended from the screenshot.`;
+  return `${GEMINI_AUDIT_INSTRUCTIONS}\n\nTASK\nAudit the complete desktop landing page for ${url}. The supplied image is ${width}×${height}px. Review it from top to bottom. Treat header, hero, main content, conversion areas, promotional modules and footer as separate audit passes before forming your final findings.\n\nMANDATORY COVERAGE PASS\nBefore writing the final JSON, silently check each applicable region: header/navigation, hero/primary CTA, main content/information hierarchy, cards/forms/calculators, conversion/trust modules, promotional banners, footer, and overall density/scanning. Select distinct issues from different regions when the screenshot provides defensible evidence. Aim for 6–8 findings, with approximately 7 preferred, but omit a region when it does not contain a real issue.\n\nFor every candidate issue:\n1. Identify the exact visible UI that proves it.\n2. Name the page section where that UI appears.\n3. Describe the visible evidence in concrete client-friendly language.\n4. Explain the UX consequence without inventing hidden behavior.\n5. Assign HIGH, MEDIUM, or LOW based on user impact.\n6. Create a TIGHT internal crop box around the exact visible evidence.\n7. Check the crop visually: it must contain the discussed element, exclude unrelated page sections, and be materially smaller than the full screenshot for localized issues.\n8. Omit it if the screenshot does not clearly support it.\n\nExample of correct crop behavior: if the finding says "competing CTAs in the hero/banner", the crop must show the hero/banner headline and those CTA buttons only. It should not show the product cards, calculator, promotional banner, or footer below it.\n\nThe strongest findings should make a prospective client immediately understand: "this is a problem on our website, this is where it happens, and this is why it matters." The report should feel like a human UX consultant selected specific areas of the page, not like an automated full-page checklist.\n\nReturn 6–8 findings when defensible, targeting approximately 7. Return JSON only in this shape:\n{"findings":[{"id":"finding-1","severity":"high","category":"Information hierarchy","title":"...","description":"...","recommendation":"...","screenrootTasks":["..."],"devTasks":["..."],"uxPerspective":{"law":"...","definition":"...","assessment":"..."},"evidence":[{"section":"Hero","element":"Primary headline and CTA group","detail":"The hero presents ...","crop":{"x":0.10,"y":0.05,"width":0.55,"height":0.16}}]}]}\n\nAllowed categories: ${AUDIT_CATEGORIES.join(", ")}. Severity must be exactly high, medium, or low. Crop values must be numeric and normalized 0..1. Return an empty findings array only when no meaningful visible UX issue can be defended from the screenshot.`;
 }
