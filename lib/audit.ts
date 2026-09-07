@@ -14,7 +14,7 @@ type Capture = { buffer: Buffer; width: number; height: number; analysisBuffer: 
 type VisualObservation = { id: string; section: string; element: string; issue: string; whyItMatters: string; marker: MarkerPoint };
 type VisualPass = { pageSummary: string; observations: VisualObservation[] };
 
-const DEFAULT_VISION_MODEL = "gemini-3.5-flash-lite";
+const DEFAULT_VISION_MODEL = "gemini-3.1-flash-lite";
 const DEFAULT_TEXT_MODEL = "gemini-3.1-flash-lite";
 const GEMINI_TIMEOUT_MS = 30000;
 const MAX_SCREENSHOT_BYTES = 15 * 1024 * 1024;
@@ -39,10 +39,10 @@ function extractJson(text: string): unknown | null {
 }
 
 async function geminiGenerate(apiKey: string, model: string, parts: Array<Record<string, unknown>>, maxOutputTokens = 6000) {
-  const fallbackModels = Array.from(new Set([model, "gemini-3.5-flash-lite", "gemini-2.5-flash-lite"]));
+  const fallbackModels = Array.from(new Set(["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-2.5-flash-lite", model]));
   let lastError = "Gemini request failed.";
   for (const candidateModel of fallbackModels) {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${candidateModel}:generateContent`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
@@ -59,7 +59,10 @@ async function geminiGenerate(apiKey: string, model: string, parts: Array<Record
       const body = await response.text().catch(() => "");
       lastError = `Gemini ${candidateModel} returned HTTP ${response.status}${body ? `: ${body.slice(0, 220)}` : ""}`;
       if (response.status !== 429) break;
-      if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 1500));
+      const retryAfter = response.headers.get("retry-after");
+      const retrySeconds = retryAfter ? Number(retryAfter) : NaN;
+      const delayMs = Number.isFinite(retrySeconds) ? Math.min(10000, Math.max(1000, retrySeconds * 1000)) : 1500 * (attempt + 1);
+      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, delayMs));
     }
   }
   throw new Error(lastError);
@@ -176,7 +179,7 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   const capture: Capture = { buffer, width, height, analysisBuffer, title: filename.replace(/\.[^.]+$/, "") || "Uploaded screenshot" };
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("Configure GEMINI_API_KEY before running an audit.");
-  const visionModel = process.env.GEMINI_VISION_MODEL || DEFAULT_VISION_MODEL;
+  const visionModel = DEFAULT_VISION_MODEL;
   const textModel = process.env.GEMINI_TEXT_MODEL || DEFAULT_TEXT_MODEL;
 
   onStage?.({ id: "capture", label: "Preparing screenshot", detail: `Using the original ${width} × ${height}px screenshot; no visual crops will be generated.`, status: "complete" });
