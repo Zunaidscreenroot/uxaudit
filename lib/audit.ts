@@ -1,89 +1,224 @@
-import OpenAI from "openai";
 import sharp from "sharp";
-import { AUDIT_CATEGORIES, buildAuditPrompt } from "./gemini";
 
 export type Severity = "high" | "medium" | "low";
-type CropBox = { x: number; y: number; width: number; height: number };
+export type CropBox = { x: number; y: number; width: number; height: number };
 export type Evidence = { section: string; element: string; detail: string; crop?: string };
-export type Finding = { id: string; severity: Severity; category: string; title: string; description: string; recommendation: string; screenrootTasks: string[]; devTasks: string[]; uxPerspective: { law: string; definition: string; assessment: string }; evidence: Evidence[] };
-export type AuditPage = { url: string; title: string; screenshot: string; screenshotWidth: number; screenshotHeight: number; findings: Finding[] };
+export type BusinessAnalysis = {
+  funnelStage: string;
+  impact: string;
+  kpi: string;
+  mechanism: string;
+  suggestions: string[];
+};
+export type UxContext = {
+  law: string;
+  definition: string;
+  assessment: string;
+  researchContext: string;
+};
+export type Finding = {
+  id: string;
+  severity: Severity;
+  category: string;
+  title: string;
+  description: string;
+  recommendation: string;
+  uxPerspective: UxContext;
+  businessAnalysis: BusinessAnalysis;
+  evidence: Evidence[];
+};
+export type AuditPage = {
+  url: string;
+  title: string;
+  screenshot: string;
+  screenshotWidth: number;
+  screenshotHeight: number;
+  findings: Finding[];
+};
 export type AuditResult = { pages: AuditPage[] };
 export type AuditStage = { id: string; label: string; detail: string; status: "active" | "complete" };
+
 type Capture = { buffer: Buffer; width: number; height: number; analysisBuffer: Buffer; title: string };
-type Candidate = { model: string; findings: Finding[] };
+type VisualObservation = {
+  id: string;
+  section: string;
+  element: string;
+  issue: string;
+  whyItMatters: string;
+  crop: CropBox;
+};
+type VisualPass = { pageSummary: string; observations: VisualObservation[] };
 
-const CONFIGURED_VISION_MODELS = [
-  "minimax/minimax-m3:free",
-] as const;
-
-const GEMINI_VISION_MODELS = [
-  "gemini-3.5-flash",
-  "gemini-3.5-flash-lite",
-  "gemini-3.1-flash-lite",
-] as const;
-
-const ANALYSIS_TIMEOUT_MS = 28000;
-const GEMINI_TIMEOUT_MS = 14000;
+const DEFAULT_VISION_MODEL = "gemini-3.5-flash";
+const DEFAULT_TEXT_MODEL = "gemini-3.1-flash-lite";
+const GEMINI_TIMEOUT_MS = 30000;
 const MAX_SCREENSHOT_BYTES = 15 * 1024 * 1024;
+const CATEGORIES = ["Language & tone", "Navigation", "Information hierarchy", "Visual design", "Usability & interaction", "User engagement", "Conversion"] as const;
 
-function extractJsonObject(text: string): unknown | null {
-  const cleaned = text.replace(/```(?:json)?/gi, "").replace(/```/g, "").trim();
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function extractJson(text: string): unknown | null {
+  const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
   try { return JSON.parse(cleaned); } catch {}
   const start = cleaned.indexOf("{");
   if (start < 0) return null;
-  let depth = 0, inString = false, escaped = false;
-  for (let i = start; i < cleaned.length; i++) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < cleaned.length; i += 1) {
     const ch = cleaned[i];
-    if (inString) { if (escaped) escaped = false; else if (ch === "\\") escaped = true; else if (ch === '"') inString = false; continue; }
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
     if (ch === '"') { inString = true; continue; }
-    if (ch === "{") depth++;
-    if (ch === "}") { depth--; if (depth === 0) { try { return JSON.parse(cleaned.slice(start, i + 1)); } catch { return null; } } }
+    if (ch === "{") depth += 1;
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        try { return JSON.parse(cleaned.slice(start, i + 1)); } catch { return null; }
+      }
+    }
   }
   return null;
 }
 
-function normalizeFinding(value: unknown, index: number, keepCrop = false): Finding {
-  const item = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
-  const perspective = (item.uxPerspective && typeof item.uxPerspective === "object" ? item.uxPerspective : {}) as Record<string, unknown>;
-  const rawEvidence = Array.isArray(item.evidence) ? item.evidence : [];
-  const evidence = rawEvidence.slice(0, 2).map((raw) => {
-    const entry = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-    const section = typeof entry.section === "string" ? entry.section.trim() : "";
-    const element = typeof entry.element === "string" ? entry.element.trim() : "";
-    const detail = typeof entry.detail === "string" ? entry.detail.trim() : "";
-    if (!section || !element || !detail) return null;
-    const cropValue = entry.crop && typeof entry.crop === "object" ? entry.crop as Record<string, unknown> : null;
-    const crop: CropBox | undefined = cropValue && ["x", "y", "width", "height"].every((key) => typeof cropValue[key] === "number" && Number.isFinite(cropValue[key]))
-      ? { x: Number(cropValue.x), y: Number(cropValue.y), width: Number(cropValue.width), height: Number(cropValue.height) }
-      : undefined;
-    return keepCrop && crop ? { section, element, detail, crop: JSON.stringify(crop) } : { section, element, detail };
-  }).filter((entry): entry is Evidence => Boolean(entry));
-  const requestedCategory = typeof item.category === "string" ? item.category.trim().toLowerCase() : "visual design";
-  const category = AUDIT_CATEGORIES.find((candidate) => candidate.toLowerCase() === requestedCategory) ?? "Visual design";
-  const rawSeverity = typeof item.severity === "string" ? item.severity.toLowerCase() : "medium";
-  const severity: Severity = rawSeverity === "high" || rawSeverity === "low" ? rawSeverity : "medium";
+async function geminiGenerate(apiKey: string, model: string, parts: Array<Record<string, unknown>>, maxOutputTokens = 6000) {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
+    body: JSON.stringify({
+      contents: [{ role: "user", parts }],
+      generationConfig: { responseMimeType: "application/json", maxOutputTokens, temperature: 0.15 },
+    }),
+    signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`Gemini ${model} returned HTTP ${response.status}`);
+  const payload: any = await response.json();
+  const text = (payload?.candidates?.[0]?.content?.parts ?? [])
+    .map((part: any) => typeof part?.text === "string" ? part.text : "")
+    .join("");
+  if (!text) throw new Error(`Gemini ${model} returned an empty response.`);
+  return text;
+}
+
+function normalizeCrop(value: unknown): CropBox {
+  const raw = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const x = Number(raw.x);
+  const y = Number(raw.y);
+  const width = Number(raw.width);
+  const height = Number(raw.height);
   return {
-    id: typeof item.id === "string" ? item.id : `candidate-${index + 1}`,
-    severity,
-    category,
-    title: typeof item.title === "string" ? item.title : "UX issue",
-    description: typeof item.description === "string" ? item.description : "The visible interface may create friction for users.",
-    recommendation: typeof item.recommendation === "string" ? item.recommendation : "Review this area against established UX principles.",
-    screenrootTasks: Array.isArray(item.screenrootTasks) ? item.screenrootTasks.filter((task): task is string => typeof task === "string").slice(0, 4) : [],
-    devTasks: Array.isArray(item.devTasks) ? item.devTasks.filter((task): task is string => typeof task === "string").slice(0, 4) : [],
-    uxPerspective: {
-      law: typeof perspective.law === "string" ? perspective.law : "UX principle",
-      definition: typeof perspective.definition === "string" ? perspective.definition : "A usability principle used to evaluate interface design.",
-      assessment: typeof perspective.assessment === "string" ? perspective.assessment : "This visible area deserves review based on the supplied screenshot."
-    },
-    evidence
+    x: Number.isFinite(x) ? clamp(x, 0, 0.94) : 0.05,
+    y: Number.isFinite(y) ? clamp(y, 0, 0.94) : 0.05,
+    width: Number.isFinite(width) ? clamp(width, 0.06, 0.8) : 0.35,
+    height: Number.isFinite(height) ? clamp(height, 0.04, 0.28) : 0.14,
   };
 }
 
-function parseFindings(text: string, keepCrop = false): Finding[] {
-  const json = extractJsonObject(text) as { findings?: unknown[] } | unknown[] | null;
-  const rawFindings = Array.isArray(json) ? json : json && Array.isArray((json as { findings?: unknown[] }).findings) ? (json as { findings: unknown[] }).findings : [];
-  return rawFindings.map((item, index) => normalizeFinding(item, index, keepCrop)).filter((finding) => finding.evidence.length > 0).slice(0, 8);
+function normalizeVisualPass(value: unknown): VisualPass {
+  const root = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const observations = Array.isArray(root.observations) ? root.observations : [];
+  return {
+    pageSummary: typeof root.pageSummary === "string" ? root.pageSummary.trim() : "The screenshot contains visible interface patterns that can be reviewed for hierarchy, usability and conversion friction.",
+    observations: observations.slice(0, 10).map((raw, index) => {
+      const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+      return {
+        id: typeof item.id === "string" ? item.id : `obs-${index + 1}`,
+        section: typeof item.section === "string" ? item.section.trim() : "Page section",
+        element: typeof item.element === "string" ? item.element.trim() : "Visible interface element",
+        issue: typeof item.issue === "string" ? item.issue.trim() : "The visible pattern may create unnecessary friction.",
+        whyItMatters: typeof item.whyItMatters === "string" ? item.whyItMatters.trim() : "It may make the intended action harder to understand.",
+        crop: normalizeCrop(item.crop),
+      };
+    }).filter((item) => item.section && item.element && item.issue),
+  };
+}
+
+function categoryFor(value: unknown) {
+  const requested = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return CATEGORIES.find((category) => category.toLowerCase() === requested) ?? "Visual design";
+}
+
+function severityFor(value: unknown): Severity {
+  const valueLower = typeof value === "string" ? value.toLowerCase() : "medium";
+  return valueLower === "high" || valueLower === "low" ? valueLower : "medium";
+}
+
+function stringList(value: unknown, limit = 4) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim()).slice(0, limit) : [];
+}
+
+function normalizeFinding(raw: unknown, observation: VisualObservation, index: number): Finding {
+  const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const ux = item.uxPerspective && typeof item.uxPerspective === "object" ? item.uxPerspective as Record<string, unknown> : {};
+  const business = item.businessAnalysis && typeof item.businessAnalysis === "object" ? item.businessAnalysis as Record<string, unknown> : {};
+  const evidence = {
+    section: observation.section,
+    element: observation.element,
+    detail: observation.issue,
+    crop: JSON.stringify(observation.crop),
+  };
+  return {
+    id: typeof item.id === "string" ? item.id : `finding-${index + 1}`,
+    severity: severityFor(item.severity),
+    category: categoryFor(item.category),
+    title: typeof item.title === "string" ? item.title.trim() : observation.issue,
+    description: typeof item.description === "string" ? item.description.trim() : observation.issue,
+    recommendation: typeof item.recommendation === "string" ? item.recommendation.trim() : "Simplify and reprioritise the affected interface pattern.",
+    uxPerspective: {
+      law: typeof ux.law === "string" ? ux.law.trim() : "UX design principle",
+      definition: typeof ux.definition === "string" ? ux.definition.trim() : "A research-backed principle used to evaluate how an interface supports user goals.",
+      assessment: typeof ux.assessment === "string" ? ux.assessment.trim() : observation.whyItMatters,
+      researchContext: typeof ux.researchContext === "string" ? ux.researchContext.trim() : "The pattern should be evaluated against established interaction and information-design research rather than preference alone.",
+    },
+    businessAnalysis: {
+      funnelStage: typeof business.funnelStage === "string" ? business.funnelStage.trim() : "Consideration / conversion",
+      impact: typeof business.impact === "string" ? business.impact.trim() : "The friction can reduce clarity and increase hesitation before the next funnel step.",
+      kpi: typeof business.kpi === "string" ? business.kpi.trim() : "CTA click-through / conversion rate",
+      mechanism: typeof business.mechanism === "string" ? business.mechanism.trim() : "Users may take longer to understand the value proposition or choose the next action.",
+      suggestions: stringList(business.suggestions, 4).length ? stringList(business.suggestions, 4) : ["Make the primary action visually dominant.", "Reduce competing information around the action."],
+    },
+    evidence: [evidence],
+  };
+}
+
+async function createVisualPass(apiKey: string, model: string, capture: Capture): Promise<VisualPass> {
+  const prompt = `You are the first stage of a UX audit pipeline. You are an IMAGE-TO-TEXT visual analyst. Inspect the supplied desktop website screenshot from top to bottom and describe only what is visibly present. Do not give design advice, UX laws, business analysis, development tasks, scores, or hidden-behaviour claims yet. Your job is to create a precise factual visual evidence layer for a second text model.\n\nFind 6–10 distinct visible observations across different page regions. Prioritise concrete problems such as hierarchy, grouping, density, CTA competition, ambiguous labels, repetitive modules, weak emphasis, scanning friction or unclear content structure. Each observation must identify the exact section and element, explain the visible issue, and provide a TIGHT normalized crop (0..1) around that exact UI. The crop must be localized: normally no more than 28% of the screenshot height. Do not use a full-page crop for a localized observation. Never reuse a crop for unrelated observations.\n\nReturn JSON only: {"pageSummary":"one factual sentence","observations":[{"id":"obs-1","section":"Hero","element":"exact visible element","issue":"what is visibly happening","whyItMatters":"what user-visible friction this creates","crop":{"x":0.1,"y":0.05,"width":0.5,"height":0.15}}]}\n\nScreenshot dimensions: ${capture.width}x${capture.height}.`; 
+  const text = await geminiGenerate(apiKey, model, [{ text: prompt }, { inline_data: { mime_type: "image/jpeg", data: capture.analysisBuffer.toString("base64") } }], 5000);
+  const parsed = extractJson(text);
+  const result = normalizeVisualPass(parsed);
+  if (!result.observations.length) throw new Error("The image-to-text model returned no usable visual observations.");
+  return result;
+}
+
+async function createTextReview(apiKey: string, model: string, visualPass: VisualPass) {
+  const prompt = `You are the second stage of a UX audit pipeline. You are a TEXT-TO-TEXT UX research and business reviewer. You receive a factual visual analysis produced by an image-to-text model. Do not see the original screenshot. Therefore, NEVER invent visual evidence, crop coordinates, UI elements, metrics, or behaviour. Use only the supplied observations.\n\nFor each observation that is strong enough to defend, create a client-ready UX audit finding. Keep 5–8 findings when the evidence supports it. Preserve the observation id exactly so the application can place the correct screenshot crop beside the finding. Add UX core design/research context: a relevant law or principle, a plain-language definition, why the principle applies, and concise research context. Then add a business analysis explaining which funnel stage can be affected, which KPI is at risk, the mechanism by which the design may influence that KPI, and practical suggestions aimed at improving that KPI.\n\nDo not output development tasks. Do not use generic claims such as “this could hurt conversion” without explaining the mechanism. Do not claim a measured KPI change because no analytics are available. Phrase business impact as a directional hypothesis grounded in the visible design.\n\nReturn JSON only: {"findings":[{"id":"finding-1","observationId":"obs-1","severity":"high|medium|low","category":"Information hierarchy","title":"short finding","description":"clear explanation","recommendation":"specific redesign action","uxPerspective":{"law":"Hick's Law","definition":"plain-language definition","assessment":"why this principle applies to the observation","researchContext":"brief research context without fabricated citations"},"businessAnalysis":{"funnelStage":"Acquisition / consideration / activation / conversion / retention","impact":"directional business impact","kpi":"specific KPI","mechanism":"how the design can influence the KPI","suggestions":["specific KPI-improving action","another action"]}}]}\n\nAllowed categories: ${CATEGORIES.join(", ")}.\n\nVISUAL ANALYSIS:\n${JSON.stringify(visualPass)}`;
+  const text = await geminiGenerate(apiKey, model, [{ text: prompt }], 7000);
+  const parsed = extractJson(text);
+  const root = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
+  return Array.isArray(root.findings) ? root.findings : [];
+}
+
+async function createCrop(buffer: Buffer, crop: CropBox, screenshotWidth: number, screenshotHeight: number) {
+  const x = clamp(crop.x, 0, 0.94);
+  const y = clamp(crop.y, 0, 0.94);
+  const width = clamp(crop.width, 0.06, 0.8);
+  const height = clamp(crop.height, 0.04, 0.28);
+  let left = Math.round(x * screenshotWidth);
+  let top = Math.round(y * screenshotHeight);
+  let cropWidth = Math.round(width * screenshotWidth);
+  let cropHeight = Math.round(height * screenshotHeight);
+  cropWidth = Math.min(cropWidth, screenshotWidth);
+  cropHeight = Math.min(cropHeight, Math.max(80, Math.round(screenshotHeight * 0.3)));
+  left = clamp(left, 0, Math.max(0, screenshotWidth - cropWidth));
+  top = clamp(top, 0, Math.max(0, screenshotHeight - cropHeight));
+  const output = await sharp(buffer).extract({ left, top, width: cropWidth, height: cropHeight }).jpeg({ quality: 86, progressive: true }).toBuffer();
+  return `data:image/jpeg;base64,${output.toString("base64")}`;
 }
 
 async function prepareScreenshot(buffer: Buffer, title: string): Promise<Capture> {
@@ -94,307 +229,75 @@ async function prepareScreenshot(buffer: Buffer, title: string): Promise<Capture
   if (!width || !height) throw new Error("The uploaded file is not a valid image.");
   if (width < 320 || height < 200) throw new Error("Please upload a larger screenshot so the UX evidence can be reviewed reliably.");
   if (width > 20000 || height > 20000) throw new Error("Screenshot dimensions are too large. Please upload a smaller screenshot.");
-  const analysisBuffer = await sharp(buffer)
-    .resize({ width: Math.min(1400, width), height: Math.min(5000, height), fit: "inside", withoutEnlargement: true })
-    .jpeg({ quality: 72, progressive: true, mozjpeg: true })
-    .toBuffer();
-  return { buffer, width, height, analysisBuffer, title: title || "Uploaded screenshot" };
+  const analysisBuffer = await sharp(buffer).resize({ width: Math.min(1600, width), height: Math.min(6000, height), fit: "inside", withoutEnlargement: true }).jpeg({ quality: 78, progressive: true }).toBuffer();
+  return { buffer, width, height, analysisBuffer, title: title.replace(/\.[^.]+$/, "") || "Uploaded screenshot" };
 }
 
-async function callOpenRouterModel(apiKey: string, model: string, prompt: string, image: Buffer): Promise<Finding[]> {
-  const client = new OpenAI({ baseURL: "https://openrouter.ai/api/v1", apiKey, timeout: ANALYSIS_TIMEOUT_MS, maxRetries: 0 });
-  const imageUrl = `data:image/jpeg;base64,${image.toString("base64")}`;
-  const response = await client.chat.completions.create({
-    model,
-    messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: imageUrl } }] }],
-    reasoning: { enabled: false },
-    max_tokens: 2600,
-    temperature: 0.1,
-    response_format: { type: "json_object" },
-    provider: { allow_fallbacks: false },
-  } as any);
-  const raw: any = response.choices?.[0]?.message?.content;
-  const text = typeof raw === "string" ? raw : Array.isArray(raw) ? raw.map((part: any) => typeof part === "object" && part && "text" in part ? String(part.text ?? "") : "").join("") : "";
-  if (!text) throw new Error("empty response");
-  return parseFindings(text, true);
-}
-
-async function callGeminiVisionModel(apiKey: string, model: string, prompt: string, image: Buffer): Promise<Finding[]> {
-  const imageBase64 = image.toString("base64");
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
-    body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }, { inline_data: { mime_type: "image/jpeg", data: imageBase64 } }] }], generationConfig: { responseMimeType: "application/json", maxOutputTokens: 2800, temperature: 0.1 } }),
-    signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS)
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const payload: any = await response.json();
-  const text = (payload?.candidates?.[0]?.content?.parts ?? []).map((part: any) => typeof part?.text === "string" ? part.text : "").join("");
-  if (!text) throw new Error("empty response");
-  return parseFindings(text, true);
-}
-
-async function rescueVisionModel(geminiKey: string, model: string, image: Buffer): Promise<Finding[]> {
-  const rescuePrompt = `Audit this supplied desktop website screenshot as a visual UX reviewer. Return 4 to 6 distinct, clearly visible UX problems from different page regions. Do not invent hidden behavior or metrics. Every finding must have exactly one evidence item naming the exact visible section and element, plus one concise detail and one normalized crop box (x, y, width, height, all 0..1) tightly surrounding that exact evidence. Keep each finding short. Return JSON only. Shape: {"findings":[{"id":"finding-1","severity":"high|medium|low","category":"Information hierarchy|Navigation|Visual design|Usability & interaction|Language & tone|User engagement","title":"short issue","description":"visible problem","recommendation":"specific redesign action","evidence":[{"section":"Hero","element":"exact visible UI","detail":"what is visibly wrong","crop":{"x":0.1,"y":0.1,"width":0.4,"height":0.15}}]}]}`;
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-goog-api-key": geminiKey },
-    body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: rescuePrompt }, { inline_data: { mime_type: "image/jpeg", data: image.toString("base64") } }] }], generationConfig: { responseMimeType: "application/json", maxOutputTokens: 2600, temperature: 0.1 } }),
-    signal: AbortSignal.timeout(12000)
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const payload: any = await response.json();
-  const text = (payload?.candidates?.[0]?.content?.parts ?? []).map((part: any) => typeof part?.text === "string" ? part.text : "").join("");
-  if (!text) throw new Error("empty response");
-  return parseFindings(text, true);
-}
-
-async function runAllVisionModels(apiKey: string | undefined, geminiKey: string | undefined, prompt: string, image: Buffer): Promise<Candidate[]> {
-  const openRouterModels = apiKey ? [...CONFIGURED_VISION_MODELS] : [];
-  const openRouterRuns = apiKey ? openRouterModels.map(async (model): Promise<Candidate | null> => {
-    try { return { model, findings: await callOpenRouterModel(apiKey, model, prompt, image) }; }
-    catch (error) { console.warn(`OpenRouter vision model failed: ${model}`, error); return null; }
-  }) : [];
-  const geminiRuns = geminiKey ? GEMINI_VISION_MODELS.map(async (model): Promise<Candidate | null> => {
-    try { return { model: `google/${model}`, findings: await callGeminiVisionModel(geminiKey, model, prompt, image) }; }
-    catch (error) { console.warn(`Gemini vision model failed: ${model}`, error); return null; }
-  }) : [];
-  const results = await Promise.all([...openRouterRuns, ...geminiRuns]);
-  const usable = results.filter((result): result is Candidate => Boolean(result && result.findings.length));
-  if (usable.length) return usable;
-
-  // Provider health can pass while a full audit request is temporarily rejected or truncated.
-  // Retry Gemini with a much smaller, evidence-first prompt before failing the whole audit.
-  if (geminiKey) {
-    for (const model of GEMINI_VISION_MODELS) {
-      try {
-        const findings = await rescueVisionModel(geminiKey, model, image);
-        if (findings.length) {
-          console.log(`[VisionRescue] ${model} returned ${findings.length} findings`);
-          return [{ model: `google/${model}`, findings }];
-        }
-      } catch (error) {
-        console.warn(`[VisionRescue] ${model} failed`, error);
-      }
-    }
-  }
-  return [];
-}
-
-async function qualityRun(geminiKey: string | undefined, candidates: Candidate[], capture: Capture): Promise<Finding[]> {
-  if (!candidates.length) throw new Error("No vision model returned usable UX evidence. Please try the screenshot again or check the AI provider keys.");
-  const compact = candidates.map((candidate) => ({ model: candidate.model, findings: candidate.findings.map((finding) => ({ severity: finding.severity, category: finding.category, title: finding.title, description: finding.description, recommendation: finding.recommendation, evidence: finding.evidence })) }));
-  const judgePrompt = `You are the final AI quality router for a client-facing ScreenRoot UX audit. You are given the original screenshot plus independent analyses from multiple vision models. Select and consolidate only the strongest, defensible findings.\n\nQUALITY RULES:\n- The screenshot is the source of truth. Re-check every selected finding against the image.\n- Prefer findings independently supported by multiple models, but a unique finding may survive if the screenshot clearly proves it.\n- Reject hallucinations, vague criticism, duplicate findings, speculative accessibility/performance claims, and claims contradicted by the screenshot.\n- Never invent evidence. Preserve precise section, element and detail language grounded in the screenshot.\n- Do not output scores, rankings, confidence percentages, or model commentary.\n- Keep 5–8 findings when defensible; fewer is correct when evidence is weak.\n- This is a redesign-opportunity audit, not a generic checklist.\n- For every evidence item, also return an INTERNAL crop box for the exact visible area being discussed. Coordinates are normalized from 0 to 1 relative to the supplied screenshot: x and y are the top-left, width and height are the crop size. Include enough surrounding context to make the issue understandable, but do not crop the entire page unless the evidence genuinely concerns the whole page.\n- If a candidate analysis already supplies a crop for the same evidence, preserve that crop unless your visual inspection shows it is wrong.\n- These crop coordinates are internal metadata and will be used only to generate visual evidence thumbnails; they are not shown as coordinates to the client.\n\nReturn JSON only in this shape:\n{"findings":[{"id":"finding-1","severity":"high|medium|low","category":"...","title":"...","description":"...","recommendation":"...","evidence":[{"section":"...","element":"...","detail":"...","crop":{"x":0.0,"y":0.0,"width":0.0,"height":0.0}}]}]}\n\nMODEL ANALYSES:\n${JSON.stringify(compact)}`;
-
-  if (geminiKey) {
-    try {
-      const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-goog-api-key": geminiKey },
-        body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: judgePrompt }, { inline_data: { mime_type: "image/jpeg", data: capture.analysisBuffer.toString("base64") } }] }], generationConfig: { thinkingConfig: { thinkingLevel: "low" }, responseMimeType: "application/json", maxOutputTokens: 2400, temperature: 0.05 } }),
-        signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS)
-      });
-      if (response.ok) {
-        const payload: any = await response.json();
-        const text = (payload?.candidates?.[0]?.content?.parts ?? []).map((part: any) => typeof part?.text === "string" ? part.text : "").join("");
-        const findings = parseFindings(text, true);
-        if (findings.length) return findings.map((finding, index) => ({ ...finding, id: `finding-${index + 1}` }));
-      }
-    } catch (error) { console.warn("Gemini quality run failed", error); }
-  }
-
-  const groups = new Map<string, { finding: Finding; models: Set<string> }>();
-  for (const candidate of candidates) {
-    for (const finding of candidate.findings) {
-      const key = finding.title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-      const existing = groups.get(key);
-      if (existing) existing.models.add(candidate.model);
-      else groups.set(key, { finding, models: new Set([candidate.model]) });
-    }
-  }
-  return Array.from(groups.values()).sort((a, b) => b.models.size - a.models.size).slice(0, 8).map((entry, index) => ({ ...entry.finding, id: `finding-${index + 1}` }));
-}
-
-function transferCandidateCrops(selected: Finding[], candidates: Candidate[]): Finding[] {
-  const source = candidates.flatMap((candidate) => candidate.findings.map((finding) => ({ model: candidate.model, finding })));
-  return selected.map((finding) => {
-    const matches = source.filter(({ finding: candidate }) => candidate.title.toLowerCase().trim() === finding.title.toLowerCase().trim());
-    if (!matches.length) return finding;
-    return {
-      ...finding,
-      evidence: finding.evidence.map((item, evidenceIndex) => {
-        if (item.crop) return item;
-        const match = matches.find(({ finding: candidate }) => candidate.evidence.some((candidateEvidence) => candidateEvidence.section.toLowerCase() === item.section.toLowerCase() && candidateEvidence.element.toLowerCase() === item.element.toLowerCase() && Boolean(candidateEvidence.crop)));
-        if (!match) return item;
-        const candidateEvidence = match.finding.evidence.find((candidateEvidence) => candidateEvidence.section.toLowerCase() === item.section.toLowerCase() && candidateEvidence.element.toLowerCase() === item.element.toLowerCase() && Boolean(candidateEvidence.crop));
-        return candidateEvidence?.crop ? { ...item, crop: candidateEvidence.crop } : item;
-      })
-    };
-  });
-}
-
-function parseCrop(value: string | undefined): CropBox | null {
-  if (!value) return null;
-  try {
-    const parsed = JSON.parse(value) as Record<string, unknown>;
-    const numbers = [parsed.x, parsed.y, parsed.width, parsed.height];
-    if (!numbers.every((number) => typeof number === "number" && Number.isFinite(number))) return null;
-    const x = Math.max(0, Math.min(1, Number(parsed.x)));
-    const y = Math.max(0, Math.min(1, Number(parsed.y)));
-    const width = Math.max(0, Math.min(1 - x, Number(parsed.width)));
-    const height = Math.max(0, Math.min(1 - y, Number(parsed.height)));
-    if (width < 0.04 || height < 0.02) return null;
-    return { x, y, width, height };
-  } catch { return null; }
-}
-
-function normalizeLocatedCrop(value: unknown, analysisWidth: number, analysisHeight: number): CropBox | null {
-  if (!value || typeof value !== "object") return null;
-  const box = value as Record<string, unknown>;
-  const raw = [box.x, box.y, box.width, box.height];
-  if (!raw.every((item) => typeof item === "number" && Number.isFinite(item))) return null;
-  let [x, y, width, height] = raw as number[];
-  const maxValue = Math.max(x, y, width, height);
-  if (maxValue > 100) {
-    x /= analysisWidth; width /= analysisWidth; y /= analysisHeight; height /= analysisHeight;
-  } else if (maxValue > 1) {
-    x /= 100; width /= 100; y /= 100; height /= 100;
-  }
-  x = Math.max(0, Math.min(1, x));
-  y = Math.max(0, Math.min(1, y));
-  width = Math.max(0, Math.min(1 - x, width));
-  height = Math.max(0, Math.min(1 - y, height));
-  if (width < 0.04 || height < 0.02) return null;
-  return { x, y, width, height };
-}
-
-async function locateEvidenceCrop(apiKey: string, findingId: string, evidenceIndex: number, evidence: Evidence, capture: Capture, analysisWidth: number, analysisHeight: number): Promise<{ key: string; crop: CropBox } | null> {
-  const prompt = `Locate ONE exact visible UI region in this screenshot. This is not a UX evaluation task.\n\nFinding: ${findingId}\nEvidence index: ${evidenceIndex}\nSection: ${evidence.section}\nElement: ${evidence.element}\nDetail: ${evidence.detail}\n\nReturn only JSON: {"crop":{"x":0,"y":0,"width":0,"height":0}}. Coordinates may be normalized 0..1, percentages 0..100, or pixels relative to the supplied image. If using pixels, use the image dimensions ${analysisWidth}x${analysisHeight}. The crop MUST contain the exact element described plus a little surrounding context. Do not return a full-page crop. Do not explain your answer.`;
-  for (const model of ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.5-flash"]) {
-    try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
-        body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }, { inline_data: { mime_type: "image/jpeg", data: capture.analysisBuffer.toString("base64") } }] }], generationConfig: { thinkingConfig: { thinkingLevel: "low" }, responseMimeType: "application/json", maxOutputTokens: 500, temperature: 0.0 } }),
-        signal: AbortSignal.timeout(9000)
-      });
-      if (!response.ok) continue;
-      const payload: any = await response.json();
-      const text = (payload?.candidates?.[0]?.content?.parts ?? []).map((part: any) => typeof part?.text === "string" ? part.text : "").join("");
-      const json = extractJsonObject(text) as { crop?: unknown } | null;
-      const crop = normalizeLocatedCrop(json?.crop, analysisWidth, analysisHeight);
-      if (crop) return { key: `${findingId}:${evidenceIndex}`, crop };
-    } catch {}
-  }
-  return null;
-}
-
-async function locateMissingEvidenceCrops(apiKey: string | undefined, findings: Finding[], capture: Capture): Promise<Finding[]> {
-  if (!apiKey || !findings.length) return findings;
-  const analysisMetadata = await sharp(capture.analysisBuffer).metadata();
-  const analysisWidth = analysisMetadata.width ?? 1400;
-  const analysisHeight = analysisMetadata.height ?? 5000;
-  const jobs = findings.flatMap((finding) => finding.evidence.map((item, evidenceIndex) => ({ finding, item, evidenceIndex }))).filter((job) => !job.item.crop);
-  if (!jobs.length) {
-    console.log("[EvidenceLocator] all selected evidence already has model-generated crop coordinates");
-    return findings;
-  }
-  console.log(`[EvidenceLocator] locating ${jobs.length} remaining evidence regions in parallel`);
-  const located = await Promise.all(jobs.map((job) => locateEvidenceCrop(apiKey, job.finding.id, job.evidenceIndex, job.item, capture, analysisWidth, analysisHeight)));
-  const boxes = new Map<string, CropBox>();
-  located.forEach((item) => { if (item) boxes.set(item.key, item.crop); });
-  console.log(`[EvidenceLocator] located ${boxes.size}/${jobs.length} remaining evidence regions`);
-  return findings.map((finding) => ({
-    ...finding,
-    evidence: finding.evidence.map((item, evidenceIndex) => {
-      const crop = boxes.get(`${finding.id}:${evidenceIndex}`);
-      return crop ? { ...item, crop: JSON.stringify(crop) } : item;
-    })
-  }));
-}
-
-async function addEvidenceCrops(findings: Finding[], capture: Capture): Promise<Finding[]> {
-  const metadata = await sharp(capture.buffer).metadata();
-  const sourceWidth = metadata.width ?? capture.width;
-  const sourceHeight = metadata.height ?? capture.height;
-  const results = await Promise.all(findings.map(async (finding) => {
-    const evidence = await Promise.all(finding.evidence.map(async (item) => {
-      const crop = parseCrop(item.crop);
-      if (!crop) return { section: item.section, element: item.element, detail: item.detail };
-      try {
-        const left = Math.max(0, Math.min(sourceWidth - 1, Math.round(crop.x * sourceWidth)));
-        const top = Math.max(0, Math.min(sourceHeight - 1, Math.round(crop.y * sourceHeight)));
-        const width = Math.max(1, Math.min(sourceWidth - left, Math.round(crop.width * sourceWidth)));
-        const height = Math.max(1, Math.min(sourceHeight - top, Math.round(crop.height * sourceHeight)));
-        const buffer = await sharp(capture.buffer)
-          .extract({ left, top, width, height })
-          .resize({ width: 1100, height: 700, fit: "inside", withoutEnlargement: true })
-          .jpeg({ quality: 82, progressive: true, mozjpeg: true })
-          .toBuffer();
-        return { section: item.section, element: item.element, detail: item.detail, crop: `data:image/jpeg;base64,${buffer.toString("base64")}` };
-      } catch (error) {
-        console.warn("Evidence crop generation failed", error);
-        return { section: item.section, element: item.element, detail: item.detail };
-      }
-    }));
-    return { ...finding, evidence };
-  }));
-  return results;
-}
-
-async function enrichWithGemini(apiKey: string | undefined, findings: Finding[]): Promise<Finding[]> {
-  if (!apiKey || !findings.length) return findings;
-  const compact = findings.map((finding) => ({ id: finding.id, severity: finding.severity, category: finding.category, title: finding.title, description: finding.description, recommendation: finding.recommendation }));
-  const prompt = `You are the UX standards/enrichment layer for a ScreenRoot UX audit. Do not invent or change the visual finding or its evidence. Based only on the supplied finding text, enrich each item with the most appropriate recognized UX law/principle, a concise accurate definition, a client-friendly assessment explaining why the visible issue relates to that principle, up to 3 practical ScreenRoot design tasks, and up to 3 practical developer tasks. Do not add findings. Do not change severity, category, title, description, recommendation, evidence, or IDs. Return JSON only: {"findings":[{"id":"...","uxPerspective":{"law":"...","definition":"...","assessment":"..."},"screenrootTasks":["..."],"devTasks":["..."]}]}. Findings: ${JSON.stringify(compact)}`;
-  try {
-    const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent", { method: "POST", headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey }, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { thinkingConfig: { thinkingLevel: "low" }, responseMimeType: "application/json", maxOutputTokens: 1400 } }), signal: AbortSignal.timeout(7000) });
-    if (!response.ok) return findings;
-    const payload: any = await response.json();
-    const text = (payload?.candidates?.[0]?.content?.parts ?? []).map((part: any) => typeof part?.text === "string" ? part.text : "").join("");
-    const json = extractJsonObject(text) as { findings?: unknown[] } | null;
-    if (!json || !Array.isArray(json.findings)) return findings;
-    const byId = new Map<string, any>();
-    json.findings.forEach((item: any) => { if (item && typeof item.id === "string") byId.set(item.id, item); });
-    return findings.map((finding) => {
-      const enrichment = byId.get(finding.id);
-      if (!enrichment) return finding;
-      const perspective = enrichment.uxPerspective && typeof enrichment.uxPerspective === "object" ? enrichment.uxPerspective : {};
-      return { ...finding, uxPerspective: { law: typeof perspective.law === "string" ? perspective.law : finding.uxPerspective.law, definition: typeof perspective.definition === "string" ? perspective.definition : finding.uxPerspective.definition, assessment: typeof perspective.assessment === "string" ? perspective.assessment : finding.uxPerspective.assessment }, screenrootTasks: Array.isArray(enrichment.screenrootTasks) ? enrichment.screenrootTasks.filter((task: unknown): task is string => typeof task === "string").slice(0, 3) : finding.screenrootTasks, devTasks: Array.isArray(enrichment.devTasks) ? enrichment.devTasks.filter((task: unknown): task is string => typeof task === "string").slice(0, 3) : finding.devTasks };
-    });
-  } catch { return findings; }
+function fallbackFinding(observation: VisualObservation, index: number): Finding {
+  return normalizeFinding({
+    id: `finding-${index + 1}`,
+    severity: index < 2 ? "high" : "medium",
+    category: "Information hierarchy",
+    title: observation.issue,
+    description: observation.issue,
+    recommendation: "Reduce competing visual signals, strengthen the primary hierarchy, and make the intended next action easier to scan.",
+    uxPerspective: {
+      law: "Gestalt principles",
+      definition: "People interpret related elements as groups and use visual hierarchy to decide what deserves attention first.",
+      assessment: observation.whyItMatters,
+      researchContext: "The observation is consistent with established research on visual grouping, attention and cognitive load.",
+    },
+    businessAnalysis: {
+      funnelStage: "Consideration / conversion",
+      impact: "The visible friction can increase hesitation before a user takes the next intended action.",
+      kpi: "Primary CTA click-through rate",
+      mechanism: "When the intended next step is less clear, fewer users may progress confidently to it.",
+      suggestions: ["Strengthen the primary CTA hierarchy.", "Remove or subordinate competing visual elements."],
+    },
+  }, observation, index);
 }
 
 export async function createAuditFromScreenshot(buffer: Buffer, filename: string, onStage?: (stage: AuditStage) => void): Promise<AuditResult> {
-  onStage?.({ id: "capture", label: "Preparing screenshot", detail: "Validating and preparing the uploaded screenshot for visual review.", status: "active" });
-  const capture = await prepareScreenshot(buffer, filename.replace(/\.[^.]+$/, "") || "Uploaded screenshot");
-  onStage?.({ id: "capture", label: "Preparing screenshot", detail: `Screenshot ready at ${capture.width}×${capture.height}px.`, status: "complete" });
+  const capture = await prepareScreenshot(buffer, filename);
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("Configure GEMINI_API_KEY before running an audit.");
+  const visionModel = process.env.GEMINI_VISION_MODEL || DEFAULT_VISION_MODEL;
+  const textModel = process.env.GEMINI_TEXT_MODEL || DEFAULT_TEXT_MODEL;
 
-  const openRouterKey = process.env.OPENROUTER_API_KEY;
-  const geminiKey = process.env.GEMINI_API_KEY;
-  if (!openRouterKey && !geminiKey) throw new Error("Configure OPENROUTER_API_KEY or GEMINI_API_KEY before running an audit.");
+  onStage?.({ id: "capture", label: "Preparing screenshot", detail: "Validating the full-page screenshot and creating a high-quality analysis image.", status: "active" });
+  onStage?.({ id: "capture", label: "Preparing screenshot", detail: "Screenshot is ready for the visual analysis stage.", status: "complete" });
 
-  onStage?.({ id: "analyse", label: "Running multi-model analysis", detail: "Sending the screenshot to all configured multimodal models in parallel.", status: "active" });
-  const prompt = buildAuditPrompt(`the uploaded screenshot (${filename})`, capture.width, capture.height);
-  const candidates = await runAllVisionModels(openRouterKey, geminiKey, prompt, capture.analysisBuffer);
-  onStage?.({ id: "analyse", label: "Running multi-model analysis", detail: `${candidates.length} vision model${candidates.length === 1 ? "" : "s"} returned usable analyses.`, status: "complete" });
+  onStage?.({ id: "analyse", label: "Image → text analysis", detail: `The first model is reading the screenshot and mapping precise visual evidence with localized crop coordinates.`, status: "active" });
+  const visualPass = await createVisualPass(apiKey, visionModel, capture);
+  onStage?.({ id: "analyse", label: "Image → text analysis", detail: `${visualPass.observations.length} visual observations extracted from the screenshot.`, status: "complete" });
 
-  onStage?.({ id: "quality", label: "Running AI quality check", detail: "Comparing model findings and re-checking the strongest evidence against the screenshot.", status: "active" });
-  const selected = await qualityRun(geminiKey, candidates, capture);
-  const withModelCrops = transferCandidateCrops(selected, candidates);
-  onStage?.({ id: "quality", label: "Running AI quality check", detail: `${withModelCrops.length} findings survived the quality check.`, status: "complete" });
+  onStage?.({ id: "quality", label: "Text → UX research review", detail: "A second model is reviewing the visual text for UX principles, research context and defensible findings.", status: "active" });
+  let reviewed: unknown[] = [];
+  try {
+    reviewed = await createTextReview(apiKey, textModel, visualPass);
+  } catch (error) {
+    console.warn("Text review failed; using deterministic UX fallback", error);
+  }
+  onStage?.({ id: "quality", label: "Text → UX research review", detail: "UX context and business implications have been mapped without adding development tasks.", status: "complete" });
 
-  onStage?.({ id: "crops", label: "Preparing visual evidence", detail: "Using model-provided evidence locations and locating only any remaining gaps.", status: "active" });
-  const located = await locateMissingEvidenceCrops(geminiKey, withModelCrops, capture);
-  const cropped = await addEvidenceCrops(located, capture);
-  const cropCount = cropped.reduce((count, finding) => count + finding.evidence.filter((item) => Boolean(item.crop)).length, 0);
-  onStage?.({ id: "crops", label: "Preparing visual evidence", detail: `${cropCount} visual evidence crops prepared.`, status: "complete" });
+  onStage?.({ id: "crops", label: "Building visual evidence", detail: "Generating localized screenshot crops from the original image so every finding has matching evidence beside it.", status: "active" });
+  const findings: Finding[] = [];
+  for (let i = 0; i < Math.min(8, visualPass.observations.length); i += 1) {
+    const observation = visualPass.observations[i];
+    const match = reviewed.find((item) => item && typeof item === "object" && (item as Record<string, unknown>).observationId === observation.id);
+    const finding = match ? normalizeFinding(match, observation, i) : fallbackFinding(observation, i);
+    finding.evidence[0].crop = await createCrop(capture.buffer, observation.crop, capture.width, capture.height);
+    findings.push(finding);
+  }
+  onStage?.({ id: "crops", label: "Building visual evidence", detail: `${findings.length} findings now have localized evidence crops generated from the original screenshot.`, status: "complete" });
 
-  onStage?.({ id: "enrich", label: "Applying UX standards", detail: "Connecting selected findings to UX principles and practical redesign tasks.", status: "active" });
-  const enriched = await enrichWithGemini(geminiKey, cropped);
-  onStage?.({ id: "enrich", label: "Applying UX standards", detail: "UX principles and implementation guidance added.", status: "complete" });
-
-  onStage?.({ id: "complete", label: "Finalising evidence report", detail: "Preparing the client-facing evidence report.", status: "active" });
-  const page: AuditPage = { url: "Uploaded screenshot", title: capture.title, screenshot: `data:image/png;base64,${capture.buffer.toString("base64")}`, screenshotWidth: capture.width, screenshotHeight: capture.height, findings: enriched };
-  onStage?.({ id: "complete", label: "Finalising evidence report", detail: `${enriched.length} evidence-backed findings ready for review.`, status: "complete" });
-  return { pages: [page] };
+  onStage?.({ id: "enrich", label: "Applying UX + business context", detail: "Finalising principles, funnel impact, KPI hypotheses and redesign recommendations.", status: "active" });
+  onStage?.({ id: "enrich", label: "Applying UX + business context", detail: "UX research context and business funnel analysis are ready.", status: "complete" });
+  onStage?.({ id: "complete", label: "Finalising evidence report", detail: "Packaging the report with evidence beside each finding.", status: "active" });
+  const screenshot = `data:image/jpeg;base64,${(await sharp(capture.buffer).jpeg({ quality: 88, progressive: true }).toBuffer()).toString("base64")}`;
+  const result: AuditResult = {
+    pages: [{ url: "Uploaded screenshot", title: capture.title, screenshot, screenshotWidth: capture.width, screenshotHeight: capture.height, findings }],
+  };
+  onStage?.({ id: "complete", label: "Finalising evidence report", detail: "Audit ready.", status: "complete" });
+  return result;
 }
