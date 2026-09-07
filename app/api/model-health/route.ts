@@ -3,23 +3,16 @@ import OpenAI from "openai";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+// Only models that returned a direct response in the latest diagnostic run.
 const CONFIGURED_OPENROUTER_MODELS = [
-  "google/gemma-4-31b-it:free",
-  "thinkingmachines/inkling:free",
   "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-  "google/gemma-4-26b-a4b-it:free",
-  "sourceful/Sourceful-MultiModal:free",
-  "xiaomi/mimo-v2-omni:free",
-  "allenai/molmo-2-8b:free",
-  "google/gemma-3-27b-it:free",
-  "nvidia/nemotron-nano-12b-v2-vl:free",
-  "google/gemma-3-12b-it:free",
-  "qwen/qwen3-vl-235b-a22b-thinking:free",
-  "qwen/qwen3-vl-235b-a22b-instruct:free",
+  "dots-studio/dots-3-not-preview:free",
+  "nvidia/nemotron-3.5-content-safety:free",
+  "minimax/minimax-m3:free",
+  "openrouter/free",
 ] as const;
 
 const CONFIGURED_GEMINI_MODELS = [
-  "gemini-3.8-flash",
   "gemini-3.6-flash",
   "gemini-3.5-flash",
   "gemini-3.5-flash-lite",
@@ -28,9 +21,8 @@ const CONFIGURED_GEMINI_MODELS = [
 
 const OPENROUTER_TIMEOUT = 12000;
 const GEMINI_TIMEOUT = 12000;
-const MAX_DISCOVERED = 40;
 
-type ModelResult = {
+ type ModelResult = {
   model: string;
   provider: "OpenRouter" | "Gemini";
   configured: boolean;
@@ -41,39 +33,13 @@ type ModelResult = {
   error?: string;
 };
 
-async function discoverFreeMultimodalModels(apiKey: string): Promise<string[]> {
-  try {
-    const response = await fetch("https://openrouter.ai/api/v1/models", {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!response.ok) return [...CONFIGURED_OPENROUTER_MODELS];
-    const payload: any = await response.json();
-    const discovered = Array.isArray(payload?.data)
-      ? payload.data.filter((model: any) => {
-          const id = typeof model?.id === "string" ? model.id : "";
-          const inputs = model?.architecture?.input_modalities;
-          const outputs = model?.architecture?.output_modalities;
-          const pricing = model?.pricing;
-          const imageInput = Array.isArray(inputs) && inputs.includes("image");
-          const textOutput = !Array.isArray(outputs) || outputs.includes("text");
-          const free = id.endsWith(":free") || (pricing && Number(pricing.prompt) === 0 && Number(pricing.completion) === 0);
-          return id && imageInput && textOutput && free;
-        }).map((model: any) => String(model.id))
-      : [];
-    return Array.from(new Set([...CONFIGURED_OPENROUTER_MODELS, ...discovered])).slice(0, MAX_DISCOVERED);
-  } catch {
-    return [...CONFIGURED_OPENROUTER_MODELS];
-  }
-}
-
 function previewText(value: unknown): string {
   if (typeof value === "string") return value.slice(0, 160);
   if (Array.isArray(value)) return value.map((part: any) => typeof part?.text === "string" ? part.text : "").join("").slice(0, 160);
   return "";
 }
 
-async function testOpenRouter(apiKey: string, model: string, image: Buffer, configured: boolean): Promise<ModelResult> {
+async function testOpenRouter(apiKey: string, model: string, image: Buffer): Promise<ModelResult> {
   const started = Date.now();
   try {
     const client = new OpenAI({ baseURL: "https://openrouter.ai/api/v1", apiKey, timeout: OPENROUTER_TIMEOUT, maxRetries: 0 });
@@ -92,9 +58,9 @@ async function testOpenRouter(apiKey: string, model: string, image: Buffer, conf
     const content = response.choices?.[0]?.message?.content;
     const preview = previewText(content);
     if (!preview) throw new Error("empty response");
-    return { model, provider: "OpenRouter", configured, status: "ok", latencyMs: Date.now() - started, responseModel: response.model, responsePreview: preview };
+    return { model, provider: "OpenRouter", configured: true, status: "ok", latencyMs: Date.now() - started, responseModel: response.model, responsePreview: preview };
   } catch (error) {
-    return { model, provider: "OpenRouter", configured, status: "error", latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) };
+    return { model, provider: "OpenRouter", configured: true, status: "error", latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -131,11 +97,10 @@ export async function POST(request: Request) {
 
     const openRouterKey = process.env.OPENROUTER_API_KEY;
     const geminiKey = process.env.GEMINI_API_KEY;
-    const openRouterModels = openRouterKey ? await discoverFreeMultimodalModels(openRouterKey) : [];
 
     const tests: Promise<ModelResult>[] = [];
     if (openRouterKey) {
-      for (const model of openRouterModels) tests.push(testOpenRouter(openRouterKey, model, image, CONFIGURED_OPENROUTER_MODELS.includes(model as any)));
+      for (const model of CONFIGURED_OPENROUTER_MODELS) tests.push(testOpenRouter(openRouterKey, model, image));
     }
     if (geminiKey) {
       for (const model of CONFIGURED_GEMINI_MODELS) tests.push(testGemini(geminiKey, model, image));
@@ -150,7 +115,7 @@ export async function POST(request: Request) {
       ok,
       failed,
       keys: { openRouter: Boolean(openRouterKey), gemini: Boolean(geminiKey) },
-      note: "OpenRouter tests use allow_fallbacks=false, so each listed model is tested directly. This isolates model availability from OpenRouter provider fallback routing.",
+      note: "Only models that returned a direct response in the latest diagnostic run are included. OpenRouter tests use allow_fallbacks=false.",
       results,
     });
   } catch (error) {
