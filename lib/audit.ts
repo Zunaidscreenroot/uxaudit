@@ -118,13 +118,16 @@ async function callVisionModel(apiKey: string, prompt: string, image: Buffer): P
   const failures: string[] = [];
   const imageUrl = `data:image/jpeg;base64,${image.toString("base64")}`;
   const client = new OpenAI({ baseURL: "https://openrouter.ai/api/v1", apiKey, timeout: ANALYSIS_TIMEOUT_MS, maxRetries: 0 });
+
+  // Do explicit model-level failover. Free endpoints are independently rate-limited,
+  // and a 429 from one model must not abort the whole audit.
   for (const model of VISION_MODELS) {
     try {
       const response = await client.chat.completions.create({
         model,
         messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: imageUrl } }] }],
         reasoning: { enabled: false },
-        max_tokens: 2200,
+        max_tokens: 1800,
         temperature: 0.1,
         response_format: { type: "json_object" },
         provider: { allow_fallbacks: true, sort: "latency" },
@@ -137,7 +140,8 @@ async function callVisionModel(apiKey: string, prompt: string, image: Buffer): P
       const status = Number(error?.status ?? error?.code ?? 0);
       const message = String(error?.error?.message ?? error?.message ?? "request failed").slice(0, 180);
       failures.push(`${model}: ${status || "error"} ${message}`);
-      if (status === 429) await new Promise((resolve) => setTimeout(resolve, 250));
+      // Briefly back off only for rate limiting; move immediately to the next model for other failures.
+      if (status === 429) await new Promise((resolve) => setTimeout(resolve, 350));
     }
   }
   throw new Error(`All OpenRouter vision models failed. ${failures.join(" | ")}`);
