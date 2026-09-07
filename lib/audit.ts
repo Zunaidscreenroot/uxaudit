@@ -22,8 +22,8 @@ const GEMINI_VISION_MODELS = [
   "gemini-3.1-flash-lite",
 ] as const;
 
-const ANALYSIS_TIMEOUT_MS = 18000;
-const GEMINI_TIMEOUT_MS = 18000;
+const ANALYSIS_TIMEOUT_MS = 28000;
+const GEMINI_TIMEOUT_MS = 14000;
 const MAX_SCREENSHOT_BYTES = 15 * 1024 * 1024;
 
 function extractJsonObject(text: string): unknown | null {
@@ -81,9 +81,9 @@ function normalizeFinding(value: unknown, index: number, keepCrop = false): Find
 }
 
 function parseFindings(text: string, keepCrop = false): Finding[] {
-  const json = extractJsonObject(text) as { findings?: unknown[] } | null;
-  if (!json || !Array.isArray(json.findings)) return [];
-  return json.findings.map((item, index) => normalizeFinding(item, index, keepCrop)).filter((finding) => finding.evidence.length > 0).slice(0, 8);
+  const json = extractJsonObject(text) as { findings?: unknown[] } | unknown[] | null;
+  const rawFindings = Array.isArray(json) ? json : json && Array.isArray((json as { findings?: unknown[] }).findings) ? (json as { findings: unknown[] }).findings : [];
+  return rawFindings.map((item, index) => normalizeFinding(item, index, keepCrop)).filter((finding) => finding.evidence.length > 0).slice(0, 8);
 }
 
 async function prepareScreenshot(buffer: Buffer, title: string): Promise<Capture> {
@@ -108,7 +108,7 @@ async function callOpenRouterModel(apiKey: string, model: string, prompt: string
     model,
     messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: imageUrl } }] }],
     reasoning: { enabled: false },
-    max_tokens: 1800,
+    max_tokens: 2600,
     temperature: 0.1,
     response_format: { type: "json_object" },
     provider: { allow_fallbacks: false },
@@ -124,8 +124,23 @@ async function callGeminiVisionModel(apiKey: string, model: string, prompt: stri
   const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
-    body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }, { inline_data: { mime_type: "image/jpeg", data: imageBase64 } }] }], generationConfig: { thinkingConfig: { thinkingLevel: "low" }, responseMimeType: "application/json", maxOutputTokens: 1800, temperature: 0.1 } }),
+    body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }, { inline_data: { mime_type: "image/jpeg", data: imageBase64 } }] }], generationConfig: { responseMimeType: "application/json", maxOutputTokens: 2800, temperature: 0.1 } }),
     signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS)
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const payload: any = await response.json();
+  const text = (payload?.candidates?.[0]?.content?.parts ?? []).map((part: any) => typeof part?.text === "string" ? part.text : "").join("");
+  if (!text) throw new Error("empty response");
+  return parseFindings(text, true);
+}
+
+async function rescueVisionModel(geminiKey: string, model: string, image: Buffer): Promise<Finding[]> {
+  const rescuePrompt = `Audit this supplied desktop website screenshot as a visual UX reviewer. Return 4 to 6 distinct, clearly visible UX problems from different page regions. Do not invent hidden behavior or metrics. Every finding must have exactly one evidence item naming the exact visible section and element, plus one concise detail and one normalized crop box (x, y, width, height, all 0..1) tightly surrounding that exact evidence. Keep each finding short. Return JSON only. Shape: {"findings":[{"id":"finding-1","severity":"high|medium|low","category":"Information hierarchy|Navigation|Visual design|Usability & interaction|Language & tone|User engagement","title":"short issue","description":"visible problem","recommendation":"specific redesign action","evidence":[{"section":"Hero","element":"exact visible UI","detail":"what is visibly wrong","crop":{"x":0.1,"y":0.1,"width":0.4,"height":0.15}}]}]}`;
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-goog-api-key": geminiKey },
+    body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: rescuePrompt }, { inline_data: { mime_type: "image/jpeg", data: image.toString("base64") } }] }], generationConfig: { responseMimeType: "application/json", maxOutputTokens: 2600, temperature: 0.1 } }),
+    signal: AbortSignal.timeout(12000)
   });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const payload: any = await response.json();
@@ -145,7 +160,25 @@ async function runAllVisionModels(apiKey: string | undefined, geminiKey: string 
     catch (error) { console.warn(`Gemini vision model failed: ${model}`, error); return null; }
   }) : [];
   const results = await Promise.all([...openRouterRuns, ...geminiRuns]);
-  return results.filter((result): result is Candidate => Boolean(result && result.findings.length));
+  const usable = results.filter((result): result is Candidate => Boolean(result && result.findings.length));
+  if (usable.length) return usable;
+
+  // Provider health can pass while a full audit request is temporarily rejected or truncated.
+  // Retry Gemini with a much smaller, evidence-first prompt before failing the whole audit.
+  if (geminiKey) {
+    for (const model of GEMINI_VISION_MODELS) {
+      try {
+        const findings = await rescueVisionModel(geminiKey, model, image);
+        if (findings.length) {
+          console.log(`[VisionRescue] ${model} returned ${findings.length} findings`);
+          return [{ model: `google/${model}`, findings }];
+        }
+      } catch (error) {
+        console.warn(`[VisionRescue] ${model} failed`, error);
+      }
+    }
+  }
+  return [];
 }
 
 async function qualityRun(geminiKey: string | undefined, candidates: Candidate[], capture: Capture): Promise<Finding[]> {
