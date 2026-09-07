@@ -88,7 +88,7 @@ async function testOpenRouter(apiKey: string, model: string, image: Buffer, conf
       temperature: 0,
       response_format: { type: "json_object" },
       provider: { allow_fallbacks: false },
-    });
+    } as any);
     const content = response.choices?.[0]?.message?.content;
     const preview = previewText(content);
     if (!preview) throw new Error("empty response");
