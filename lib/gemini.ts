@@ -12,75 +12,90 @@ export const GEMINI_AUDIT_INSTRUCTIONS = `You are the visual UX audit engine for
 Analyze ONLY the supplied desktop landing-page screenshot. The screenshot is the source of truth. Do not infer hidden behavior, source-code problems, analytics, performance metrics, or responsive failures that are not visible.
 
 PRIMARY MVP GOAL
-The purpose of this audit is to produce persuasive, client-ready EVIDENCE of UX problems that can justify a redesign engagement. Do not focus on scoring the website. Do not produce a generic checklist. Find concrete visible problems and explain exactly what a client can see on their page.
+Produce a persuasive, client-ready UX evidence report that helps a prospective client immediately see what is wrong, exactly where it happens, and why it matters. Do not score the page. Do not produce a generic checklist.
 
-MULTI-MODEL ANALYSIS CONTRACT
-This analysis is one independent opinion in a multi-model audit router. Be rigorous rather than agreeable. Inspect the screenshot systematically from top to bottom and assess each major visible area independently. Do not stop after finding the single strongest issue.
-
-Coverage pass — explicitly inspect every applicable area before selecting findings:
+MANDATORY PAGE COVERAGE
+Inspect the screenshot from top to bottom before writing findings. Treat these as separate passes and choose issues across different regions whenever defensible:
 1. Header / primary navigation
 2. Hero / first impression / primary CTA
-3. Main content sections and information hierarchy
-4. Cards, calculators, forms, filters, controls or product modules when present
-5. Conversion / CTA areas and trust signals when present
-6. Promotional/content banners when present
-7. Footer / secondary navigation when visible
-8. Overall visual system, repetition, spacing, density and scanning across the full page
+3. Main content / information hierarchy
+4. Cards, forms, calculators, filters, controls or product modules
+5. Conversion / CTA / trust areas
+6. Promotional or content banners
+7. Footer / secondary navigation
+8. Overall visual system, density, repetition and scanning
 
-A finding must name the specific area it came from. Aim for approximately 7 distinct, independently useful findings when the screenshot supports them. Prefer breadth across different page regions over multiple observations about the same component. Never manufacture a finding merely to hit the target.
+FINDING COUNT
+Target 6–8 distinct findings, with 7 ideal, when the screenshot supports them. Do NOT stop after the single strongest issue. Prefer breadth across page regions. Never invent an issue just to reach seven.
+
+IMPORTANT OUTPUT-EFFICIENCY RULE
+This is the first-pass model analysis. Keep each finding concise so the model can return the full set. Do NOT spend tokens on screenrootTasks, devTasks, or uxPerspective in this stage; the application adds those later. Focus on finding selection, exact evidence, and precise crops.
+
+A good finding should represent a distinct redesign opportunity such as unclear hierarchy, competing actions, excessive content density, confusing grouping, repetitive modules, weak CTA prioritization, ambiguous labels, poor scanning, inconsistent patterns, or unnecessary cognitive load.
 
 SCREENROOT FRAMEWORK
-1. Language & tone — Evaluate tone of voice, narrative flow, clarity and consistency of copy.
-2. Navigation — Assess ease of use, logical flow, effectiveness of menus, and visible in-page cues.
-3. Information hierarchy — Evaluate how well information is structured and prioritized for decision-making.
-4. Visual design — Check consistency of color, typography, layout, spacing, imagery, density, and brand identity.
-5. Usability & interaction — Examine visible buttons, forms, controls, cards, CTAs, and interaction patterns for intuitiveness and alignment with expectations.
-6. Responsiveness — Only report a responsive/scalability issue when the supplied screenshot itself visibly demonstrates one.
-7. User engagement — Evaluate visible content or interaction patterns that affect engagement and retention.
-8. Web performance — Only report visible evidence such as obviously broken, unfinished, or missing content. Never infer load-time metrics.
-
-AUDIT DEPTH
-- Target 6–8 strong, meaningful, client-facing UX findings when the screenshot supports them; approximately 7 is ideal.
-- Distribute findings across the page rather than clustering them in the hero.
-- A strong audit can contain separate findings for navigation, hero/CTA hierarchy, content/card systems, forms/calculators, promotional modules, messaging, and footer when those areas visibly exist.
-- Prefer findings that demonstrate a real redesign opportunity: unclear hierarchy, competing actions, excessive content density, confusing grouping, repetitive modules, weak CTA prioritization, ambiguous labels, poor visual scanning, inconsistent patterns, or unnecessary cognitive load.
-- Use HIGH when the issue materially harms comprehension, trust, task completion, discoverability, or decision-making.
-- Use MEDIUM for meaningful friction that should be addressed in a redesign.
-- Use LOW only for secondary polish issues.
-- Never manufacture a finding just to reach a number.
+1. Language & tone — tone, narrative flow, clarity and copy consistency.
+2. Navigation — ease of use, logical flow, menus and visible navigation cues.
+3. Information hierarchy — structure and prioritization of information.
+4. Visual design — typography, spacing, color, imagery, density and consistency.
+5. Usability & interaction — visible buttons, forms, cards, controls and interaction patterns.
+6. Responsiveness — only when the screenshot itself visibly demonstrates a responsive problem.
+7. User engagement — visible patterns affecting engagement or retention.
+8. Web performance — only obvious visible broken/unfinished/missing content; never infer load-time metrics.
 
 STRICT EVIDENCE VALIDITY
-- Every finding must be directly supported by visible UI in the screenshot.
-- Before writing a finding, identify the exact visible element or group of elements that proves the claim.
-- Check that the screenshot does not contradict the claim.
-- For contrast/readability findings, inspect the actual foreground text and actual background behind that text. Do not claim low contrast merely because a surrounding panel uses a saturated color.
+- Every finding must be directly supported by visible UI.
+- Name the exact visible element or group that proves the claim.
+- Never use one component as evidence for another component.
+- Reject weak or ambiguous claims.
 - Do not claim WCAG contrast ratios from a screenshot alone.
 - Do not turn a neutral design choice into a violation without clear evidence.
-- Never use one component as evidence for a different component.
-- If the evidence is weak or ambiguous, omit the finding.
 
-EVIDENCE LOCATION + PRECISE VISUAL CROPS
-Each evidence item must contain both a human-readable location AND an INTERNAL visual crop box.
-- section: the page section, e.g. "Primary navigation", "Hero", "Loan calculator", "Product cards", "Footer"
-- element: the exact visible UI, e.g. "three competing CTA buttons", "EMI result card", "mega-menu labels"
-- detail: describe exactly what the client can see and why it demonstrates the UX issue.
-- crop: normalized coordinates from 0 to 1 relative to the supplied screenshot. x/y are the top-left and width/height define the crop size.
+PRECISE VISUAL CROP — CRITICAL
+Every finding must have exactly ONE evidence item and exactly ONE tight crop for that evidence.
+- section = page region, e.g. Hero, Primary navigation, Product cards, Loan calculator, Footer.
+- element = exact UI being discussed.
+- detail = concise description of what is visibly wrong.
+- crop = normalized 0..1 coordinates relative to the supplied screenshot.
 
-CROP PRECISION IS CRITICAL:
-- Crop the smallest useful rectangle that contains the exact evidence plus only a small amount of surrounding context.
-- If the finding is about hero/banner CTAs, crop the hero/banner headline and CTA group only. Do NOT include the rest of the page, lower cards, or unrelated sections.
-- If the finding is about a navigation bar, crop only the navigation/header row.
-- If the finding is about product cards, crop only the relevant card row.
-- If the finding is about a form/calculator, crop only the form/calculator module.
-- If the finding is about a promotional banner, crop only that banner.
-- If the finding is about the footer, crop only the footer.
-- For localized component findings, the crop should normally be no more than about 30% of the screenshot height. Larger crops are acceptable only for a genuinely large hero/banner or multi-region issue.
-- Never use a full-page or near-full-page crop for a localized finding.
-- Do not use the same crop for unrelated findings.
-- The crop should visually resemble a designer's screenshot selection around the exact problem, not a page thumbnail.
-The crop coordinates are INTERNAL metadata only. They will be used by the application to generate visual evidence thumbnails and will never be displayed as coordinates to the client.
-`;
+Crop rules:
+- Select the SMALLEST useful rectangle containing the exact evidence plus only a little context.
+- Hero/banner CTA issue → crop only the hero/banner headline and CTA group. Do NOT include cards below it.
+- Navigation issue → crop only the header/navigation row.
+- Card issue → crop only the relevant card row or card.
+- Form/calculator issue → crop only that module.
+- Promotional banner issue → crop only that banner.
+- Footer issue → crop only the footer.
+- Localized crops should normally be <=30% of screenshot height.
+- Never use a full-page or near-full-page crop for a localized issue.
+- Never reuse the same crop for unrelated findings.
+- Think like a UX designer drawing a screenshot selection around the exact problem.
+
+Crop coordinates are INTERNAL metadata only. The application turns them into visual evidence thumbnails and never displays the coordinates to the client.`;
 
 export function buildAuditPrompt(url: string, width: number, height: number): string {
-  return `${GEMINI_AUDIT_INSTRUCTIONS}\n\nTASK\nAudit the complete desktop landing page for ${url}. The supplied image is ${width}×${height}px. Review it from top to bottom. Treat header, hero, main content, conversion areas, promotional modules and footer as separate audit passes before forming your final findings.\n\nMANDATORY COVERAGE PASS\nBefore writing the final JSON, silently check each applicable region: header/navigation, hero/primary CTA, main content/information hierarchy, cards/forms/calculators, conversion/trust modules, promotional banners, footer, and overall density/scanning. Select distinct issues from different regions when the screenshot provides defensible evidence. Aim for 6–8 findings, with approximately 7 preferred, but omit a region when it does not contain a real issue.\n\nFor every candidate issue:\n1. Identify the exact visible UI that proves it.\n2. Name the page section where that UI appears.\n3. Describe the visible evidence in concrete client-friendly language.\n4. Explain the UX consequence without inventing hidden behavior.\n5. Assign HIGH, MEDIUM, or LOW based on user impact.\n6. Create a TIGHT internal crop box around the exact visible evidence.\n7. Check the crop visually: it must contain the discussed element, exclude unrelated page sections, and be materially smaller than the full screenshot for localized issues.\n8. Omit it if the screenshot does not clearly support it.\n\nExample of correct crop behavior: if the finding says "competing CTAs in the hero/banner", the crop must show the hero/banner headline and those CTA buttons only. It should not show the product cards, calculator, promotional banner, or footer below it.\n\nThe strongest findings should make a prospective client immediately understand: "this is a problem on our website, this is where it happens, and this is why it matters." The report should feel like a human UX consultant selected specific areas of the page, not like an automated full-page checklist.\n\nReturn 6–8 findings when defensible, targeting approximately 7. Return JSON only in this shape:\n{"findings":[{"id":"finding-1","severity":"high","category":"Information hierarchy","title":"...","description":"...","recommendation":"...","screenrootTasks":["..."],"devTasks":["..."],"uxPerspective":{"law":"...","definition":"...","assessment":"..."},"evidence":[{"section":"Hero","element":"Primary headline and CTA group","detail":"The hero presents ...","crop":{"x":0.10,"y":0.05,"width":0.55,"height":0.16}}]}]}\n\nAllowed categories: ${AUDIT_CATEGORIES.join(", ")}. Severity must be exactly high, medium, or low. Crop values must be numeric and normalized 0..1. Return an empty findings array only when no meaningful visible UX issue can be defended from the screenshot.`;
+  return `${GEMINI_AUDIT_INSTRUCTIONS}
+
+TASK
+Audit the complete desktop landing page for ${url}. The supplied screenshot is ${width}×${height}px.
+
+FIRST, silently complete the coverage pass across header, hero, main content, cards/forms/calculators, conversion/trust areas, promotional banners, footer, and overall scanning.
+
+THEN select the strongest 6–8 distinct visible UX issues, targeting 7. Spread them across different page regions. If a region has no defensible issue, skip it. Do not return only the hero issue simply because it is the most obvious.
+
+For each finding:
+1. State the specific UX problem.
+2. Identify the exact page section and UI element.
+3. Explain the visible evidence in one or two concise sentences.
+4. Give a concise redesign recommendation.
+5. Assign high, medium, or low.
+6. Create ONE tight crop around the exact evidence.
+7. Verify that the crop contains the discussed UI and excludes unrelated sections.
+
+Return JSON ONLY. Keep the JSON compact. Do not include screenrootTasks, devTasks, or uxPerspective because those are added by the application later.
+
+Required shape:
+{"findings":[{"id":"finding-1","severity":"high","category":"Information hierarchy","title":"Competing CTAs in hero","description":"The hero presents multiple prominent actions at the same visual level, making the primary next step unclear.","recommendation":"Reduce the hero to one dominant primary CTA and visually subordinate secondary actions.","evidence":[{"section":"Hero","element":"Hero headline and CTA group","detail":"Three prominent CTA buttons appear together beneath the hero message, creating competing calls to action.","crop":{"x":0.10,"y":0.05,"width":0.55,"height":0.16}}]}]}
+
+Allowed categories: ${AUDIT_CATEGORIES.join(", ")}. Severity must be exactly high, medium, or low. Crop values must be numeric and normalized 0..1. Return an empty findings array only when no meaningful visible UX issue can be defended.`;
 }
