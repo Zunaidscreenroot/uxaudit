@@ -30,8 +30,9 @@ function normalizeClientName(name: string) {
 }
 
 export async function saveAudit(result: AuditResult, sourceFilename: string): Promise<string> {
-  const page: AuditPage | undefined = result.pages[0];
-  if (!page) throw new Error("Cannot save an audit without a report page.");
+  const pages = result.pages;
+  const page: AuditPage | undefined = pages[0];
+  if (!page || !pages.length) throw new Error("Cannot save an audit without a report page.");
   const clientName = page.clientName?.trim() || "Unknown client";
   const normalizedName = normalizeClientName(clientName);
 
@@ -51,11 +52,37 @@ export async function saveAudit(result: AuditResult, sourceFilename: string): Pr
   const audit = Array.isArray(audits) ? audits[0] : null;
   if (!audit?.id) throw new Error("Supabase did not return the audit record.");
 
-  if (page.findings.length) {
+  // Create the page rows first so every finding can satisfy the required page_id foreign key.
+  const savedPages = await supabaseRequest("audit_pages", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify(pages.map((auditPage, index) => ({
+      audit_id: audit.id,
+      page_name: auditPage.title?.trim() || auditPage.url || `Page ${index + 1}`,
+      source_filename: sourceFilename,
+      title: auditPage.title,
+      screenshot: auditPage.screenshot,
+      screenshot_width: auditPage.screenshotWidth,
+      screenshot_height: auditPage.screenshotHeight,
+    }))),
+  });
+  if (!Array.isArray(savedPages) || savedPages.length !== pages.length || savedPages.some((savedPage) => !savedPage?.id)) {
+    throw new Error("Supabase did not return every saved audit page.");
+  }
+
+  const findingRows = pages.flatMap((auditPage, pageIndex) =>
+    auditPage.findings.map((finding, index) => ({
+      audit_id: audit.id,
+      page_id: savedPages[pageIndex].id,
+      finding_index: index,
+      finding,
+    })),
+  );
+  if (findingRows.length) {
     await supabaseRequest("audit_findings", {
       method: "POST",
       headers: { Prefer: "return=minimal" },
-      body: JSON.stringify(page.findings.map((finding, index) => ({ audit_id: audit.id, finding_index: index, finding }))),
+      body: JSON.stringify(findingRows),
     });
   }
   return audit.id as string;
