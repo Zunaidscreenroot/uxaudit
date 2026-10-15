@@ -182,7 +182,7 @@ function EvidenceCrop({ page, finding, cropRef }: { page: AuditPage; finding: Fi
         <text key={index} x="108" y={314 + index * 49} fontFamily="Arial, sans-serif" fontSize={index === 0 ? "26" : "23"} fontWeight={index === 0 ? "700" : "500"} fill={index === 0 ? "#252525" : "#494949"}>{line}</text>
       ))}
       <rect x="910" y="243" width="190" height="34" rx="17" fill={finding.priority === "P1" ? "#fde8e5" : "#fff4d4"} />
-      <text x="1005" y="265" textAnchor="middle" fontFamily="Arial, sans-serif" fontSize="13" fontWeight="800" fill={finding.priority === "P1" ? "#a3312f" : "#805d00"}>{finding.priority} · HIGH-PRIORITY ISSUE</text>
+      <text x="1005" y="265" textAnchor="middle" fontFamily="Arial, sans-serif" fontSize="13" fontWeight="800" fill={finding.priority === "P1" ? "#a3312f" : "#805d00"}>{finding.priority === "P1" ? "P1 · HIGH PRIORITY" : "P2 · IMPORTANT"}</text>
       <line x1="52" y1="554" x2="1148" y2="554" stroke="#dedbd5" />
       <text x="52" y="589" fontFamily="Arial, sans-serif" fontSize="13" fontWeight="700" fill="#6b6b6b">RECONSTRUCTED UI EXCERPT · NOT A LITERAL BROWSER SCREENSHOT</text>
       <text x="52" y="615" fontFamily="Arial, sans-serif" fontSize="13" fill="#777">{page.tab} · ujjivansfb.bank.in</text>
