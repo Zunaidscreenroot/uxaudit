@@ -36,7 +36,7 @@ async function testModel(item: ModelDef) {
    }
    if (!response.ok) return {...item,ok:false,latencyMs:Date.now()-started,error:`HTTP ${response.status}: ${payload?.error?.message ?? "Provider unavailable"}`};
    const answer = extractText(payload?.choices?.[0]?.message?.content);
-   const usage=payload?.usage??{};const promptTokens=Number(usage.prompt_tokens??0),completionTokens=Number(usage.completion_tokens??0);const estimatedCostUsd=typeof usage.cost==="number"?usage.cost:((promptTokens*(item.promptPrice??0)+completionTokens*(item.completionPrice??0))/1_000_000);return {...item,ok:Boolean(answer),latencyMs:Date.now()-started,responsePreview:answer.slice(0,30),promptTokens,completionTokens,totalTokens:usage.total_tokens??(promptTokens+completionTokens),estimatedCostUsd,error:answer ? undefined : "Provider returned no text content"};
+   const usage=payload?.usage??{};const promptTokens=Number(usage.prompt_tokens??0),completionTokens=Number(usage.completion_tokens??0);const estimatedCostUsd=typeof usage.cost==="number"?usage.cost:(promptTokens*(item.promptPrice??0)+completionTokens*(item.completionPrice??0));return {...item,ok:Boolean(answer),latencyMs:Date.now()-started,responsePreview:answer.slice(0,30),promptTokens,completionTokens,totalTokens:usage.total_tokens??(promptTokens+completionTokens),estimatedCostUsd,error:answer ? undefined : "Provider returned no text content"};
   }
   const key = process.env.GEMINI_API_KEY;
   if (!key) return {...item,ok:false,latencyMs:0,error:"Gemini API key missing"};
@@ -52,7 +52,7 @@ async function testModel(item: ModelDef) {
    payload = await response.json().catch(()=>({}));
   }
   if (!response.ok) return {...item,ok:false,latencyMs:Date.now()-started,error:`HTTP ${response.status}: ${payload?.error?.message ?? "Provider unavailable"}`};
-  const answer = extractText((payload?.candidates?.[0]?.content?.parts ?? []).map((p:any)=>p?.text ?? ""));const usage=payload?.usageMetadata??{};const promptTokens=Number(usage.promptTokenCount??0),completionTokens=Number(usage.candidatesTokenCount??0);const estimatedCostUsd=(promptTokens*(item.promptPrice??0)+completionTokens*(item.completionPrice??0))/1_000_000;
+  const answer = extractText((payload?.candidates?.[0]?.content?.parts ?? []).map((p:any)=>p?.text ?? ""));const usage=payload?.usageMetadata??{};const promptTokens=Number(usage.promptTokenCount??0),completionTokens=Number(usage.candidatesTokenCount??0);const estimatedCostUsd=(promptTokens*(item.promptPrice??0)+completionTokens*(item.completionPrice??0));
   return {...item,ok:Boolean(answer),latencyMs:Date.now()-started,responsePreview:answer.slice(0,30),promptTokens,completionTokens,totalTokens:usage.totalTokenCount??(promptTokens+completionTokens),estimatedCostUsd,error:answer ? undefined : "Provider returned no text content"};
  } catch (error) {
   return {...item,ok:false,latencyMs:Date.now()-started,error:error instanceof Error ? error.message : "Model check failed"};
