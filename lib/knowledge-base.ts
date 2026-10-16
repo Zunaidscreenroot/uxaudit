@@ -51,11 +51,35 @@ export async function saveAudit(result: AuditResult, sourceFilename: string): Pr
   const audit = Array.isArray(audits) ? audits[0] : null;
   if (!audit?.id) throw new Error("Supabase did not return the audit record.");
 
+  // audit_findings.page_id is NOT NULL and references audit_pages.id.
+  // Persist the page first so findings always point at a real page row.
+  const pages = await supabaseRequest("audit_pages", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      audit_id: audit.id,
+      page_name: page.title?.trim() || "Audit page",
+      source_filename: sourceFilename,
+      title: page.title,
+      screenshot: page.screenshot,
+      screenshot_width: page.screenshotWidth,
+      screenshot_height: page.screenshotHeight,
+    }),
+  });
+  const savedPage = Array.isArray(pages) ? pages[0] : null;
+  if (!savedPage?.id) throw new Error("Supabase did not return the audit page record.");
+  page.id = savedPage.id as string;
+
   if (page.findings.length) {
     await supabaseRequest("audit_findings", {
       method: "POST",
       headers: { Prefer: "return=minimal" },
-      body: JSON.stringify(page.findings.map((finding, index) => ({ audit_id: audit.id, finding_index: index, finding }))),
+      body: JSON.stringify(page.findings.map((finding, index) => ({
+        audit_id: audit.id,
+        page_id: savedPage.id,
+        finding_index: index,
+        finding,
+      }))),
     });
   }
   return audit.id as string;

@@ -36,7 +36,7 @@ async function testModel(item: ModelDef) {
    }
    if (!response.ok) return {...item,ok:false,latencyMs:Date.now()-started,error:`HTTP ${response.status}: ${payload?.error?.message ?? "Provider unavailable"}`};
    const answer = extractText(payload?.choices?.[0]?.message?.content);
-   return {...item,ok:Boolean(answer),latencyMs:Date.now()-started,responsePreview:answer.slice(0,30),totalTokens:payload?.usage?.total_tokens ?? null,error:answer ? undefined : "Provider returned no text content"};
+   const usage=payload?.usage??{};const promptTokens=Number(usage.prompt_tokens??0),completionTokens=Number(usage.completion_tokens??0);const estimatedCostUsd=typeof usage.cost==="number"?usage.cost:(promptTokens*(item.promptPrice??0)+completionTokens*(item.completionPrice??0));return {...item,ok:Boolean(answer),latencyMs:Date.now()-started,responsePreview:answer.slice(0,30),promptTokens,completionTokens,totalTokens:usage.total_tokens??(promptTokens+completionTokens),estimatedCostUsd,error:answer ? undefined : "Provider returned no text content"};
   }
   const key = process.env.GEMINI_API_KEY;
   if (!key) return {...item,ok:false,latencyMs:0,error:"Gemini API key missing"};
@@ -52,8 +52,8 @@ async function testModel(item: ModelDef) {
    payload = await response.json().catch(()=>({}));
   }
   if (!response.ok) return {...item,ok:false,latencyMs:Date.now()-started,error:`HTTP ${response.status}: ${payload?.error?.message ?? "Provider unavailable"}`};
-  const answer = extractText((payload?.candidates?.[0]?.content?.parts ?? []).map((p:any)=>p?.text ?? ""));
-  return {...item,ok:Boolean(answer),latencyMs:Date.now()-started,responsePreview:answer.slice(0,30),totalTokens:payload?.usageMetadata?.totalTokenCount ?? null,error:answer ? undefined : "Provider returned no text content"};
+  const answer = extractText((payload?.candidates?.[0]?.content?.parts ?? []).map((p:any)=>p?.text ?? ""));const usage=payload?.usageMetadata??{};const promptTokens=Number(usage.promptTokenCount??0),completionTokens=Number(usage.candidatesTokenCount??0);const estimatedCostUsd=(promptTokens*(item.promptPrice??0)+completionTokens*(item.completionPrice??0));
+  return {...item,ok:Boolean(answer),latencyMs:Date.now()-started,responsePreview:answer.slice(0,30),promptTokens,completionTokens,totalTokens:usage.totalTokenCount??(promptTokens+completionTokens),estimatedCostUsd,error:answer ? undefined : "Provider returned no text content"};
  } catch (error) {
   return {...item,ok:false,latencyMs:Date.now()-started,error:error instanceof Error ? error.message : "Model check failed"};
  }
@@ -90,7 +90,9 @@ export async function POST() {
   const ranked=[...visionWorking].sort((a:any,b:any)=>((a.promptPrice??0)+(a.completionPrice??0))-((b.promptPrice??0)+(b.completionPrice??0))||a.latencyMs-b.latencyMs);
   const selectedModels=ranked.slice(0,3);
   const selected=selectedModels[0]??null;
-  const payload={checkedAt:new Date().toISOString(),modelCount:models.length,auditCandidateCount:auditCandidates.length,working,failed,selected,selectedModels,selectionReason:selected?"Cheapest verified image-capable model by listed input + output token pricing; latency breaks ties.": "No verified image-capable model was found among the top 50 models. Audit is disabled rather than using an unverified model.",cacheHit:false,cacheTtlMinutes:30,note:"Takes the first 50 models returned in OpenRouter catalogue order, excludes models without image input, and tests only image-capable candidates using tiny text-only requests. Up to three cheapest verified image-capable models are retained as primary/fallback candidates. Pricing is catalogue pricing; a small charge may apply to paid tests."};
+  const verificationActivity=results.map((r:any)=>({model:r.model,ok:Boolean(r.ok),tokens:Number(r.totalTokens??0),costUsd:Number(r.estimatedCostUsd??0),latencyMs:Number(r.latencyMs??0)}));
+  const verificationRunCostUsd=verificationActivity.reduce((sum:number,a:any)=>sum+a.costUsd,0);const verificationRunTokens=verificationActivity.reduce((sum:number,a:any)=>sum+a.tokens,0);
+  const payload={checkedAt:new Date().toISOString(),modelCount:models.length,auditCandidateCount:auditCandidates.length,working,failed,selected,selectedModels,verificationActivity,verificationRunCostUsd,verificationRunTokens,selectionReason:selected?"Cheapest verified image-capable model by listed input + output token pricing; latency breaks ties.": "No verified image-capable model was found among the top 50 models. Audit is disabled rather than using an unverified model.",cacheHit:false,cacheTtlMinutes:30,note:"Takes the first 50 models returned in OpenRouter catalogue order, excludes models without image input, and tests only image-capable candidates using tiny text-only requests. Up to three cheapest verified image-capable models are retained as primary/fallback candidates. Pricing is catalogue pricing; a small charge may apply to paid tests."};
   cachedScan={expiresAt:Date.now()+CACHE_TTL_MS,payload};
   return Response.json(payload,{headers:{"Cache-Control":"no-store"}});
  }catch(error){return Response.json({error:error instanceof Error?error.message:"Model availability scan failed."},{status:503,headers:{"Cache-Control":"no-store"}})}
