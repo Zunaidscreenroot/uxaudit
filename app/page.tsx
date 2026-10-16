@@ -190,7 +190,7 @@ export default function Home() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      const streamed: { result: { page?: AuditPage; auditId?: string } | null } = { result: null };
+      const streamed: { result: { page?: AuditPage; auditId?: string; partial?: boolean } | null } = { result: null };
 
       const dispatchEvent = (event: any) => {
         if (!event || typeof event !== "object") return;
@@ -198,12 +198,17 @@ export default function Home() {
           setAuditStages((previous) => [...previous.filter((stage) => stage.id !== event.stage.id), event.stage]);
           setAuditStatus(event.stage.detail || event.stage.label || "Processing screenshot audit…");
         } else if (event.type === "result") {
-          streamed.result = event.payload ?? event.result ?? event.data ?? null;
-          if (streamed.result?.page) {
-            setAuditResult(streamed.result.page);
-            setAuditStatus("AI analysis completed. Finishing report persistence…");
+          const payload = event.payload ?? event.result ?? event.data ?? null;
+          if (payload?.page) {
+            const pageWithScreenshot = { ...payload.page, screenshot: payload.page.screenshot || prepared.dataUrl };
+            streamed.result = { ...payload, page: pageWithScreenshot, partial: payload.partial === true };
+            setAuditResult(pageWithScreenshot);
+            setAuditError("");
+            setAuditStatus(payload.partial
+              ? "Initial visual findings are ready. Completing UX reasoning…"
+              : "AI analysis complete. Finalizing report persistence…");
           }
-          if (streamed.result?.auditId) setAuditId(streamed.result.auditId);
+          if (payload?.auditId) setAuditId(payload.auditId);
         } else if (event.type === "saved") {
           if (typeof event.auditId === "string") setAuditId(event.auditId);
           setAuditStatus("AI analysis complete and report saved to the knowledge base.");
@@ -255,13 +260,32 @@ export default function Home() {
       if (!completed?.page) throw new Error("The server closed the screenshot audit stream without a report or error event. Check the Netlify function logs, then retry.");
       setAuditResult(completed.page);
       setAuditId(completed.auditId || "");
-      setAuditStages((previous) => previous.map((stage) => stage.status === "active" ? { ...stage, status: "complete" } : stage));
-      setAuditStatus("AI analysis complete. The report contains findings generated from your uploaded image.");
+      if (completed.partial) {
+        const partialMessage = "Initial visual findings are available, but the enhanced UX-reasoning step did not finish. Retry the audit to complete the report.";
+        setAuditError(partialMessage);
+        setAuditStages((previous) => previous.map((stage) => stage.status === "active" ? { ...stage, status: "failed", detail: partialMessage } : stage));
+        setAuditStatus("Partial audit ready — initial visual findings are available.");
+      } else {
+        setAuditError("");
+        setAuditStages((previous) => previous.map((stage) => stage.status === "active" ? { ...stage, status: "complete" } : stage));
+        setAuditStatus("AI analysis complete. The report contains findings generated from your uploaded image.");
+      }
     } catch (e) {
       const message = e instanceof Error ? e.message : "Screenshot audit failed.";
-      setAuditError(message);
-      setAuditStatus("Screenshot audit stopped.");
-      setAuditStages((previous) => previous.map((stage) => stage.status === "active" ? { ...stage, status: "failed", detail: message } : stage));
+      if (streamed.result?.page) {
+        setAuditResult(streamed.result.page);
+        setAuditId(streamed.result.auditId || "");
+        const userMessage = streamed.result.partial
+          ? "Initial visual findings are available, but enhanced UX reasoning was interrupted. Retry the audit to complete the report."
+          : "The report is available, but the connection closed before saving status was confirmed.";
+        setAuditError(userMessage);
+        setAuditStatus(streamed.result.partial ? "Partial audit ready — initial visual findings are available." : "Report generated; saving status could not be confirmed.");
+        setAuditStages((previous) => previous.map((stage) => stage.status === "active" ? { ...stage, status: "failed", detail: message } : stage));
+      } else {
+        setAuditError(message);
+        setAuditStatus("Screenshot audit stopped.");
+        setAuditStages((previous) => previous.map((stage) => stage.status === "active" ? { ...stage, status: "failed", detail: message } : stage));
+      }
     } finally {
       setAuditRunning(false);
     }
