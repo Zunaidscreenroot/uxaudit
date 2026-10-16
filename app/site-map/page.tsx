@@ -37,7 +37,7 @@ export default function SiteMapPage(){
     .map((m: any) => ({ provider: "OpenRouter", model: m.model, tier: "paid" }));
    if (verified.length < 2) throw new Error("Fewer than two configured models verified. Audit is paused so fallbacks remain available.");
    for (let i = 0; i < selected.length; i++) {
-    const target = selected[i];
+    const target = selected[i];\n    if (!force && audited.some((p:any) => p.url === target)) continue;
     setRunStatus("Capturing and auditing " + (i + 1) + " of " + selected.length + ": " + target);
     const response = await fetch("/api/audit-url", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: target, root: data?.root, verifiedModels: verified }) });
     const result = await response.json();
