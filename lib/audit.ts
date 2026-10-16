@@ -280,7 +280,6 @@ async function createTextReview(model: VerifiedModel, visualPass: VisualPass, ti
   return Array.isArray(root.findings) ? root.findings : [];
 }
 
-function normalizeIssueText(value: string) { return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " "); }
 
 function isGenericOrRepeatedFinding(finding: Finding, prior: Finding[]) {
   const title = normalizeIssueText(finding.title);
