@@ -60,7 +60,7 @@ export async function POST(request: Request) {
     const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
     const homeTitle = titleMatch ? cleanTitle(titleMatch[1]) : "Home";
     pages.set(origin, { url: origin, title: homeTitle || "Home", category: "Home", depth: 0, source: "navigation" });
-    const anchors = [...html.matchAll(/<a\b([^>]*?)href\s*=\s*["']([^"'#]+)["']([^>]*)>([\s\S]*?)<\/a>/gi)];
+    const anchors = Array.from(html.matchAll(/<a\b([^>]*?)href\s*=\s*["']([^"'#]+)["']([^>]*)>([\s\S]*?)<\/a>/gi));
     for (const match of anchors) {
       const attrs = match[1] + " " + match[3];
       const label = cleanTitle(match[4].replace(/<img[^>]*alt=["']([^"']*)["'][^>]*>/gi, " $1 "));
@@ -74,7 +74,7 @@ export async function POST(request: Request) {
         const sm = await fetch(sitemapUrl, { redirect: "follow", signal: AbortSignal.timeout(4500), headers: { "User-Agent": "UXAudit-PageDiscovery/1.0" } });
         if (!sm.ok) continue;
         const xml = (await sm.text()).slice(0, 1_500_000);
-        for (const match of xml.matchAll(/<loc>\s*([^<]+?)\s*<\/loc>/gi)) {
+        for (const match of Array.from(xml.matchAll(/<loc>\s*([^<]+?)\s*<\/loc>/gi)) ) {
           const candidate = match[1].trim();
           if (/sitemap[^/]*\.xml(?:$|\?)/i.test(candidate)) continue;
           add(candidate, "", "sitemap");
