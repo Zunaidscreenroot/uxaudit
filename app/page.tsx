@@ -186,17 +186,40 @@ export default function Home() {
       let buffer = "";
       const streamed: { result: { page?: AuditPage; auditId?: string } | null } = { result: null };
 
-      const handleFrame = (frame: string) => {
-        const line = frame.split("\n").find((item) => item.startsWith("data: "));
-        if (!line) return;
-        const event = JSON.parse(line.slice(6));
-        if (event.type === "stage") {
+      const dispatchEvent = (event: any) => {
+        if (!event || typeof event !== "object") return;
+        if (event.type === "stage" && event.stage) {
           setAuditStages((previous) => [...previous.filter((stage) => stage.id !== event.stage.id), event.stage]);
-          setAuditStatus(event.stage.detail || event.stage.label);
+          setAuditStatus(event.stage.detail || event.stage.label || "Processing screenshot audit…");
         } else if (event.type === "result") {
-          streamed.result = event.payload;
+          streamed.result = event.payload ?? event.result ?? event.data ?? null;
         } else if (event.type === "error") {
-          throw new Error(event.error || "The AI model could not analyse this screenshot.");
+          throw new Error(typeof event.error === "string" && event.error ? event.error : "The AI model could not analyse this screenshot.");
+        }
+      };
+
+      const handleFrame = (frame: string) => {
+        const normalized = frame.replace(/\r\n?/g, "\n").trim();
+        if (!normalized) return;
+        const dataLines = normalized.split("\n").filter((line) => /^\s*data\s*:/i.test(line));
+        if (dataLines.length) {
+          const raw = dataLines.map((line) => line.replace(/^\s*data\s*:\s?/i, "")).join("\n").trim();
+          if (!raw || raw === "[DONE]") return;
+          let event: any;
+          try { event = JSON.parse(raw); }
+          catch { throw new Error("The screenshot audit returned an unreadable event: " + raw.slice(0, 180)); }
+          dispatchEvent(event);
+          return;
+        }
+        // Also accept newline-delimited JSON if a proxy removes SSE separators.
+        const lines = normalized.split("\n").map((line) => line.trim()).filter(Boolean);
+        for (const line of lines) {
+          if (/^(event|id|retry)\s*:/.test(line) || line.startsWith(":")) continue;
+          try { dispatchEvent(JSON.parse(line)); }
+          catch (error) {
+            if (error instanceof Error && !/Unexpected token|JSON at position|JSON\.parse|is not valid JSON/i.test(error.message)) throw error;
+            throw new Error("The screenshot audit stream contained an unreadable response: " + line.slice(0, 180));
+          }
         }
       };
 
@@ -204,14 +227,15 @@ export default function Home() {
         const chunk = await reader.read();
         if (chunk.done) break;
         buffer += decoder.decode(chunk.value, { stream: true });
-        const frames = buffer.split("\n\n");
+        const normalized = buffer.replace(/\r\n?/g, "\n");
+        const frames = normalized.split("\n\n");
         buffer = frames.pop() || "";
         for (const frame of frames) handleFrame(frame);
       }
+      buffer += decoder.decode();
       if (buffer.trim()) handleFrame(buffer);
-
       const completed = streamed.result;
-      if (!completed?.page) throw new Error("The AI audit finished without returning a report. Please try again.");
+      if (!completed?.page) throw new Error("The server closed the screenshot audit stream without a report or error event. Check the Netlify function logs, then retry.");
       setAuditResult(completed.page);
       setAuditId(completed.auditId || "");
       setAuditStages((previous) => previous.map((stage) => stage.status === "active" ? { ...stage, status: "complete" } : stage));
