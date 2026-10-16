@@ -68,7 +68,11 @@ async function testModel(item: ModelDef) {
  }
 }
 export async function POST() {
- const results = [];\n for (const model of MODELS) { results.push(await testModel(model)); await new Promise(resolve=>setTimeout(resolve,250)); }
+ const results: any[] = [];
+ for (const model of MODELS) {
+  results.push(await testModel(model));
+  await new Promise(resolve => setTimeout(resolve, 250));
+ }
  const working = results.filter(result => result.ok);
  return Response.json({
   checkedAt:new Date().toISOString(),
