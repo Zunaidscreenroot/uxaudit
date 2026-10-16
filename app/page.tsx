@@ -184,7 +184,7 @@ export default function Home() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      let result: { page?: AuditPage; auditId?: string } | null = null;
+      const streamed: { result: { page?: AuditPage; auditId?: string } | null } = { result: null };
 
       const handleFrame = (frame: string) => {
         const line = frame.split("\n").find((item) => item.startsWith("data: "));
@@ -194,7 +194,7 @@ export default function Home() {
           setAuditStages((previous) => [...previous.filter((stage) => stage.id !== event.stage.id), event.stage]);
           setAuditStatus(event.stage.detail || event.stage.label);
         } else if (event.type === "result") {
-          result = event.payload;
+          streamed.result = event.payload;
         } else if (event.type === "error") {
           throw new Error(event.error || "The AI model could not analyse this screenshot.");
         }
@@ -210,9 +210,10 @@ export default function Home() {
       }
       if (buffer.trim()) handleFrame(buffer);
 
-      if (!result?.page) throw new Error("The AI audit finished without returning a report. Please try again.");
-      setAuditResult(result.page);
-      setAuditId(result.auditId || "");
+      const completed = streamed.result;
+      if (!completed?.page) throw new Error("The AI audit finished without returning a report. Please try again.");
+      setAuditResult(completed.page);
+      setAuditId(completed.auditId || "");
       setAuditStages((previous) => previous.map((stage) => stage.status === "active" ? { ...stage, status: "complete" } : stage));
       setAuditStatus("AI analysis complete. The report contains findings generated from your uploaded image.");
     } catch (e) {
