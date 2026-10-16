@@ -38,34 +38,9 @@ function extractJson(text: string): unknown | null {
   return null;
 }
 
-async function geminiGenerate(apiKey: string, model: string, parts: Array<Record<string, unknown>>, maxOutputTokens = 6000) {
-  const fallbackModels = Array.from(new Set(["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-2.5-flash-lite", model]));
-  let lastError = "Gemini request failed.";
-  for (const candidateModel of fallbackModels) {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${candidateModel}:generateContent`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
-        body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { responseMimeType: "application/json", maxOutputTokens, temperature: 0.1 } }),
-        signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
-      });
-      if (response.ok) {
-        const payload: any = await response.json();
-        const text = (payload?.candidates?.[0]?.content?.parts ?? []).map((part: any) => typeof part?.text === "string" ? part.text : "").join("");
-        if (text) return text;
-        lastError = `Gemini ${candidateModel} returned an empty response.`;
-        break;
-      }
-      const body = await response.text().catch(() => "");
-      lastError = `Gemini ${candidateModel} returned HTTP ${response.status}${body ? `: ${body.slice(0, 220)}` : ""}`;
-      if (response.status !== 429) break;
-      const retryAfter = response.headers.get("retry-after");
-      const retrySeconds = retryAfter ? Number(retryAfter) : NaN;
-      const delayMs = Number.isFinite(retrySeconds) ? Math.min(10000, Math.max(1000, retrySeconds * 1000)) : 1500 * (attempt + 1);
-      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, delayMs));
-    }
-  }
-  throw new Error(lastError);
+type VerifiedModel = {provider:"OpenRouter"|"Gemini";model:string;tier:"free"|"paid"};
+async function modelGenerate(model: VerifiedModel, parts: Array<Record<string, unknown>>, maxOutputTokens = 6000) {
+ if(model.provider!=="OpenRouter")throw new Error("Only verified OpenRouter models are enabled for UX Audit.");const key=process.env.OPENROUTER_API_KEY;if(!key)throw new Error("Configure OPENROUTER_API_KEY before running an audit.");const content:any[]=[];for(const part of parts){if(typeof part.text==="string")content.push({type:"text",text:part.text});else if(part.inline_data&&typeof part.inline_data==="object"){const im=part.inline_data as {mime_type?:string;data?:string};if(im.data)content.push({type:"image_url",image_url:{url:"data:"+(im.mime_type||"image/jpeg")+";base64,"+im.data}});}}let lastError="OpenRouter model request failed.";for(let attempt=0;attempt<2;attempt++){try{const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:"Bearer "+key,"Content-Type":"application/json","HTTP-Referer":"https://uxauditscreenroot.vercel.app","X-Title":"UX Audit"},body:JSON.stringify({model:model.model,messages:[{role:"user",content}],max_tokens:maxOutputTokens,temperature:0.1,provider:{allow_fallbacks:false}}),signal:AbortSignal.timeout(45000),cache:"no-store"});const payload:any=await response.json().catch(()=>({}));if(response.ok){const raw=payload?.choices?.[0]?.message?.content;const text=typeof raw==="string"?raw:Array.isArray(raw)?raw.map((x:any)=>x?.text??"").join(""):"";if(text.trim())return text;lastError="Verified model returned an empty response.";}else lastError="OpenRouter "+model.model+" returned HTTP "+response.status+": "+(payload?.error?.message??"Provider request failed");if(response.status!==429&&response.status<500)break;}catch(e){lastError=e instanceof Error?e.message:"OpenRouter request failed";}if(attempt===0)await new Promise(resolve=>setTimeout(resolve,700));}throw new Error(lastError);
 }
 
 function normalizeMarker(value: unknown): MarkerPoint {
@@ -99,19 +74,19 @@ function normalizeFinding(raw: unknown, observation: VisualObservation, index: n
   return { id: typeof item.id === "string" ? item.id.trim() : `finding-${index + 1}`, severity: severityFor(item.severity), category: categoryFor(item.category), title: typeof item.title === "string" ? item.title.trim() : observation.issue, description: typeof item.description === "string" ? item.description.trim() : observation.issue, recommendation: typeof item.recommendation === "string" ? item.recommendation.trim() : "Simplify and reprioritise the affected interface pattern.", uxPerspective: { law: typeof ux.law === "string" ? ux.law.trim() : "UX design principle", definition: typeof ux.definition === "string" ? ux.definition.trim() : "A research-backed principle used to evaluate how an interface supports user goals.", assessment: typeof ux.assessment === "string" ? ux.assessment.trim() : observation.whyItMatters, researchContext: typeof ux.researchContext === "string" ? ux.researchContext.trim() : "The pattern should be evaluated against established interaction and information-design research rather than preference alone." }, businessAnalysis: { funnelStage: typeof business.funnelStage === "string" ? business.funnelStage.trim() : "Consideration / conversion", impact: typeof business.impact === "string" ? business.impact.trim() : "The friction can reduce clarity and increase hesitation before the next funnel step.", kpi: typeof business.kpi === "string" ? business.kpi.trim() : "CTA click-through / conversion rate", mechanism: typeof business.mechanism === "string" ? business.mechanism.trim() : "Users may take longer to understand the value proposition or choose the next action.", suggestions: stringList(business.suggestions, 4).length ? stringList(business.suggestions, 4) : ["Make the primary action visually dominant.", "Reduce competing information around the action."] }, evidence: [{ section: observation.section, element: observation.element, detail: observation.issue, marker: observation.marker }] };
 }
 
-async function createVisualPass(apiKey: string, model: string, capture: Capture): Promise<VisualPass> {
+async function createVisualPass(model: VerifiedModel, capture: Capture): Promise<VisualPass> {
   const aspect = capture.width / capture.height;
   const viewportHint = aspect < 0.75 ? "portrait or full-page narrow capture (verify actual visible UI; do not assume mobile solely from aspect ratio)" : aspect < 1.15 ? "square-ish or tablet-like capture (verify actual visible UI)" : "wide capture (likely desktop, but verify actual visible UI)";
   const prompt = `You are the IMAGE-TO-TEXT stage of a UX audit. Analyze the supplied screenshot itself, not an imagined website. Original dimensions are ${capture.width}x${capture.height}px; aspect-ratio hint: ${viewportHint}. Determine DEVICE / VIEWPORT from visible evidence first: narrow single-column layout, mobile hamburger/menu, stacked cards, mobile-sized controls, desktop multi-column layout, wide navigation, sidebars, or desktop utility bars. In JSON include "deviceType" as "mobile", "desktop", "tablet", or "uncertain" and explain the visible cue in pageSummary. Never label a full-page screenshot mobile just because it is tall; never label it desktop just because it contains lots of content.\n\nFIRST identify the CLIENT / BRAND NAME visible in the screenshot. Look specifically for explicit company or product text, logo/wordmark text, domain text, browser/site identity, distinctive brand naming, or a clearly visible legal/company name. Use the strongest explicit evidence. If the screenshot is Tata Capital, return exactly "Tata Capital". Do not infer a client from generic colours, layout style, or industry alone. If no reliable name is visible, return "Unknown client".\n\nThe final report will display the ENTIRE original screenshot once, with numbered colored dots overlaid on the exact regions you identify. There is NO CROPPING in this product. Do not return bounding boxes, crop widths, crop heights, or image snippets.\n\nFind 5–8 strong, DISTINCT UX observations. Each observation must refer to a different specific visible UI region and a different concrete issue grounded only in pixels actually visible in this screenshot. Do not repeat the same issue under synonyms, do not repeat generic labels such as "high density" for multiple unrelated sections, and do not reuse a title/issue/element for multiple observations. If the screenshot does not support 5 distinct issues, return fewer rather than inventing or duplicating. Titles must name the actual element and problem, not just a generic category. If the screenshot is narrow/tall, reason about the actual responsive mobile layout shown; never assume desktop. Prefer concrete issues involving hierarchy, labels, grouping, density, CTA competition, form clarity, content scanning, navigation, trust, or conversion friction.\n\nFor EVERY observation return ONE MARKER POINT at the visual centre of the specific UI region that demonstrates the issue. Coordinates must be normalized from 0 to 1 using the ORIGINAL supplied image dimensions: x=0 is the left edge, x=1 the right edge, y=0 is the top edge, y=1 the bottom edge. The dot should land ON the relevant text, control, card, image, navigation item, or other visible evidence—not in empty space. Use the exact visible location, not a section estimate or page-percentage guess. Never place two observations at the same point. Keep observations ordered from top to bottom of the screenshot.\n\nThe marker is the permanent spatial link between the visual observation and the later text review. Do not change or reinterpret the marker after choosing it.\n\nReturn JSON only: {"clientName":"Tata Capital","deviceType":"mobile|desktop|tablet|uncertain","pageSummary":"one factual sentence including visible device/layout cues","observations":[{"id":"obs-1","section":"exact visible section","element":"exact visible element","issue":"factual visible issue","whyItMatters":"user-visible consequence","marker":{"x":0.50,"y":0.20}}]}`;
-  const text = await geminiGenerate(apiKey, model, [{ text: prompt }, { inline_data: { mime_type: "image/jpeg", data: capture.analysisBuffer.toString("base64") } }], 5500);
+  const text = await modelGenerate(model, [{ text: prompt }, { inline_data: { mime_type: "image/jpeg", data: capture.analysisBuffer.toString("base64") } }], 5500);
   const result = normalizeVisualPass(extractJson(text));
   if (!result.observations.length) throw new Error("The image-to-text model returned no usable visual observations.");
   return result;
 }
 
-async function createTextReview(apiKey: string, model: string, visualPass: VisualPass) {
+async function createTextReview(model: VerifiedModel, visualPass: VisualPass) {
   const prompt = `You are the SECOND stage of a UX audit. You are a TEXT-TO-TEXT UX research and business reviewer. The first model already inspected the screenshot and produced the visual observations below. You do NOT see the screenshot.\n\nPreserve observationId exactly. Do not change, merge, reorder, or reinterpret the visual location. Never invent UI elements, coordinates, measurements, analytics, or behaviour. For each observation create a client-ready finding with UX research context and business funnel analysis. Each finding title and recommendation must be specific to its own observation; do not repeat titles, generic problem statements, UX laws, KPI, funnel stage, or business analysis mechanically across all findings. Calibrate severity independently: high only for a major blocker, misleading interaction, serious trust/accessibility issue, or clear primary-journey failure; medium for meaningful friction; low for polish/minor clarity issues. Vary severity only when evidence warrants it—never alternate high/low as a pattern. KPI and funnel stage must fit the actual issue; use different values where the evidence points to different outcomes.\n\nUX context must include a relevant law/principle, a plain-language definition, why it applies, and concise research context. Business analysis must identify funnel stage, directional impact, KPI at risk, mechanism, and practical suggestions that could improve that KPI. Do not create development tasks. Do not claim measured KPI changes.\n\nReturn JSON only: {"findings":[{"id":"finding-1","observationId":"obs-1","severity":"high|medium|low","category":"Information hierarchy","title":"short finding","description":"clear explanation","recommendation":"specific UX redesign action","uxPerspective":{"law":"Hick's Law","definition":"plain-language definition","assessment":"why it applies","researchContext":"brief research context"},"businessAnalysis":{"funnelStage":"Acquisition / consideration / activation / conversion / retention","impact":"directional impact","kpi":"specific KPI","mechanism":"how the design can influence it","suggestions":["specific action","specific action"]}}]}\n\nAllowed categories: ${CATEGORIES.join(", ")}.\n\nVISUAL OBSERVATIONS:\n${JSON.stringify(visualPass)}`;
-  const text = await geminiGenerate(apiKey, model, [{ text: prompt }], 7000);
+  const text = await modelGenerate(model, [{ text: prompt }], 7000);
   const parsed = extractJson(text); const root = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
   return Array.isArray(root.findings) ? root.findings : [];
 }
@@ -139,7 +114,7 @@ function fallbackFinding(observation: VisualObservation, index: number): Finding
   return normalizeFinding({ id: `finding-${index + 1}`, severity: index < 2 ? "high" : "medium", category: "Information hierarchy", title: observation.issue, description: observation.issue, recommendation: "Reduce competing visual signals, strengthen the primary action, and use clearer hierarchy to make the intended next step easier to understand.", uxPerspective: { law: "Visual hierarchy and cognitive load", definition: "Users scan interfaces by relative prominence and grouping, so competing or unclear signals increase the effort needed to decide what matters.", assessment: observation.whyItMatters, researchContext: "The observation is consistent with established research on visual grouping, attention and cognitive load." }, businessAnalysis: { funnelStage: "Consideration / conversion", impact: "The visible friction can increase hesitation before the next intended action.", kpi: "Primary CTA click-through rate", mechanism: "When the intended next step is harder to understand, users can delay, miss or abandon the action.", suggestions: ["Strengthen the primary hierarchy.", "Remove or reduce competing signals around the key action."] } }, observation, index);
 }
 
-export async function createAuditFromScreenshot(buffer: Buffer, filename: string, onStage?: (stage: AuditStage) => void): Promise<AuditResult> {
+export async function createAuditFromScreenshot(buffer: Buffer, filename: string, onStage?: (stage: AuditStage) => void, verifiedModels: VerifiedModel[] = []): Promise<AuditResult> {
   if (buffer.byteLength > MAX_SCREENSHOT_BYTES) throw new Error("Screenshot is too large. Please upload an image smaller than 15 MB.");
   const metadata = await sharp(buffer).metadata(); const width = metadata.width ?? 0; const height = metadata.height ?? 0;
   if (!width || !height) throw new Error("The uploaded file is not a valid image.");
@@ -147,16 +122,18 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   if (width > 20000 || height > 20000) throw new Error("Screenshot dimensions are too large. Please upload a smaller screenshot.");
   const analysisBuffer = await sharp(buffer).resize({ width: Math.min(1600, width), height: Math.min(7000, height), fit: "inside", withoutEnlargement: true }).jpeg({ quality: 82, progressive: true }).toBuffer();
   const capture: Capture = { buffer, width, height, analysisBuffer, title: filename.replace(/\.[^.]+$/, "") || "Uploaded screenshot" };
-  const apiKey = process.env.GEMINI_API_KEY; if (!apiKey) throw new Error("Configure GEMINI_API_KEY before running an audit.");
-  const visionModel = DEFAULT_VISION_MODEL; const textModel = process.env.GEMINI_TEXT_MODEL || DEFAULT_TEXT_MODEL;
+  const allowedModels=verifiedModels.filter(m=>m&&m.provider==="OpenRouter"&&typeof m.model==="string"&&m.model.length>0);
+  const visionModel=allowedModels.find(m=>m.model.includes("vision")||m.model.includes("vl"))??allowedModels[0];
+  const textModel=allowedModels.find(m=>m.model!==visionModel?.model)??visionModel;
+  if(!visionModel||!textModel)throw new Error("At least one verified OpenRouter model is required; refresh model availability and retry.");
 
   onStage?.({ id: "capture", label: "Preparing screenshot", detail: `Using the original ${width} × ${height}px screenshot; no visual crops will be generated.`, status: "complete" });
   onStage?.({ id: "analyse", label: "Image → text", detail: "Vision model is identifying the client and locating concrete UX evidence with marker coordinates.", status: "active" });
-  const visualPass = await createVisualPass(apiKey, visionModel, capture);
+  const visualPass = await createVisualPass(visionModel, capture);
   onStage?.({ id: "analyse", label: "Image → text", detail: `${visualPass.clientName} · ${visualPass.observations.length} visual regions identified on the full screenshot.`, status: "complete" });
 
   onStage?.({ id: "quality", label: "Text → UX research", detail: "A separate text model is interpreting the visual observations through UX research and design principles.", status: "active" });
-  const review = await createTextReview(apiKey, textModel, visualPass);
+  const review = await createTextReview(textModel, visualPass);
   onStage?.({ id: "quality", label: "Text → UX research", detail: "UX laws, definitions and research context are ready.", status: "complete" });
 
   onStage?.({ id: "markers", label: "Place evidence markers", detail: "Linking each finding to its exact region on the original screenshot; no crops are created.", status: "active" });
