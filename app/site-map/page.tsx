@@ -184,7 +184,7 @@ useEffect(()=>{if(sessionId&&data){saveSession().catch(e=>setError(e instanceof 
     <h3 style={{margin:"8px 0",fontSize:17}}>The site is blocking automated capture</h3>
     <p style={{fontSize:13,lineHeight:1.6,color:"#695b42",maxWidth:840}}>Open this URL in your normal desktop browser and capture the actual website page (not the 403/CDN error). Use a full-page screenshot with a desktop viewport around 1440 CSS pixels wide. Upload the screenshot here and UX Audit will run the same AI analysis on it.</p>
     <div style={{fontSize:12,color:"#6b7280",overflowWrap:"anywhere",marginBottom:12}}>{manualCaptureTarget}</div>
-    <label style={{display:"inline-flex",flexDirection:"column",gap:8,fontSize:12,fontWeight:750,color:"#334155"}}>{manualUploadBusy?"Analysing uploaded screenshot…":"Upload actual {auditMode==="mobile"?"mobile 393 × 852":"desktop 1440"} page screenshot (PNG, JPEG or WebP)"}
+    <label style={{display:"inline-flex",flexDirection:"column",gap:8,fontSize:12,fontWeight:750,color:"#334155"}}>{manualUploadBusy?"Analysing uploaded screenshot…":`Upload actual ${auditMode==="mobile"?"mobile 393 × 852":"desktop 1440"} page screenshot (PNG, JPEG or WebP)`}
      <input type="file" accept="image/png,image/jpeg,image/webp" disabled={manualUploadBusy} onChange={e=>{const file=e.currentTarget.files?.[0];if(file)void auditManualScreenshot(file);e.currentTarget.value="";}} style={{maxWidth:"100%",padding:10,border:"1px solid #d8dee7",borderRadius:8,background:"#fff"}}/>
     </label>
     <p style={{fontSize:11,lineHeight:1.5,color:"#7b6a4b",marginBottom:0}}>Up to 12 MB. The screenshot is used as audit evidence; it does not bypass the website's access controls.</p>
