@@ -302,9 +302,12 @@ function fallbackFinding(observation: VisualObservation, index: number): Finding
   return normalizeFinding({ id: `finding-${index + 1}`, severity: index < 2 ? "high" : "medium", category: "Information hierarchy", title: observation.issue, description: observation.issue, recommendation: "Reduce competing visual signals, strengthen the primary action, and use clearer hierarchy to make the intended next step easier to understand.", uxPerspective: { law: "Visual hierarchy and cognitive load", definition: "Users scan interfaces by relative prominence and grouping, so competing or unclear signals increase the effort needed to decide what matters.", assessment: observation.whyItMatters, researchContext: "The observation is consistent with established research on visual grouping, attention and cognitive load." }, businessAnalysis: { funnelStage: "Consideration / conversion", impact: "The visible friction can increase hesitation before the next intended action.", kpi: "Primary CTA click-through rate", mechanism: "When the intended next step is harder to understand, users can delay, miss or abandon the action.", suggestions: ["Strengthen the primary hierarchy.", "Remove or reduce competing signals around the key action."] } }, observation, index);
 }
 
-export async function createAuditFromScreenshot(buffer: Buffer, filename: string, onStage?: (stage: AuditStage) => void, verifiedModels: VerifiedModel[] = [], auditMode: "desktop" | "mobile" = "desktop"): Promise<AuditResult> {
+export async function createAuditFromScreenshot(buffer: Buffer, filename: string, onStage?: (stage: AuditStage) => void, verifiedModels: VerifiedModel[] = [], auditMode: "desktop" | "mobile" = "desktop", onPartialResult?: (result: AuditResult) => void): Promise<AuditResult> {
   if (buffer.byteLength > MAX_SCREENSHOT_BYTES) throw new Error("Screenshot is too large. Please upload an image smaller than 15 MB.");
   const metadata = await sharp(buffer).metadata(); const width = metadata.width ?? 0; const height = metadata.height ?? 0;
+  const screenshotMime = metadata.format === "png" ? "image/png" : metadata.format === "webp" ? "image/webp" : metadata.format === "gif" ? "image/gif" : metadata.format === "avif" ? "image/avif" : "image/jpeg";
+  // Reuse the already validated screenshot bytes; re-encoding a full-page image after both model calls can push serverless requests past their time budget.
+  const screenshot = `data:${screenshotMime};base64,${buffer.toString("base64")}`;
   if (!width || !height) throw new Error("The uploaded file is not a valid image.");
   if (width < 320 || height < 200) throw new Error("Please upload a larger screenshot so the UX evidence can be reviewed reliably.");
   if (width > 20000 || height > 20000) throw new Error("Screenshot dimensions are too large. Please upload a smaller screenshot.");
@@ -324,6 +327,30 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   for(let i=0;i<visionCandidates.length;i++){const candidate=visionCandidates[i];const timeoutMs=i===0?18000:i===1?10000:8000;try{visualPass=await createVisualPass(candidate,capture,timeoutMs,auditMode);break;}catch(e){visualErrors.push(candidate.model+": "+(e instanceof Error?e.message:"failed"));}}
   if(!visualPass)throw new Error("OpenRouter Auto Router could not analyze the screenshot. "+visualErrors.join(" | "));
   onStage?.({ id: "analyse", label: "Image → text", detail: `${visualPass.clientName} · ${visualPass.observations.length} visual regions identified on the full screenshot.`, status: "complete" });
+
+  // Send evidence-linked visual findings before the slower UX reasoning pass.
+  // If a serverless time limit interrupts later work, the user still gets a usable report.
+  const preliminaryFindings: Finding[] = [];
+  for (const observation of visualPass.observations) {
+    const index = preliminaryFindings.length;
+    preliminaryFindings.push(normalizeFinding(fallbackFinding(observation, index), observation, index, preliminaryFindings));
+  }
+  if (onPartialResult && preliminaryFindings.length) {
+    const partialResult: AuditResult = { pages: [{
+      clientName: visualPass.clientName,
+      url: "Uploaded screenshot",
+      title: capture.title,
+      screenshot,
+      screenshotWidth: width,
+      screenshotHeight: height,
+      findings: preliminaryFindings,
+      auditMode,
+      viewportWidth: auditMode === "mobile" ? 393 : 1440,
+      ...(auditMode === "mobile" ? { viewportHeight: 852 } : {}),
+    }] };
+    onPartialResult(partialResult);
+    console.info("[uxaudit] screenshot_partial_report_ready", JSON.stringify({ observations: preliminaryFindings.length }));
+  }
 
   onStage?.({ id: "quality", label: "OpenRouter UX reasoning", detail: "OpenRouter Auto Router · low-cost tier · text-only UX research and business analysis. OpenRouter selects the reasoning model.", status: "active" });
   let review: unknown[]=[];let reviewOk=false;let reviewErrors:string[]=[];
@@ -346,7 +373,6 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   onStage?.({ id: "enrich", label: "Applying UX + business context", detail: "Finalising funnel impact, KPI hypotheses and redesign recommendations.", status: "active" });
   onStage?.({ id: "enrich", label: "Applying UX + business context", detail: "UX research context and business funnel analysis are ready.", status: "complete" });
   onStage?.({ id: "complete", label: "Finalise report", detail: "Building the client-ready report with one full screenshot and linked evidence markers.", status: "active" });
-  const screenshot = `data:image/jpeg;base64,${(await sharp(buffer).jpeg({ quality: 88, progressive: true }).toBuffer()).toString("base64")}`;
   const result: AuditResult = { pages: [{ clientName: visualPass.clientName, url: "Uploaded screenshot", title: capture.title, screenshot, screenshotWidth: width, screenshotHeight: height, findings, auditMode, viewportWidth: auditMode === "mobile" ? 393 : 1440, ...(auditMode === "mobile" ? { viewportHeight: 852 } : {}) }] };
   onStage?.({ id: "complete", label: "Finalise report", detail: "Audit ready.", status: "complete" });
   return result;
