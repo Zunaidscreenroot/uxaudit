@@ -38,6 +38,51 @@ function extractJson(text: string): unknown | null {
   return null;
 }
 
+function recoverVisualPassJson(text: string): unknown | null {
+  // Some vision providers add prose or truncate the outer JSON object despite
+  // JSON mode. Recover any individually complete observation objects instead
+  // of dropping an otherwise useful visual response.
+  const keyMatch = text.match(/"observations"\\s*:\\s*\\[/) ?? text.match(/"visualObservations"\\s*:\\s*\\[/) ?? text.match(/"findings"\\s*:\\s*\\[/);
+  if (!keyMatch || keyMatch.index === undefined) return null;
+  const arrayStart = text.indexOf("[", keyMatch.index);
+  if (arrayStart < 0) return null;
+  const observations: Record<string, unknown>[] = [];
+  let objectStart = -1, depth = 0, inString = false, escaped = false;
+  for (let i = arrayStart + 1; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === "{") { if (depth === 0) objectStart = i; depth += 1; continue; }
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0 && objectStart >= 0) {
+        try {
+          const value = JSON.parse(text.slice(objectStart, i + 1));
+          if (value && typeof value === "object" && !Array.isArray(value)) observations.push(value as Record<string, unknown>);
+        } catch {}
+        objectStart = -1;
+      }
+    }
+    if (ch === "]" && depth === 0) break;
+  }
+  if (!observations.length) return null;
+  const readString = (key: string, fallback: string) => {
+    const match = text.match(new RegExp('"' + key + '"\\\\s*:\\\\s*("(?:\\\\\\\\.|[^"\\\\\\\\])*")'));
+    if (!match) return fallback;
+    try { const value = JSON.parse(match[1]); return typeof value === "string" ? value : fallback; } catch { return fallback; }
+  };
+  return {
+    clientName: readString("clientName", "Unknown client"),
+    pageSummary: readString("pageSummary", "Visual observations recovered from a partially formatted model response."),
+    observations,
+  };
+}
+
 type VerifiedModel = {provider:"OpenRouter"|"Gemini";model:string;tier:"free"|"paid"};
 async function modelGenerate(model: VerifiedModel, parts: Array<Record<string, unknown>>, maxOutputTokens = 6000, timeoutMs = 12000) {
  if(model.provider!=="OpenRouter")throw new Error("Only verified OpenRouter models are enabled for UX Audit.");
@@ -256,13 +301,13 @@ async function createVisualPass(model: VerifiedModel, capture: Capture, timeoutM
   const imagePart = { inline_data: { mime_type: "image/jpeg", data: capture.analysisBuffer.toString("base64") } };
   let lastProblem = "The image-to-text model returned no usable visual observations.";
   // Large screenshots often need 15–18 seconds for vision inference. Do not burn the remaining request budget repeating the same expensive image request after a timeout; the caller can then preserve/report any existing visual output or return a precise timeout error.
-  const maxAttempts = timeoutMs >= 15000 ? 1 : 2;
+  const maxAttempts = 2;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const retryPrompt = attempt === 0 ? prompt : `Inspect the attached screenshot and return ONLY valid JSON with this exact shape: {"clientName":"visible brand or Unknown client","pageSummary":"one sentence describing visible layout","observations":[{"id":"obs-1","section":"visible region","element":"visible control or content","issue":"specific UX issue visibly supported by screenshot","whyItMatters":"user impact","marker":{"x":0.5,"y":0.2}}]}. Return 3 to 6 observations only when supported by visible evidence. Coordinates must be numbers from 0 to 1. Do not return markdown or any other schema.`;
     try {
-      const attemptTimeoutMs = attempt === 0 ? timeoutMs : Math.min(timeoutMs, 8000);
-      const text = await modelGenerate(model, [{ text: retryPrompt }, imagePart], attempt === 0 ? 4000 : 3000, attemptTimeoutMs);
-      const parsed = extractJson(text);
+      const attemptTimeoutMs = attempt === 0 ? timeoutMs : Math.min(timeoutMs, 4500);
+      const text = await modelGenerate(model, [{ text: retryPrompt }, imagePart], attempt === 0 ? 4500 : 3000, attemptTimeoutMs);
+      const parsed = extractJson(text) ?? recoverVisualPassJson(text);
       const result = normalizeVisualPass(parsed);
       if (result.observations.length) return result;
       const keys = parsed && typeof parsed === "object" ? Object.keys(parsed as Record<string, unknown>) : [];
@@ -359,7 +404,7 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   onStage?.({ id: "quality", label: "OpenRouter UX reasoning", detail: "OpenRouter Auto Router · low-cost tier · text-only UX research and business analysis. OpenRouter selects the reasoning model.", status: "active" });
   let review: unknown[]=[];let reviewOk=false;let reviewErrors:string[]=[];
   const textCandidates=[textModel,...allowedModels.filter(m=>m.model!==textModel.model)];
-  for(let i=0;i<textCandidates.length;i++){const candidate=textCandidates[i];const timeoutMs=i===0?8000:i===1?6500:5500;try{review=await createTextReview(candidate,visualPass,timeoutMs);if(review.length){reviewOk=true;break;}reviewErrors.push(candidate.model+": empty findings");}catch(e){reviewErrors.push(candidate.model+": "+(e instanceof Error?e.message:"failed"));}}
+  for(let i=0;i<textCandidates.length;i++){const candidate=textCandidates[i];const timeoutMs=i===0?6000:i===1?5000:4500;try{review=await createTextReview(candidate,visualPass,timeoutMs);if(review.length){reviewOk=true;break;}reviewErrors.push(candidate.model+": empty findings");}catch(e){reviewErrors.push(candidate.model+": "+(e instanceof Error?e.message:"failed"));}}
   if(!reviewOk){console.warn("[uxaudit] text_review_degraded",JSON.stringify({errors:reviewErrors,observations:visualPass.observations.length}));onStage?.({id:"quality",label:"OpenRouter UX reasoning",detail:"OpenRouter did not return valid structured research findings; preserving screenshot evidence and using conservative evidence-linked fallback recommendations. "+reviewErrors.join(" | "),status:"complete"});review=[];}else{onStage?.({id:"quality",label:"OpenRouter UX reasoning",detail:"OpenRouter returned structured UX laws, research context and business-funnel hypotheses.",status:"complete"});}
 
   onStage?.({ id: "markers", label: "Place evidence markers", detail: "Linking each finding to its exact region on the original screenshot; no crops are created.", status: "active" });
