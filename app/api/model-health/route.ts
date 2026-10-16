@@ -69,8 +69,8 @@ export async function POST(request:Request) {
  }
  if(!response)throw new Error("OpenRouter did not return a response.");
  if(!response.ok)return Response.json({model,provider,status:"error",latencyMs:Date.now()-started,attempts,upstreamStatus:response.status,error:`Provider HTTP ${response.status}: ${result?.error?.message??"The model provider is temporarily unavailable. Try again shortly."}`,note:"Transient 429/5xx errors were retried once. No screenshot was sent."});
- const content=result?.choices?.[0]?.message?.content,usage=result?.usage??{};
- return Response.json({model,provider,status:typeof content==="string"&&content.trim()?"connected":"no_response",latencyMs:Date.now()-started,responsePreview:typeof content==="string"?content.slice(0,80):"",
+ const rawContent=result?.choices?.[0]?.message?.content; const content=typeof rawContent==="string"?rawContent:Array.isArray(rawContent)?rawContent.map((part:any)=>typeof part==="string"?part:part?.text??"").join(""):""; const usage=result?.usage??{};
+ return Response.json({model,provider,status:content.trim()?"connected":"no_response",latencyMs:Date.now()-started,responsePreview:content.slice(0,80),
  usage:{promptTokens:usage.prompt_tokens??null,completionTokens:usage.completion_tokens??null,totalTokens:usage.total_tokens??null,costUsd:usage.cost??null},
  attempts,note:"One short text-only prompt was sent. Paid models may incur a small charge; no screenshot is used."},{headers:{"Cache-Control":"no-store"}});
  }
