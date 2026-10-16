@@ -1,17 +1,29 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   experimental: {
-    // Chromium uses runtime-resolved files relative to its installed package.
-    // Externalize it so Next/Webpack does not relocate its runtime path.
+    // Externalize Chromium so Next/Webpack preserves the package's runtime path.
     serverComponentsExternalPackages: ["@sparticuz/chromium", "puppeteer-core"],
-    // Vercel's output-file tracer can omit the Brotli-compressed browser payload
-    // because it is loaded by path rather than imported. Include it in this API
-    // function's serverless bundle so executablePath() can extract it at runtime.
+    // The .br binaries are loaded by filesystem path, so file tracing may not
+    // discover them automatically. Include them in the screenshot API function.
     outputFileTracingIncludes: {
       "/api/capture-url": [
         "./node_modules/@sparticuz/chromium/bin/**/*",
       ],
     },
+  },
+  webpack(config, { isServer }) {
+    if (isServer) {
+      // Keep an explicit Webpack external rule in addition to Next's external-package
+      // setting; Chromium resolves its compressed runtime assets relative to node_modules.
+      const externals = Array.isArray(config.externals)
+        ? config.externals
+        : config.externals
+          ? [config.externals]
+          : [];
+      externals.push("@sparticuz/chromium", "puppeteer-core");
+      config.externals = externals;
+    }
+    return config;
   },
 };
 
