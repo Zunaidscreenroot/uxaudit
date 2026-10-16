@@ -199,6 +199,17 @@ export default function Home() {
           setAuditStatus(event.stage.detail || event.stage.label || "Processing screenshot audit…");
         } else if (event.type === "result") {
           streamed.result = event.payload ?? event.result ?? event.data ?? null;
+          if (streamed.result?.page) {
+            setAuditResult(streamed.result.page);
+            setAuditStatus("AI analysis completed. Finishing report persistence…");
+          }
+          if (streamed.result?.auditId) setAuditId(streamed.result.auditId);
+        } else if (event.type === "saved") {
+          if (typeof event.auditId === "string") setAuditId(event.auditId);
+          setAuditStatus("AI analysis complete and report saved to the knowledge base.");
+        } else if (event.type === "warning") {
+          setAuditError(typeof event.warning === "string" ? event.warning : "The report was generated, but knowledge-base saving did not complete.");
+          setAuditStatus("AI analysis finished; report persistence needs attention.");
         } else if (event.type === "error") {
           throw new Error(typeof event.error === "string" && event.error ? event.error : "The AI model could not analyse this screenshot.");
         }
