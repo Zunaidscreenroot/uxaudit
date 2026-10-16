@@ -18,7 +18,7 @@ const DEFAULT_VISION_MODEL = "gemini-3.1-flash-lite";
 const DEFAULT_TEXT_MODEL = "gemini-3.1-flash-lite";
 const GEMINI_TIMEOUT_MS = 30000;
 const MAX_SCREENSHOT_BYTES = 15 * 1024 * 1024;
-const CATEGORIES = ["Language & tone", "Navigation", "Information hierarchy", "Visual design", "Usability & interaction", "User engagement", "Conversion"] as const;
+const CATEGORIES = ["Navigation", "Information hierarchy", "Usability & interaction", "Content & tone", "Visual design", "Responsiveness", "Web performance"] as const;
 
 function clamp(value: number, min: number, max: number) { return Math.min(max, Math.max(min, value)); }
 
@@ -92,15 +92,160 @@ function normalizeVisualPass(value: unknown): VisualPass {
   };
 }
 
-function categoryFor(value: unknown) { const requested = typeof value === "string" ? value.trim().toLowerCase() : ""; return CATEGORIES.find((category) => category.toLowerCase() === requested) ?? "Visual design"; }
+function normalizeIssueText(value: string) { return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " "); }
+
+function inferredCategory(observation: VisualObservation): typeof CATEGORIES[number] {
+  const text = normalizeIssueText([observation.section, observation.element, observation.issue, observation.whyItMatters].join(" "));
+  if (/\b(responsive|responsiveness|mobile|viewport|breakpoint|horizontal overflow|clipped|off screen|screen width|stacked layout|touch target|thumb reach)\b/.test(text)) return "Responsiveness";
+  if (/\b(performance|slow|loading time|load time|latency|spinner|skeleton|loading state|unloaded|page speed|web vital|lcp|cls|inp)\b/.test(text)) return "Web performance";
+  if (/\b(navigation|nav bar|navbar|menu|breadcrumb|sitemap|page not found|discoverability|discoverable|menu item|navigation item|tabs?)\b/.test(text)) return "Navigation";
+  if (/\b(form|button|click|tap|checkbox|radio button|stepper|input|dropdown|select control|interactive|interaction|disabled|error state|feedback|submit|login|sign in|control)\b/.test(text)) return "Usability & interaction";
+  if (/\b(copy|content|tone|wording|label|microcopy|text|sentence|description|instruction|ambiguous wording|unclear language|typo|grammar|readability|headline|duplicate copy)\b/.test(text)) return "Content & tone";
+  if (/\b(hierarchy|prioriti[sz]|prominence|competing|overload|grouping|grouped|clutter|scannability|scan|primary cta|secondary cta|information architecture|information overload|visual order)\b/.test(text)) return "Information hierarchy";
+  return "Visual design";
+}
+function categoryFor(value: unknown, observation?: VisualObservation): typeof CATEGORIES[number] {
+  const requested = typeof value === "string" ? value.trim().toLowerCase() : "";
+  const matched = CATEGORIES.find((category) => category.toLowerCase() === requested);
+  if (matched) return matched;
+  const legacy: Record<string, typeof CATEGORIES[number]> = {
+    "language & tone": "Content & tone", "content": "Content & tone", "user engagement": "Usability & interaction",
+    "conversion": "Usability & interaction", "accessibility": "Usability & interaction",
+    "responsive design": "Responsiveness", "performance": "Web performance",
+  };
+  return legacy[requested] ?? (observation ? inferredCategory(observation) : "Visual design");
+}
 function severityFor(value: unknown): Severity { const v = typeof value === "string" ? value.toLowerCase() : "medium"; return v === "high" || v === "low" ? v : "medium"; }
 function stringList(value: unknown, limit = 4) { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim()).slice(0, limit) : []; }
-
-function normalizeFinding(raw: unknown, observation: VisualObservation, index: number): Finding {
+function textValue(value: unknown, fallback: string) { return typeof value === "string" && value.trim() ? value.trim() : fallback; }
+function capWords(value: string, maxLength: number) { const trimmed = value.trim(); return trimmed.length <= maxLength ? trimmed : trimmed.slice(0, maxLength - 1).trimEnd() + "…"; }
+function isRepeated(value: string, prior: Finding[], selector: (finding: Finding) => string) {
+  const normalized = normalizeIssueText(value);
+  return normalized.length > 0 && prior.some((finding) => normalizeIssueText(selector(finding)) === normalized);
+}
+function isGenericTitle(value: string) {
+  const normalized = normalizeIssueText(value);
+  return normalized.length < 10 || /^(visual design|information hierarchy|navigation|poor ux|usability issue|high density|content issue|mobile issue|performance issue|unclear design)$/.test(normalized);
+}
+function evidenceSpecificTitle(observation: VisualObservation, index: number, prior: Finding[] = []): string {
+  const element = capWords(observation.element || observation.section || "Interface element", 44);
+  const issue = capWords(observation.issue || "creates user friction", 72).replace(/[.!?]+$/, "");
+  let title = element + ": " + issue;
+  if (isRepeated(title, prior, (finding) => finding.title)) title = capWords(observation.section || "Page section", 28) + " — " + title;
+  if (isRepeated(title, prior, (finding) => finding.title)) title += " (" + (index + 1) + ")";
+  return title;
+}
+function evidenceSpecificDescription(observation: VisualObservation): string {
+  const section = observation.section || "the visible page";
+  const element = observation.element || "the interface element";
+  const issue = (observation.issue || "shows a potential usability issue").replace(/[.!?]+$/, "");
+  const impact = (observation.whyItMatters || "this may make the next step harder to understand").replace(/^[Tt]his matters because\s*/, "").replace(/[.!?]+$/, "");
+  return "In " + section + ", " + element + " shows this issue: " + issue + ". This matters because " + impact + ".";
+}
+function evidenceSpecificRecommendation(observation: VisualObservation, category: typeof CATEGORIES[number]): string {
+  const section = observation.section || "the affected section";
+  const element = observation.element || "the affected element";
+  const issue = (observation.issue || "the observed friction").replace(/[.!?]+$/, "");
+  switch (category) {
+    case "Navigation": return "Make " + element + " easier to find in " + section + ": use a descriptive label, place it beside related destinations, and link directly to the relevant page instead of forcing users to infer where “" + capWords(issue, 70) + "” is resolved.";
+    case "Information hierarchy": return "Restructure " + section + " so " + element + " has a clear priority: use a specific heading, group supporting information nearby, and reduce competing messages around the decision this element supports.";
+    case "Usability & interaction": return "Revise " + element + " in " + section + " with an explicit action label, a clear interactive affordance, an adequate target size, and visible feedback or a next state after the action.";
+    case "Content & tone": return "Rewrite the copy for " + element + " in " + section + " to state the product or task and expected next step in plain language; replace wording that creates “" + capWords(issue, 70) + "” with concise, specific, scannable content.";
+    case "Visual design": return "Update " + element + " in " + section + " to use consistent typography, spacing, alignment, and contrast while giving this element a purposeful treatment that fits the established brand system.";
+    case "Responsiveness": return "Rework " + element + " in " + section + " for the 393 × 852 CSS-pixel mobile viewport: prevent clipping and horizontal overflow, preserve readable type and logical stacking, and provide comfortably spaced touch targets.";
+    case "Web performance": return "Investigate the loading behavior around " + element + " in " + section + "; prioritize critical assets, defer non-critical media or scripts, and keep the loading state stable. Validate the change with measured performance data before claiming a speed improvement.";
+  }
+}
+function evidenceSpecificBusinessAnalysis(observation: VisualObservation, category: typeof CATEGORIES[number]): BusinessAnalysis {
+  const section = observation.section || "the affected section";
+  const element = observation.element || "the affected element";
+  const issue = (observation.issue || "the visible issue").replace(/[.!?]+$/, "");
+  const basis = "Evidence on " + element + " in " + section + ": " + issue + ".";
+  const reason = observation.whyItMatters || "users may need extra effort to understand or complete the intended next step";
+  const variants: Record<typeof CATEGORIES[number], BusinessAnalysis> = {
+    "Navigation": {
+      funnelStage: "Acquisition / discovery", impact: basis + " " + reason + " This may prevent users from reaching the relevant product or information.",
+      kpi: "Navigation-to-destination click-through rate", mechanism: "Unclear routes around " + element + " can cause additional search and backtracking before users reach the intended destination.",
+      suggestions: ["Add a direct, descriptive route to " + element + " from " + section + ".", "Track destination clicks and exits from the menu or page."],
+    },
+    "Information hierarchy": {
+      funnelStage: "Consideration", impact: basis + " " + reason + " Users may miss the key value or decision cue before choosing a next step.",
+      kpi: "Primary CTA click-through rate", mechanism: "When " + element + " is not clearly prioritized, attention may be diverted from the main decision in " + section + ".",
+      suggestions: ["Give " + element + " stronger hierarchy and group its supporting details nearby.", "Compare primary-action engagement before and after the change."],
+    },
+    "Usability & interaction": {
+      funnelStage: "Activation / conversion", impact: basis + " " + reason + " Users may hesitate, make errors, or abandon the task at this interaction.",
+      kpi: "Task completion rate", mechanism: "Ambiguity or friction around " + element + " can interrupt the action sequence between user intent and successful completion.",
+      suggestions: ["Clarify the action and expected result for " + element + ".", "Track interaction errors and completion by step."],
+    },
+    "Content & tone": {
+      funnelStage: "Awareness / consideration", impact: basis + " " + reason + " Users may misunderstand the offer or need to reread the content before proceeding.",
+      kpi: "Content-to-CTA click-through rate", mechanism: "Unclear language around " + element + " can weaken comprehension of the value proposition immediately before the next action.",
+      suggestions: ["Rewrite " + element + " with explicit, user-centred wording.", "Test comprehension and CTA engagement for the revised copy."],
+    },
+    "Visual design": {
+      funnelStage: "Consideration", impact: basis + " " + reason + " The presentation may reduce confidence or make key information harder to scan.",
+      kpi: "Primary CTA engagement / task success", mechanism: "Inconsistent visual cues around " + element + " may make the interface feel less coherent and reduce confidence in the next step.",
+      suggestions: ["Align " + element + " with the page's spacing, typography, and contrast rules.", "Validate scan success and action engagement after the visual update."],
+    },
+    "Responsiveness": {
+      funnelStage: "Mobile acquisition / conversion", impact: basis + " " + reason + " On narrow screens, this can make a key page or control harder to use and increase mobile abandonment risk.",
+      kpi: "Mobile task completion rate", mechanism: "Responsive layout friction around " + element + " can add scrolling, missed taps, or content loss on phone-sized screens.",
+      suggestions: ["Test " + element + " at 393 × 852 CSS px and common responsive breakpoints.", "Compare mobile completion and exit rates by device width."],
+    },
+    "Web performance": {
+      funnelStage: "Landing / activation", impact: basis + " " + reason + " Perceived delay or unstable rendering can interrupt momentum before the user completes the task.",
+      kpi: "Largest Contentful Paint (LCP) / bounce rate", mechanism: "Slow or unstable rendering of " + element + " may delay comprehension and interaction; confirm this hypothesis with real-user or lab measurements.",
+      suggestions: ["Measure the page's Core Web Vitals and isolate the cost of " + element + ".", "Prioritize critical resources and re-test on a representative mobile connection."],
+    },
+  };
+  return variants[category];
+}
+function normalizeFinding(raw: unknown, observation: VisualObservation, index: number, prior: Finding[] = []): Finding {
   const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
   const ux = item.uxPerspective && typeof item.uxPerspective === "object" ? item.uxPerspective as Record<string, unknown> : {};
   const business = item.businessAnalysis && typeof item.businessAnalysis === "object" ? item.businessAnalysis as Record<string, unknown> : {};
-  return { id: typeof item.id === "string" ? item.id.trim() : `finding-${index + 1}`, severity: severityFor(item.severity), category: categoryFor(item.category), title: typeof item.title === "string" ? item.title.trim() : observation.issue, description: typeof item.description === "string" ? item.description.trim() : observation.issue, recommendation: typeof item.recommendation === "string" ? item.recommendation.trim() : "Simplify and reprioritise the affected interface pattern.", uxPerspective: { law: typeof ux.law === "string" ? ux.law.trim() : "UX design principle", definition: typeof ux.definition === "string" ? ux.definition.trim() : "A research-backed principle used to evaluate how an interface supports user goals.", assessment: typeof ux.assessment === "string" ? ux.assessment.trim() : observation.whyItMatters, researchContext: typeof ux.researchContext === "string" ? ux.researchContext.trim() : "The pattern should be evaluated against established interaction and information-design research rather than preference alone." }, businessAnalysis: { funnelStage: typeof business.funnelStage === "string" ? business.funnelStage.trim() : "Consideration / conversion", impact: typeof business.impact === "string" ? business.impact.trim() : "The friction can reduce clarity and increase hesitation before the next funnel step.", kpi: typeof business.kpi === "string" ? business.kpi.trim() : "CTA click-through / conversion rate", mechanism: typeof business.mechanism === "string" ? business.mechanism.trim() : "Users may take longer to understand the value proposition or choose the next action.", suggestions: stringList(business.suggestions, 4).length ? stringList(business.suggestions, 4) : ["Make the primary action visually dominant.", "Reduce competing information around the action."] }, evidence: [{ section: observation.section, element: observation.element, detail: observation.issue, marker: observation.marker }] };
+  const category = categoryFor(item.category, observation);
+  const uniqueTitle = evidenceSpecificTitle(observation, index, prior);
+  const suppliedTitle = textValue(item.title, "");
+  const title = !suppliedTitle || isGenericTitle(suppliedTitle) || isRepeated(suppliedTitle, prior, (finding) => finding.title) ? uniqueTitle : capWords(suppliedTitle, 130);
+  const descriptionValue = textValue(item.description, "");
+  const description = !descriptionValue || normalizeIssueText(descriptionValue) === normalizeIssueText(title) || isRepeated(descriptionValue, prior, (finding) => finding.description) || /^(this issue|this finding|poor ux|visual design|high density|the design is poor)\b/i.test(descriptionValue) ? evidenceSpecificDescription(observation) : capWords(descriptionValue, 700);
+  const recommendationValue = textValue(item.recommendation, "");
+  const recommendation = !recommendationValue || isRepeated(recommendationValue, prior, (finding) => finding.recommendation) || /^(improve the design|make it better|enhance usability|improve visual hierarchy|simplify the interface)[.! ]*$/i.test(recommendationValue) ? evidenceSpecificRecommendation(observation, category) : capWords(recommendationValue, 850);
+  const businessDefaults = evidenceSpecificBusinessAnalysis(observation, category);
+  function businessField(key: "funnelStage" | "impact" | "kpi" | "mechanism" | "suggestions"): any {
+    const value = business[key];
+    if (key === "suggestions") {
+      const list = stringList(value, 4);
+      const repeated = list.length > 0 && prior.some((finding) => normalizeIssueText(finding.businessAnalysis.suggestions.join(" ")) === normalizeIssueText(list.join(" ")));
+      return !list.length || repeated ? businessDefaults.suggestions : list;
+    }
+    const supplied = textValue(value, "");
+    const generic = /^(consideration\s*\/\s*conversion|cta click through\s*\/\s*conversion rate|primary cta click through rate|users may take longer to understand the value proposition or choose the next action|the friction can reduce clarity and increase hesitation before the next funnel step)[.! ]*$/i.test(supplied);
+    const repeated = isRepeated(supplied, prior, (finding) => String(finding.businessAnalysis[key] ?? ""));
+    return !supplied || generic || repeated ? businessDefaults[key] : supplied;
+  }
+  return {
+    id: textValue(item.id, "finding-" + (index + 1)),
+    severity: severityFor(item.severity),
+    category, title, description, recommendation,
+    // Keep good model-generated UX research as-is; only fill missing fields.
+    uxPerspective: {
+      law: textValue(ux.law, "Relevant UX principle"),
+      definition: textValue(ux.definition, "A research-backed principle describing how the interface supports user goals."),
+      assessment: textValue(ux.assessment, observation.whyItMatters),
+      researchContext: textValue(ux.researchContext, "Use this principle as a research-backed lens; validate the observed friction with user research where practical."),
+    },
+    businessAnalysis: {
+      funnelStage: businessField("funnelStage"),
+      impact: businessField("impact"),
+      kpi: businessField("kpi"),
+      mechanism: businessField("mechanism"),
+      suggestions: businessField("suggestions"),
+    },
+    evidence: [{ section: observation.section, element: observation.element, detail: observation.issue, marker: observation.marker }],
+  };
 }
 
 async function createVisualPass(model: VerifiedModel, capture: Capture, timeoutMs = 12000, auditMode: "desktop" | "mobile" = "desktop"): Promise<VisualPass> {
@@ -129,8 +274,8 @@ async function createVisualPass(model: VerifiedModel, capture: Capture, timeoutM
 }
 
 async function createTextReview(model: VerifiedModel, visualPass: VisualPass, timeoutMs = 12000) {
-  const prompt = `You are the SECOND stage of a UX audit. You are a TEXT-TO-TEXT UX research and business reviewer. The first model already inspected the screenshot and produced the visual observations below. You do NOT see the screenshot.\n\nPreserve observationId exactly. Do not change, merge, reorder, or reinterpret the visual location. Never invent UI elements, coordinates, measurements, analytics, or behaviour. For each observation create a client-ready finding with UX research context and business funnel analysis. Each finding title and recommendation must be specific to its own observation; do not repeat titles, generic problem statements, UX laws, KPI, funnel stage, or business analysis mechanically across all findings. Calibrate severity independently: high only for a major blocker, misleading interaction, serious trust/accessibility issue, or clear primary-journey failure; medium for meaningful friction; low for polish/minor clarity issues. Vary severity only when evidence warrants it—never alternate high/low as a pattern. KPI and funnel stage must fit the actual issue; use different values where the evidence points to different outcomes.\n\nUX context must include a relevant law/principle, a plain-language definition, why it applies, and concise research context. Business analysis must identify funnel stage, directional impact, KPI at risk, mechanism, and practical suggestions that could improve that KPI. Do not create development tasks. Do not claim measured KPI changes.\n\nReturn JSON only: {"findings":[{"id":"finding-1","observationId":"obs-1","severity":"high|medium|low","category":"Information hierarchy","title":"short finding","description":"clear explanation","recommendation":"specific UX redesign action","uxPerspective":{"law":"Hick's Law","definition":"plain-language definition","assessment":"why it applies","researchContext":"brief research context"},"businessAnalysis":{"funnelStage":"Acquisition / consideration / activation / conversion / retention","impact":"directional impact","kpi":"specific KPI","mechanism":"how the design can influence it","suggestions":["specific action","specific action"]}}]}\n\nAllowed categories: ${CATEGORIES.join(", ")}.\n\nVISUAL OBSERVATIONS:\n${JSON.stringify(visualPass)}`;
-  const text = await modelGenerate(model, [{ text: prompt }], 3500, timeoutMs);
+  const prompt = `You are the SECOND stage of a UX audit. You are a TEXT-TO-TEXT UX research and business reviewer. The first model already inspected the screenshot and produced the visual observations below. You do NOT see the screenshot.\n\nPreserve observationId exactly. Do not change, merge, reorder, or reinterpret the visual location. Never invent UI elements, coordinates, measurements, analytics, or behaviour. For each observation create a client-ready finding with UX research context and business funnel analysis. Category-tag EVERY finding with exactly one allowed category using the visual evidence, not by spreading categories evenly. Titles must name the specific element and flaw; the description must explain the observed flaw AND its user consequence (never copy the title). The recommendation must directly redesign the observed element and name the section or component; avoid generic advice like “improve visual hierarchy”. Business analysis must be individually derived from this issue: write a distinct impact, causal mechanism, relevant KPI, funnel stage, and concrete suggestions. Do not reuse a template paragraph across findings. Repeat a KPI or funnel stage only when genuinely appropriate, while keeping each causal explanation specific to the issue. Calibrate severity independently: high only for a major blocker, misleading interaction, serious trust/accessibility issue, or clear primary-journey failure; medium for meaningful friction; low for polish/minor clarity issues. Vary severity only when evidence warrants it—never alternate high/low as a pattern. KPI and funnel stage must fit the actual issue; use different values where the evidence points to different outcomes.\n\nUX context must include a relevant law/principle, a plain-language definition, why it applies, and concise research context. Business analysis must identify funnel stage, directional impact, KPI at risk, mechanism, and practical suggestions that could improve that KPI. Do not create development tasks. Do not claim measured KPI changes.\n\nReturn JSON only: {"findings":[{"id":"finding-1","observationId":"obs-1","severity":"high|medium|low","category":"Information hierarchy","title":"short finding","description":"clear explanation","recommendation":"specific UX redesign action","uxPerspective":{"law":"Hick's Law","definition":"plain-language definition","assessment":"why it applies","researchContext":"brief research context"},"businessAnalysis":{"funnelStage":"Acquisition / consideration / activation / conversion / retention","impact":"directional impact","kpi":"specific KPI","mechanism":"how the design can influence it","suggestions":["specific action","specific action"]}}]}\n\nAllowed categories: ${CATEGORIES.join(", ")}.\n\nVISUAL OBSERVATIONS:\n${JSON.stringify(visualPass)}`;
+  const text = await modelGenerate(model, [{ text: prompt }], 4800, timeoutMs);
   const parsed = extractJson(text); const root = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
   return Array.isArray(root.findings) ? root.findings : [];
 }
@@ -194,8 +339,8 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   for (const observation of visualPass.observations) {
     const index = findings.length;
     const match = reviewByObservation.get(observation.id);
-    const candidate = match ? normalizeFinding(match, observation, index) : fallbackFinding(observation, index);
-    findings.push(isGenericOrRepeatedFinding(candidate, findings) ? fallbackFinding(observation, index) : candidate);
+    const candidate = match ? normalizeFinding(match, observation, index, findings) : normalizeFinding(fallbackFinding(observation, index), observation, index, findings);
+    findings.push(candidate);
   }
   onStage?.({ id: "markers", label: "Place evidence markers", detail: `${findings.length} numbered markers mapped to the original screenshot.`, status: "complete" });
 
