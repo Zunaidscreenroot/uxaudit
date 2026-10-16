@@ -1,0 +1,33 @@
+"use client";
+import { FormEvent, useState } from "react";
+
+type Page = {url:string;title:string;category:string;depth:number;source:string};
+type Discovery = {root:string;title:string;pages:Page[];note:string};
+
+export default function SiteMapPage() {
+  const [url,setUrl]=useState(""); const [data,setData]=useState<Discovery|null>(null);
+  const [selected,setSelected]=useState<string[]>([]); const [loading,setLoading]=useState(false);
+  const [error,setError]=useState(""); const [showAudit,setShowAudit]=useState(false);
+  async function discover(e:FormEvent) {
+    e.preventDefault();setLoading(true);setError("");setData(null);setShowAudit(false);
+    try { const r=await fetch("/api/discover",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url})});const d=await r.json();if(!r.ok)throw new Error(d.error||"Discovery failed");setData(d);setSelected(d.pages.slice(0,8).map((p:Page)=>p.url)); }
+    catch(e){setError(e instanceof Error?e.message:"Could not discover website pages.");}finally{setLoading(false);}
+  }
+  const groups=data?.pages.reduce((a:Record<string,Page[]>,p)=>{(a[p.category] ||= []).push(p);return a;},{})||{};
+  const issues=data?[
+    ...((data.pages.filter(p=>p.depth>=3).length)?[`${data.pages.filter(p=>p.depth>=3).length} URLs are at least three levels deep. Review whether high-value pages can be moved closer to the top level.`]:[]),
+    ...((data.pages.filter(p=>p.category==="About Us").length>=4)?[`${data.pages.filter(p=>p.category==="About Us").length} About Us-related URLs were found. Review overlap and possible consolidation.`]:[]),
+    ...((data.pages.filter(p=>p.category==="Other Pages").length)?[`${data.pages.filter(p=>p.category==="Other Pages").length} URLs could not be confidently categorised from their path/title.`]:[]),
+    ...((data.pages.length>50)?[`The discovery found ${data.pages.length} URLs. Prioritise major user journeys before auditing all pages.`]:[])
+  ]:[];
+  return <main className="shell"><nav className="nav"><a className="brand" href="/">UX Audit</a><div className="navActions"><a className="connectionLink" href="/">Screenshot UX audit</a><a className="connectionLink" href="/model-health">Connection status</a></div></nav>
+  <section className="hero"><div className="eyebrow">STEP 01 · INFORMATION ARCHITECTURE</div><h1>Map the website before auditing it.</h1><p className="lede">Discover pages from the public homepage and common sitemap files, group them into a draft site map, review structural signals, and select only the pages you want to audit. Desktop-first workflow.</p>
+  <form className="siteDiscoverForm" onSubmit={discover}><input aria-label="Website URL" type="url" placeholder="https://example.com" value={url} onChange={e=>setUrl(e.target.value)} required/><button className="auditButton" disabled={loading}>{loading?"Discovering pages…":"Discover pages"}</button></form>{error&&<p className="error">{error}</p>}
+  {data&&<div className="siteMapPanel"><div className="siteMapTop"><div><div className="reportKicker">DRAFT SITE MAP</div><h2>{data.title||data.root}</h2><p>{data.pages.length} discovered URLs · {data.root}</p></div><button className="uploadButton" onClick={()=>setShowAudit(!showAudit)} type="button">{showAudit?"Hide IA review":"Audit Information Architecture"}</button></div>
+  <div className="siteMapStats">{Object.entries(groups).map(([name,pages])=><span key={name}><strong>{pages.length}</strong> {name}</span>)}</div>
+  {showAudit&&<div className="iaReview"><h3>Initial Information Architecture review</h3>{issues.length?<ul>{issues.map((x,i)=><li key={i}>{x}</li>)}</ul>:<p>No obvious nesting or grouping warning detected from discovered URL/title signals. Review labels and page coverage manually.</p>}<p>These are heuristic signals only; they do not inspect full page content or prove that pages can be consolidated.</p></div>}
+  <div className="siteMapToolbar"><strong>Select pages for UX audit</strong><span>{selected.length} selected</span><button type="button" onClick={()=>setSelected(data.pages.map(p=>p.url))}>Select all</button><button type="button" onClick={()=>setSelected([])}>Clear</button></div>
+  <div className="siteMapTree">{Object.entries(groups).map(([category,pages])=><section className="siteMapGroup" key={category}><h3>{category} <span>{pages.length}</span></h3>{pages.map(p=><label className="siteMapPage" key={p.url}><input type="checkbox" checked={selected.includes(p.url)} onChange={()=>setSelected(old=>old.includes(p.url)?old.filter(x=>x!==p.url):[...old,p.url])}/><span className="siteMapPageName"><strong>{p.title||p.url}</strong><small>{p.url}</small></span><span className="pageDepth">{p.depth===0?"Home":`Level ${p.depth+1}`}</span><span className="pageSource">{p.source}</span></label>)}</section>)}</div>
+  <div className="selectedPagesFooter"><div><strong>{selected.length} pages selected</strong><p>Selected pages are available as a URL list. Automated desktop screenshot capture has not yet been connected to this workflow.</p></div><button className="auditButton" disabled={!selected.length} onClick={()=>navigator.clipboard?.writeText(selected.join("\n"))} type="button">Copy selected URLs</button></div><p className="uploadHint">{data.note}</p></div>}
+  </section></main>;
+}
