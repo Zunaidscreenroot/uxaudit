@@ -1,0 +1,4 @@
+[build]
+  # Only the uxaudit-preview Netlify project should build this repository.
+  # Netlify ignore command exit 0 skips the build; exit 1 continues it.
+  ignore = "bash ./scripts/netlify-ignore-build.sh"
