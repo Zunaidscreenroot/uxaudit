@@ -66,7 +66,7 @@ export async function POST(req: Request) {
     const mobile = auditMode === "mobile";
     const started = Date.now();
     console.info("[uxaudit] browser_capture_start", JSON.stringify({
-      host: url.hostname, auditMode, viewport, engine: "chromium", fullPage: true
+      host: url.hostname, auditMode, viewport, engine: "playwright-chromium", fullPage: true
     }));
 
     chromium.setGraphicsMode = false;
@@ -82,6 +82,7 @@ export async function POST(req: Request) {
       isMobile: mobile,
       hasTouch: mobile,
       isLandscape: false,
+      serviceWorkers: "block",
       userAgent: mobile ? MOBILE_USER_AGENT : undefined,
       extraHTTPHeaders: { "Accept-Language": "en-US,en;q=0.9" },
     });
@@ -184,7 +185,7 @@ export async function POST(req: Request) {
       title: title || (url.pathname === "/" ? "Homepage" : url.pathname.split("/").filter(Boolean).pop()?.replace(/[-_]/g, " ") || url.hostname),
       auditMode, viewportWidth: viewport.width, viewportHeight: viewport.height,
       viewport: { ...viewport, unit: "CSS px" }, actualViewport,
-      captureMethod: "headless-chromium", fullPage
+      captureMethod: "playwright-chromium", fullPage
     };
     console.info("[uxaudit] browser_capture_ok", JSON.stringify({
       host: url.hostname, elapsedMs: Date.now() - started, auditMode,
