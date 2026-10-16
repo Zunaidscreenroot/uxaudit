@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useState } from "react";
 
 type ModelResult = {
   model: string;
@@ -12,6 +12,9 @@ type ModelResult = {
   responsePreview?: string;
   error?: string;
 };
+
+type ConfiguredModel = { provider: "OpenRouter" | "Gemini"; model: string; configured: boolean; };
+type ConfigResponse = { checkedAt: string; keys: { openRouter: boolean; gemini: boolean }; models: ConfiguredModel[]; note: string; };
 
 type HealthResponse = {
   checkedAt: string;
@@ -66,10 +69,15 @@ async function readResponse(response: Response): Promise<any> {
 
 export default function ModelHealth() {
   const [file, setFile] = useState<File | null>(null);
+  const [config, setConfig] = useState<ConfigResponse | null>(null);
   const [data, setData] = useState<HealthResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [filter, setFilter] = useState<"all" | "ok" | "error">("all");
+
+  useEffect(() => {
+    fetch("/api/model-health").then(readResponse).then((payload) => setConfig(payload as ConfigResponse)).catch(() => setError("Could not load backend configuration status."));
+  }, []);
 
   async function runCheck() {
     if (!file) { setError("Choose the same screenshot you use for the audit."); return; }
@@ -99,6 +107,21 @@ export default function ModelHealth() {
         <div><strong style={{ fontSize: 22 }}>UX Audit</strong><span style={{ marginLeft: 8, fontSize: 12, textTransform: "uppercase", letterSpacing: 1 }}>Model Health</span></div>
         <a href="/" style={{ color: "#111" }}>Back to audit</a>
       </div>
+
+      {config && <section style={{ margin: "24px 0", background: "white", border: "1px solid #ddd", borderRadius: 12, padding: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+          <div><strong style={{ fontSize: 18 }}>Backend connection status</strong><p style={{ color: "#666", fontSize: 13, margin: "6px 0 0" }}>Configuration checked {new Date(config.checkedAt).toLocaleString()}</p></div>
+          <div style={{ fontSize: 13, fontWeight: 700 }}>OpenRouter {config.keys.openRouter ? "✓ Key configured" : "✕ Key missing"} · Gemini {config.keys.gemini ? "✓ Key configured" : "✕ Key missing"}</div>
+        </div>
+        <div style={{ marginTop: 18, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
+          {config.models.map((item) => <div key={item.provider + item.model} style={{ border: "1px solid #eee", borderRadius: 9, padding: 13 }}>
+            <div style={{ color: "#777", fontSize: 11, textTransform: "uppercase", letterSpacing: 1 }}>{item.provider}</div>
+            <strong style={{ display: "block", marginTop: 6, overflowWrap: "anywhere" }}>{item.model}</strong>
+            <div style={{ marginTop: 7, fontSize: 12, fontWeight: 700, color: item.configured ? "#167a3d" : "#b42318" }}>{item.configured ? "Key configured · live test not run" : "Not configured"}</div>
+          </div>)}
+        </div>
+        <p style={{ color: "#777", fontSize: 12, lineHeight: 1.5, marginBottom: 0 }}>{config.note}</p>
+      </section>}
 
       <section style={{ padding: "64px 0 34px" }}>
         <div style={{ display: "inline-block", background: "#f1d72e", padding: "7px 11px", borderRadius: 20, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1 }}>Internal diagnostic</div>
