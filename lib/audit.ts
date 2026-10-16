@@ -162,7 +162,13 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   onStage?.({ id: "markers", label: "Place evidence markers", detail: "Linking each finding to its exact region on the original screenshot; no crops are created.", status: "active" });
   const reviewByObservation = new Map<string, unknown>();
   for (const raw of review) { if (raw && typeof raw === "object") { const item = raw as Record<string, unknown>; if (typeof item.observationId === "string" && !reviewByObservation.has(item.observationId)) reviewByObservation.set(item.observationId, raw); } }
-  const findings: Finding[] = [];\n  for (const observation of visualPass.observations) {\n    const index = findings.length;\n    const match = reviewByObservation.get(observation.id);\n    const candidate = match ? normalizeFinding(match, observation, index) : fallbackFinding(observation, index);\n    findings.push(isGenericOrRepeatedFinding(candidate, findings) ? fallbackFinding(observation, index) : candidate);\n  }
+  const findings: Finding[] = [];
+  for (const observation of visualPass.observations) {
+    const index = findings.length;
+    const match = reviewByObservation.get(observation.id);
+    const candidate = match ? normalizeFinding(match, observation, index) : fallbackFinding(observation, index);
+    findings.push(isGenericOrRepeatedFinding(candidate, findings) ? fallbackFinding(observation, index) : candidate);
+  }
   onStage?.({ id: "markers", label: "Place evidence markers", detail: `${findings.length} numbered markers mapped to the original screenshot.`, status: "complete" });
 
   onStage?.({ id: "enrich", label: "Applying UX + business context", detail: "Finalising funnel impact, KPI hypotheses and redesign recommendations.", status: "active" });
