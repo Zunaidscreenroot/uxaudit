@@ -8,6 +8,52 @@ type AuditFinding={id:string;severity:string;category:string;title:string;descri
 type AuditedPage={url:string;title:string;screenshot:string;screenshotWidth:number;screenshotHeight:number;findings:AuditFinding[];auditMode?:AuditMode;viewportWidth?:number;viewportHeight?:number};
 const markerColors=["#e11d48","#7c3aed","#ea580c","#2563eb","#059669","#ca8a04","#9333ea","#0d9488"];
 function escapeDoc(value:string){return value.replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+function wrapCardText(context:CanvasRenderingContext2D,value:string,maxWidth:number,font:string){
+ context.font=font;
+ const words=(value||"—").trim().replace(/\\s+/g," ").split(" ").filter(Boolean);
+ const lines:string[]=[];let line="";
+ for(const word of words){
+  const candidate=line?line+" "+word:word;
+  if(line&&context.measureText(candidate).width>maxWidth){lines.push(line);line=word;}else{line=candidate;}
+ }
+ if(line)lines.push(line);
+ return lines.length?lines:["—"];
+}
+function renderCardLines(lines:string[],x:number,y:number,lineHeight:number,fontSize:number,fontWeight:number,fill:string){
+ return lines.map((line,i)=>'<text x="'+x+'" y="'+(y+i*lineHeight)+'" font-size="'+fontSize+'" font-weight="'+fontWeight+'" fill="'+fill+'">'+escapeDoc(line)+'</text>').join("");
+}
+async function downloadFindingCardPng(finding:AuditFinding,index:number,pageTitle:string){
+ const width=1440,pad=80,innerWidth=width-pad*2;
+ const measureCanvas=document.createElement("canvas");const measure=measureCanvas.getContext("2d");
+ if(!measure)throw new Error("PNG export is not supported by this browser.");
+ const titleFont="700 42px Arial",descriptionFont="400 29px Arial",valueFont="600 28px Arial";
+ const titleLines=wrapCardText(measure,finding.title,innerWidth,titleFont);
+ const descriptionLines=wrapCardText(measure,finding.description,innerWidth,descriptionFont);
+ const columnGap=80,columnWidth=(innerWidth-columnGap)/2,rightColumn=pad+columnWidth+columnGap;
+ const principleLines=wrapCardText(measure,finding.uxPerspective?.law||"—",columnWidth,valueFont);
+ const categoryLines=wrapCardText(measure,finding.category||"—",columnWidth,valueFont);
+ const titleY=186,titleLineHeight=53,descriptionY=titleY+titleLines.length*titleLineHeight+22,descriptionLineHeight=42;
+ const dividerY=descriptionY+descriptionLines.length*descriptionLineHeight+36;
+ const metaLabelY=dividerY+54,metaValueY=metaLabelY+39,metaLineHeight=37;
+ const height=Math.max(620,metaValueY+Math.max(principleLines.length,categoryLines.length)*metaLineHeight+72);
+ const severity=(finding.severity||"medium").toLowerCase();
+ const colors=severity==="high"?{bg:"#fee2e2",text:"#991b1b",dot:"#dc2626"}:severity==="medium"?{bg:"#fef3c7",text:"#92400e",dot:"#d97706"}:{bg:"#e2e8f0",text:"#475569",dot:"#64748b"};
+ const badgeX=width-pad-180,badgeY=60;
+ const safePage=(pageTitle||"page").toLowerCase().normalize("NFKD").replace(/[\\u0300-\\u036f]/g,"").replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,42)||"page";
+ const safeTitle=(finding.title||"ux-finding").toLowerCase().normalize("NFKD").replace(/[\\u0300-\\u036f]/g,"").replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,56)||"ux-finding";
+ const svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+width+'" height="'+height+'" viewBox="0 0 '+width+' '+height+'"><defs><filter id="shadow" x="-10%" y="-10%" width="120%" height="125%"><feDropShadow dx="0" dy="10" stdDeviation="15" flood-color="#0f172a" flood-opacity=".10"/></filter></defs><g font-family="Arial, Helvetica, sans-serif"><rect x="18" y="18" width="'+(width-36)+'" height="'+(height-36)+'" rx="32" fill="#fff" filter="url(#shadow)"/><text x="'+pad+'" y="96" font-size="19" font-weight="800" letter-spacing="3.2" fill="#737373">FINDING '+String(index+1).padStart(2,"0")+'</text><rect x="'+badgeX+'" y="'+badgeY+'" width="180" height="58" rx="18" fill="'+colors.bg+'"/><circle cx="'+(badgeX+32)+'" cy="'+(badgeY+29)+'" r="6.5" fill="'+colors.dot+'"/><text x="'+(badgeX+54)+'" y="'+(badgeY+37)+'" font-size="20" font-weight="800" letter-spacing="1.3" fill="'+colors.text+'">'+escapeDoc(severity.toUpperCase())+'</text>'+renderCardLines(titleLines,pad,titleY,titleLineHeight,42,700,"#171717")+renderCardLines(descriptionLines,pad,descriptionY,descriptionLineHeight,29,400,"#404040")+'<line x1="'+pad+'" y1="'+dividerY+'" x2="'+(width-pad)+'" y2="'+dividerY+'" stroke="#ece9e7" stroke-width="2"/><text x="'+pad+'" y="'+metaLabelY+'" font-size="18" font-weight="800" letter-spacing="3" fill="#737373">UX PRINCIPLE</text><text x="'+rightColumn+'" y="'+metaLabelY+'" font-size="18" font-weight="800" letter-spacing="3" fill="#737373">CATEGORY</text>'+renderCardLines(principleLines,pad,metaValueY,metaLineHeight,28,600,"#292929")+renderCardLines(categoryLines,rightColumn,metaValueY,metaLineHeight,28,600,"#292929")+'</g></svg>';
+ const svgUrl=URL.createObjectURL(new Blob([svg],{type:"image/svg+xml;charset=utf-8"}));
+ try{
+  const image=new Image();
+  await new Promise<void>((resolve,reject)=>{image.onload=()=>resolve();image.onerror=()=>reject(new Error("Could not render the finding card."));image.src=svgUrl;});
+  const canvas=document.createElement("canvas");canvas.width=width*2;canvas.height=height*2;
+  const context=canvas.getContext("2d");if(!context)throw new Error("Could not prepare the PNG image.");
+  context.scale(2,2);context.drawImage(image,0,0,width,height);
+  const png=await new Promise<Blob>((resolve,reject)=>canvas.toBlob(blob=>blob?resolve(blob):reject(new Error("Could not create the PNG file.")),"image/png"));
+  const pngUrl=URL.createObjectURL(png);const link=document.createElement("a");link.href=pngUrl;link.download="finding-"+String(index+1).padStart(2,"0")+"-"+safePage+"-"+safeTitle+".png";document.body.appendChild(link);link.click();link.remove();window.setTimeout(()=>URL.revokeObjectURL(pngUrl),1500);
+ }finally{URL.revokeObjectURL(svgUrl);}
+}
+
 function screenshotIframeDoc(page:AuditedPage,active:number){const image=page.screenshot;const dots=page.findings.map((f,i)=>{const m=f.evidence?.[0]?.marker;if(!m||!Number.isFinite(m.x)||!Number.isFinite(m.y))return "";const c=markerColors[i%markerColors.length];return '<button aria-label="Finding '+(i+1)+': '+escapeDoc(f.title)+'" title="'+escapeDoc(f.title)+'" onclick="parent.postMessage({type:\'uxaudit-marker\',index:'+i+'},\'*\')" style="position:absolute;left:'+(Math.max(0,Math.min(1,m.x))*100)+'%;top:'+(Math.max(0,Math.min(1,m.y))*100)+'%;transform:translate(-50%,-50%);width:30px;height:30px;border-radius:50%;border:3px solid white;background:'+c+';color:white;font:bold 12px Arial;box-shadow:0 2px 8px #1118;cursor:pointer;outline:'+(i===active?'3px solid #111827':'none')+'">'+(i+1)+'</button>';}).join("");return '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>*{box-sizing:border-box}html,body{margin:0;background:#eef1f5;font-family:Arial,sans-serif}.canvas{position:relative;width:100%;line-height:0}.canvas img{display:block;width:100%;height:auto}.hint{position:sticky;top:0;z-index:99;background:#172033e8;color:white;font:12px Arial;padding:8px 12px;line-height:1.4}</style></head><body><div class="hint">Full-page captured preview · Scroll to inspect · Select a colored dot to open its finding</div><div class="canvas"><img src="'+image+'" alt="'+escapeDoc(page.title)+'">'+dots+'</div></body></html>';}
 
 const short=(p:Page)=>p.title||new URL(p.url).pathname.split("/").filter(Boolean).pop()||"Home";
@@ -216,7 +262,7 @@ useEffect(()=>{if(sessionId&&data){saveSession().catch(e=>setError(e instanceof 
         <div style={{padding:14,maxHeight:"min(78vh,900px)",minHeight:620,overflowY:"auto"}}>
          {reportTab==="findings"&&<><div style={{marginBottom:12}}><div className="iaEyebrow">EVIDENCE-LINKED UX REVIEW</div><h3 style={{margin:"6px 0",fontSize:17}}>{audited[activeAudit].findings.length} findings</h3><div className="iaMuted">Select a colored dot in the iframe or a finding below to link the evidence to its explanation.</div></div>
           {audited[activeAudit].findings.map((f,i)=><article key={f.id||i} onClick={()=>setActiveFinding(i)} style={{border:"1px solid "+(activeFinding===i?"#7895c8":"#e0e5ec"),boxShadow:activeFinding===i?"0 0 0 2px #e8eef9":"none",borderRadius:10,padding:13,background:"#fff",marginBottom:10,cursor:"pointer"}}>
-           <div style={{display:"flex",gap:8,alignItems:"center"}}><span style={{width:26,height:26,flex:"0 0 26px",display:"grid",placeItems:"center",borderRadius:"50%",background:markerColors[i%markerColors.length],color:"#fff",fontSize:12,fontWeight:800}}>{i+1}</span><div style={{flex:1}}><div style={{fontSize:10,fontWeight:800,color:f.severity==="high"?"#b42318":f.severity==="medium"?"#9a6700":"#64748b"}}>{f.severity.toUpperCase()} · {f.category}</div><strong style={{display:"block",marginTop:3,fontSize:14}}>{f.title}</strong></div></div>
+           <div style={{display:"flex",gap:8,alignItems:"center"}}><span style={{width:26,height:26,flex:"0 0 26px",display:"grid",placeItems:"center",borderRadius:"50%",background:markerColors[i%markerColors.length],color:"#fff",fontSize:12,fontWeight:800}}>{i+1}</span><div style={{flex:1,minWidth:0}}><div style={{fontSize:10,fontWeight:800,color:f.severity==="high"?"#b42318":f.severity==="medium"?"#9a6700":"#64748b"}}>{f.severity.toUpperCase()} · {f.category}</div><strong style={{display:"block",marginTop:3,fontSize:14}}>{f.title}</strong></div><button type="button" title="Download this finding as a slide-ready PNG" aria-label={"Download finding "+(i+1)+" as PNG"} onClick={event=>{event.stopPropagation();void downloadFindingCardPng(f,i,audited[activeAudit].title).catch(error=>{console.error("[uxaudit] finding_card_export_failed",error);window.alert("Could not export this finding as a PNG. Please try again.");});}} style={{flex:"0 0 auto",whiteSpace:"nowrap",border:"1px solid #d4dbe5",borderRadius:7,padding:"8px 10px",background:"#fff",color:"#344054",fontSize:11,fontWeight:800,cursor:"pointer"}}>↓ Download PNG</button></div>
            <p style={{fontSize:12,lineHeight:1.55,color:"#596579",margin:"9px 0"}}>{f.description}</p><div style={{fontSize:12,lineHeight:1.5,background:"#f8fafc",padding:10,borderRadius:8}}><b>{f.evidence?.[0]?.element||"Visible evidence"}</b><br/>{f.evidence?.[0]?.detail||"Finding linked to the original screenshot."}</div><div style={{fontSize:12,lineHeight:1.5,marginTop:9}}><b>Recommended redesign</b><br/>{f.recommendation}</div>
            {f.uxPerspective&&<details style={{marginTop:10}} open={activeFinding===i}><summary style={{fontSize:12,fontWeight:800,cursor:"pointer"}}>UX core + research</summary><p className="iaMuted"><b>{f.uxPerspective.law}</b><br/>Definition: {f.uxPerspective.definition}<br/>Why it applies: {f.uxPerspective.assessment}<br/>Research context: {f.uxPerspective.researchContext}</p></details>}
            {f.businessAnalysis&&<div style={{marginTop:10,borderTop:"1px solid #e5e7eb",paddingTop:10}}><div className="iaEyebrow">BUSINESS ANALYSIS</div><strong style={{fontSize:12}}>{f.businessAnalysis.funnelStage}</strong><p className="iaMuted"><b>Impact:</b> {f.businessAnalysis.impact}<br/><b>KPI at risk:</b> {f.businessAnalysis.kpi}<br/><b>Mechanism:</b> {f.businessAnalysis.mechanism}</p><ul className="iaMuted">{(f.businessAnalysis?.suggestions||[]).map((v,j)=><li key={j}>{v}</li>)}</ul></div>}
