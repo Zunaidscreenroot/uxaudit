@@ -10,7 +10,7 @@ const markerColors=["#e11d48","#7c3aed","#ea580c","#2563eb","#059669","#ca8a04",
 function escapeDoc(value:string){return value.replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
 function wrapCardText(context:CanvasRenderingContext2D,value:string,maxWidth:number,font:string){
  context.font=font;
- const words=(value||"—").trim().replace(/\\s+/g," ").split(" ").filter(Boolean);
+ const words=(value||"—").trim().replace(/\s+/g," ").split(" ").filter(Boolean);
  const lines:string[]=[];let line="";
  for(const word of words){
   const candidate=line?line+" "+word:word;
@@ -39,8 +39,8 @@ async function downloadFindingCardPng(finding:AuditFinding,index:number,pageTitl
  const severity=(finding.severity||"medium").toLowerCase();
  const colors=severity==="high"?{bg:"#fee2e2",text:"#991b1b",dot:"#dc2626"}:severity==="medium"?{bg:"#fef3c7",text:"#92400e",dot:"#d97706"}:{bg:"#e2e8f0",text:"#475569",dot:"#64748b"};
  const badgeX=width-pad-180,badgeY=60;
- const safePage=(pageTitle||"page").toLowerCase().normalize("NFKD").replace(/[\\u0300-\\u036f]/g,"").replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,42)||"page";
- const safeTitle=(finding.title||"ux-finding").toLowerCase().normalize("NFKD").replace(/[\\u0300-\\u036f]/g,"").replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,56)||"ux-finding";
+ const safePage=(pageTitle||"page").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,42)||"page";
+ const safeTitle=(finding.title||"ux-finding").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,56)||"ux-finding";
  const svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+width+'" height="'+height+'" viewBox="0 0 '+width+' '+height+'"><defs><filter id="shadow" x="-10%" y="-10%" width="120%" height="125%"><feDropShadow dx="0" dy="10" stdDeviation="15" flood-color="#0f172a" flood-opacity=".10"/></filter></defs><g font-family="Arial, Helvetica, sans-serif"><rect x="18" y="18" width="'+(width-36)+'" height="'+(height-36)+'" rx="32" fill="#fff" filter="url(#shadow)"/><text x="'+pad+'" y="96" font-size="19" font-weight="800" letter-spacing="3.2" fill="#737373">FINDING '+String(index+1).padStart(2,"0")+'</text><rect x="'+badgeX+'" y="'+badgeY+'" width="180" height="58" rx="18" fill="'+colors.bg+'"/><circle cx="'+(badgeX+32)+'" cy="'+(badgeY+29)+'" r="6.5" fill="'+colors.dot+'"/><text x="'+(badgeX+54)+'" y="'+(badgeY+37)+'" font-size="20" font-weight="800" letter-spacing="1.3" fill="'+colors.text+'">'+escapeDoc(severity.toUpperCase())+'</text>'+renderCardLines(titleLines,pad,titleY,titleLineHeight,42,700,"#171717")+renderCardLines(descriptionLines,pad,descriptionY,descriptionLineHeight,29,400,"#404040")+'<line x1="'+pad+'" y1="'+dividerY+'" x2="'+(width-pad)+'" y2="'+dividerY+'" stroke="#ece9e7" stroke-width="2"/><text x="'+pad+'" y="'+metaLabelY+'" font-size="18" font-weight="800" letter-spacing="3" fill="#737373">UX PRINCIPLE</text><text x="'+rightColumn+'" y="'+metaLabelY+'" font-size="18" font-weight="800" letter-spacing="3" fill="#737373">CATEGORY</text>'+renderCardLines(principleLines,pad,metaValueY,metaLineHeight,28,600,"#292929")+renderCardLines(categoryLines,rightColumn,metaValueY,metaLineHeight,28,600,"#292929")+'</g></svg>';
  const svgUrl=URL.createObjectURL(new Blob([svg],{type:"image/svg+xml;charset=utf-8"}));
  try{
