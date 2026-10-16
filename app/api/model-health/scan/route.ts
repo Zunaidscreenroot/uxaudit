@@ -34,10 +34,15 @@ async function testModel(item: ModelDef) {
    if (!key) return {...item,ok:false,latencyMs:0,error:"OpenRouter API key missing"};
    response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method:"POST",headers:{Authorization:`Bearer ${key}`,"Content-Type":"application/json","HTTP-Referer":"https://uxauditscreenroot.vercel.app","X-Title":"UX Audit Availability Check"},
-    body:JSON.stringify({model:item.model,messages:[{role:"user",content:"Reply OK"}],max_tokens:1,temperature:0,provider:{allow_fallbacks:true}}),
-    signal:AbortSignal.timeout(6500),cache:"no-store"
+    body:JSON.stringify({model:item.model,messages:[{role:"user",content:"OK"}],max_tokens:2,temperature:0,provider:{allow_fallbacks:true}}),
+    signal:AbortSignal.timeout(10000),cache:"no-store"
    });
    payload = await response.json().catch(()=>({}));
+   if (!response.ok && [429,500,502,503,504].includes(response.status)) {
+    await new Promise(resolve=>setTimeout(resolve,1200));
+    response = await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:`Bearer ${key}`,"Content-Type":"application/json","HTTP-Referer":"https://uxauditscreenroot.vercel.app","X-Title":"UX Audit Availability Check"},body:JSON.stringify({model:item.model,messages:[{role:"user",content:"OK"}],max_tokens:2,temperature:0,provider:{allow_fallbacks:true}}),signal:AbortSignal.timeout(10000),cache:"no-store"});
+    payload = await response.json().catch(()=>({}));
+   }
    if (!response.ok) return {...item,ok:false,latencyMs:Date.now()-started,error:`HTTP ${response.status}: ${payload?.error?.message ?? "Provider unavailable"}`};
    const answer = extractText(payload?.choices?.[0]?.message?.content);
    return {...item,ok:Boolean(answer),latencyMs:Date.now()-started,responsePreview:answer.slice(0,30),totalTokens:payload?.usage?.total_tokens ?? null,error:answer ? undefined : "Provider returned no text content"};
@@ -46,10 +51,15 @@ async function testModel(item: ModelDef) {
   if (!key) return {...item,ok:false,latencyMs:0,error:"Gemini API key missing"};
   response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${item.model}:generateContent`,{
    method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":key},
-   body:JSON.stringify({contents:[{role:"user",parts:[{text:"Reply OK"}]}],generationConfig:{maxOutputTokens:1,temperature:0}}),
-   signal:AbortSignal.timeout(6500),cache:"no-store"
+   body:JSON.stringify({contents:[{role:"user",parts:[{text:"OK"}]}],generationConfig:{maxOutputTokens:2,temperature:0}}),
+   signal:AbortSignal.timeout(10000),cache:"no-store"
   });
   payload = await response.json().catch(()=>({}));
+  if (!response.ok && [429,500,502,503,504].includes(response.status)) {
+   await new Promise(resolve=>setTimeout(resolve,1200));
+   response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${item.model}:generateContent`,{method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":key},body:JSON.stringify({contents:[{role:"user",parts:[{text:"OK"}]}],generationConfig:{maxOutputTokens:2,temperature:0}}),signal:AbortSignal.timeout(10000),cache:"no-store"});
+   payload = await response.json().catch(()=>({}));
+  }
   if (!response.ok) return {...item,ok:false,latencyMs:Date.now()-started,error:`HTTP ${response.status}: ${payload?.error?.message ?? "Provider unavailable"}`};
   const answer = extractText((payload?.candidates?.[0]?.content?.parts ?? []).map((p:any)=>p?.text ?? ""));
   return {...item,ok:Boolean(answer),latencyMs:Date.now()-started,responsePreview:answer.slice(0,30),totalTokens:payload?.usageMetadata?.totalTokenCount ?? null,error:answer ? undefined : "Provider returned no text content"};
@@ -58,12 +68,12 @@ async function testModel(item: ModelDef) {
  }
 }
 export async function POST() {
- const results = await Promise.all(MODELS.map(testModel));
+ const results = [];\n for (const model of MODELS) { results.push(await testModel(model)); await new Promise(resolve=>setTimeout(resolve,250)); }
  const working = results.filter(result => result.ok);
  return Response.json({
   checkedAt:new Date().toISOString(),
   working,
   failed:results.filter(result => !result.ok),
-  note:"Automatic text-only availability checks; no screenshots. Each request caps generated output at one token. Paid model checks may incur a small charge."
+  note:"Automatic text-only availability checks; no screenshots. Each request caps generated output at two tokens and retries transient provider errors once. Paid model checks may incur a small charge."
  },{headers:{"Cache-Control":"no-store"}});
 }
