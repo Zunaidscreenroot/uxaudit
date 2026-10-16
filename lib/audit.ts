@@ -123,8 +123,10 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   const analysisBuffer = await sharp(buffer).resize({ width: Math.min(1600, width), height: Math.min(7000, height), fit: "inside", withoutEnlargement: true }).jpeg({ quality: 82, progressive: true }).toBuffer();
   const capture: Capture = { buffer, width, height, analysisBuffer, title: filename.replace(/\.[^.]+$/, "") || "Uploaded screenshot" };
   const allowedModels=verifiedModels.filter(m=>m&&m.provider==="OpenRouter"&&typeof m.model==="string"&&m.model.length>0);
-  const visionModel=allowedModels.find(m=>m.model.includes("vision")||m.model.includes("vl"))??allowedModels[0];
-  const textModel=allowedModels.find(m=>m.model!==visionModel?.model)??visionModel;
+  // The connection layer owns model selection: the first verified model is the primary; later entries are ordered fallbacks.
+  const primaryModel=allowedModels[0];
+  const visionModel=primaryModel;
+  const textModel=primaryModel;
   if(!visionModel||!textModel)throw new Error("At least one verified OpenRouter model is required; refresh model availability and retry.");
 
   onStage?.({ id: "capture", label: "Preparing screenshot", detail: `Using the original ${width} × ${height}px screenshot; no visual crops will be generated.`, status: "complete" });
