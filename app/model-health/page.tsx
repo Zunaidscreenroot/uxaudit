@@ -15,6 +15,16 @@ type ModelResult = {
 
 type ConfiguredModel = { provider: "OpenRouter" | "Gemini"; model: string; configured: boolean; };
 type ConfigResponse = { checkedAt: string; keys: { openRouter: boolean; gemini: boolean }; models: ConfiguredModel[]; note: string; };
+type CostStatus = {
+  checkedAt: string;
+  dailyBudgetInr: number;
+  dailySpendInr: number | null;
+  dailyRemainingInr: number | null;
+  dailySpendTracking: string;
+  tokenTracking: string;
+  provider: { connected: boolean; keyConfigured: boolean; managementKeyConfigured: boolean; usageUsd: number | null; limitUsd: number | null; remainingUsd: number | null; freeTier: boolean | null; error: string | null; label?: string | null };
+  note: string;
+};
 
 type HealthResponse = {
   checkedAt: string;
@@ -69,14 +79,14 @@ async function readResponse(response: Response): Promise<any> {
 
 export default function ModelHealth() {
   const [file, setFile] = useState<File | null>(null);
-  const [config, setConfig] = useState<ConfigResponse | null>(null);
+  const [config, setConfig] = useState<ConfigResponse | null>(null);\n  const [cost, setCost] = useState<CostStatus | null>(null);
   const [data, setData] = useState<HealthResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [filter, setFilter] = useState<"all" | "ok" | "error">("all");
 
   useEffect(() => {
-    fetch("/api/model-health").then(readResponse).then((payload) => setConfig(payload as ConfigResponse)).catch(() => setError("Could not load backend configuration status."));
+    fetch("/api/model-health").then(readResponse).then((payload) => setConfig(payload as ConfigResponse)).catch(() => setError("Could not load backend configuration status."));\n    fetch("/api/cost-status", { cache: "no-store" }).then(readResponse).then((payload) => setCost(payload as CostStatus)).catch(() => undefined);
   }, []);
 
   async function runCheck() {
@@ -107,6 +117,25 @@ export default function ModelHealth() {
         <div><strong style={{ fontSize: 22 }}>UX Audit</strong><span style={{ marginLeft: 8, fontSize: 12, textTransform: "uppercase", letterSpacing: 1 }}>Model Health</span></div>
         <a href="/" style={{ color: "#111" }}>Back to audit</a>
       </div>
+
+      {cost && <section style={{ margin: "24px 0", background: "white", border: "1px solid #ddd", borderRadius: 12, padding: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+          <div><strong style={{ fontSize: 18 }}>AI spend & budget transparency</strong><p style={{ color: "#666", fontSize: 13, margin: "6px 0 0" }}>Updated {new Date(cost.checkedAt).toLocaleString()}</p></div>
+          <strong style={{ color: cost.provider.connected ? "#167a3d" : "#b42318" }}>{cost.provider.connected ? "● OpenRouter connected" : cost.provider.keyConfigured ? "● OpenRouter configured · connection unavailable" : "● OpenRouter key missing"}</strong>
+        </div>
+        <div style={{ marginTop: 18, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+          {[
+            ["Daily budget", `₹${cost.dailyBudgetInr.toLocaleString("en-IN")}`],
+            ["Today's spend", cost.dailySpendInr === null ? "Not tracked yet" : `₹${cost.dailySpendInr.toFixed(2)}`],
+            ["Budget remaining", cost.dailyRemainingInr === null ? "Not available" : `₹${cost.dailyRemainingInr.toFixed(2)}`],
+            ["OpenRouter key usage", cost.provider.usageUsd === null ? "Not available" : `${cost.provider.usageUsd.toFixed(4)}`],
+            ["Key limit remaining", cost.provider.remainingUsd === null ? "Not provided" : `${cost.provider.remainingUsd.toFixed(2)}`],
+            ["Token usage", "Not tracked yet"],
+          ].map(([label, value]) => <div key={label} style={{ border: "1px solid #eee", borderRadius: 9, padding: 14 }}><div style={{ color: "#777", fontSize: 11, textTransform: "uppercase", letterSpacing: .7 }}>{label}</div><strong style={{ display: "block", marginTop: 8, fontSize: 21, overflowWrap: "anywhere" }}>{value}</strong></div>)}
+        </div>
+        <p style={{ color: "#777", fontSize: 12, lineHeight: 1.5, marginBottom: 0 }}>{cost.note}</p>
+        {cost.provider.error && <p style={{ color: "#b42318", fontSize: 12 }}>Provider status: {cost.provider.error}</p>}
+      </section>}
 
       {config && <section style={{ margin: "24px 0", background: "white", border: "1px solid #ddd", borderRadius: 12, padding: 20 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
