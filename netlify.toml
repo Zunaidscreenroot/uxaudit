@@ -1,0 +1,20 @@
+# Next.js configuration for Netlify Git builds and Deploy Previews.
+# This branch is a preview migration; production is managed separately.
+
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "24"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# Explicit preview context so PR builds use the same Next.js output settings.
+[context.deploy-preview]
+  command = "npm run build"
+  publish = ".next"
+
+[context.deploy-preview.environment]
+  NODE_VERSION = "24"
