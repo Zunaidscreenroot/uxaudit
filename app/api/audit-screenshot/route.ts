@@ -1,7 +1,160 @@
 import { createAuditFromScreenshot } from "@/lib/audit";
 import { saveAudit } from "@/lib/knowledge-base";
-export const runtime="nodejs";
-export const maxDuration=60;
-type Model={provider:"OpenRouter";model:string;tier:"paid"};
-function event(controller:ReadableStreamDefaultController<Uint8Array>,payload:unknown){controller.enqueue(new TextEncoder().encode("data: "+JSON.stringify(payload)+"\n\n"));}
-export async function POST(req:Request){let body:any;try{body=await req.json()}catch{return Response.json({error:"Invalid audit request."},{status:400})}let u:URL;try{u=new URL(body?.url)}catch{return Response.json({error:"A valid page URL is required."},{status:400})}const models:Model[]=[{provider:"OpenRouter",model:"openrouter/auto",tier:"paid"}];const match=typeof body?.screenshot==="string"?body.screenshot.match(/^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/):null;if(!match)return Response.json({error:"Captured screenshot is missing or invalid."},{status:400});const bytes=Buffer.from(match[2],"base64");if(!bytes.length||bytes.length>15*1024*1024)return Response.json({error:"Screenshot is empty or too large."},{status:400});const auditMode = body.auditMode === "mobile" ? "mobile" : "desktop";const viewportWidth = auditMode === "mobile" ? 393 : 1440;const viewportHeight = auditMode === "mobile" ? 852 : undefined;const title=typeof body.title==="string"?body.title:(u.pathname==="/"?"Homepage":u.pathname.split("/").filter(Boolean).pop()?.replace(/[-_]/g," ")||u.hostname);const project=typeof body.projectName==="string"&&body.projectName.trim()?body.projectName.trim():u.hostname;const stream=new ReadableStream<Uint8Array>({start(controller){void(async()=>{try{console.info("[uxaudit] streamed_audit_start",JSON.stringify({host:u.hostname,models:models.map(m=>m.model),screenshotBytes:bytes.length}));event(controller,{type:"stage",stage:{id:"model",label:"OpenRouter Auto Router",detail:"No local model preselection. OpenRouter selects a vision-capable model for the screenshot and a reasoning model for UX research; low-cost routing and provider price ceilings are enabled.",status:"complete"}});event(controller,{type:"stage",stage:{id:"model-run",label:"Run vision + UX analysis",detail:"Sending the actual website screenshot to OpenRouter Auto Router. OpenRouter handles model choice and provider fallback.",status:"active"}});const result=await createAuditFromScreenshot(bytes,title+".jpg",(stage)=>event(controller,{type:"stage",stage}),models,auditMode);result.pages=result.pages.map(p=>({...p,clientName:project,url:u.href,title,createdAt:new Date().toISOString(),auditMode,viewportWidth,viewportHeight}));event(controller,{type:"stage",stage:{id:"save",label:"Save audit report",detail:"Saving findings and screenshot evidence to the audit knowledge base.",status:"active"}});const auditId=await saveAudit(result,"URL audit · "+project+" · "+title);event(controller,{type:"stage",stage:{id:"save",label:"Save audit report",detail:"Audit report saved successfully.",status:"complete"}});event(controller,{type:"result",payload:{page:result.pages[0],auditId}});console.info("[uxaudit] streamed_audit_ok",JSON.stringify({host:u.hostname,auditId,findings:result.pages[0]?.findings?.length}));}catch(e){const message=e instanceof Error?e.message:"AI audit failed.";console.error("[uxaudit] streamed_audit_failed",JSON.stringify({host:u.hostname,error:message}));event(controller,{type:"error",error:message});}finally{controller.close()}})()} });return new Response(stream,{headers:{"Content-Type":"text/event-stream; charset=utf-8","Cache-Control":"no-cache, no-transform","Connection":"keep-alive","X-Accel-Buffering":"no"}})}
+
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
+type Model = { provider: "OpenRouter"; model: string; tier: "paid" };
+type AuditMode = "desktop" | "mobile";
+
+function event(controller: ReadableStreamDefaultController<Uint8Array>, payload: unknown) {
+  controller.enqueue(new TextEncoder().encode("data: " + JSON.stringify(payload) + "\n\n"));
+}
+
+export async function POST(req: Request) {
+  let body: any;
+  try {
+    body = await req.json();
+  } catch {
+    return Response.json({ error: "Invalid audit request." }, { status: 400 });
+  }
+
+  // The upload flow audits the attached image directly. URL-based page audits
+  // may also call this route, so keep both inputs supported.
+  const isUpload = body?.source === "upload";
+  let sourceUrl: URL | null = null;
+  const rawUrl = typeof body?.url === "string" ? body.url.trim() : "";
+
+  if (!isUpload) {
+    try {
+      sourceUrl = new URL(rawUrl);
+    } catch {
+      return Response.json({ error: "A valid page URL is required for a website screenshot." }, { status: 400 });
+    }
+    if (!["http:", "https:"].includes(sourceUrl.protocol)) {
+      return Response.json({ error: "Only HTTP/HTTPS page URLs are supported." }, { status: 400 });
+    }
+  }
+
+  const match = typeof body?.screenshot === "string"
+    ? body.screenshot.match(/^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/)
+    : null;
+  if (!match) {
+    return Response.json({ error: "Upload a valid PNG, JPEG or WebP screenshot before starting the AI audit." }, { status: 400 });
+  }
+
+  const bytes = Buffer.from(match[2], "base64");
+  if (!bytes.length || bytes.length > 15 * 1024 * 1024) {
+    return Response.json({ error: "Screenshot is empty or too large. Upload an image under 15 MB." }, { status: 400 });
+  }
+
+  const auditMode: AuditMode = body.auditMode === "mobile" ? "mobile" : "desktop";
+  const viewportWidth = auditMode === "mobile" ? 393 : 1440;
+  const viewportHeight = auditMode === "mobile" ? 852 : undefined;
+  const uploadedTitle = typeof body.title === "string" ? body.title.trim() : "";
+  const title = uploadedTitle || (sourceUrl
+    ? (sourceUrl.pathname === "/" ? "Homepage" : sourceUrl.pathname.split("/").filter(Boolean).pop()?.replace(/[-_]/g, " ") || sourceUrl.hostname)
+    : "Uploaded screenshot");
+  const project = typeof body.projectName === "string" && body.projectName.trim()
+    ? body.projectName.trim()
+    : (sourceUrl?.hostname || "Screenshot audit");
+  const models: Model[] = [{ provider: "OpenRouter", model: "openrouter/auto", tier: "paid" }];
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      void (async () => {
+        try {
+          console.info("[uxaudit] screenshot_audit_start", JSON.stringify({
+            source: isUpload ? "uploaded_screenshot" : "website_page",
+            host: sourceUrl?.hostname ?? null,
+            models: models.map((model) => model.model),
+            screenshotBytes: bytes.length,
+            auditMode,
+          }));
+
+          event(controller, {
+            type: "stage",
+            stage: {
+              id: "model",
+              label: "OpenRouter AI routing",
+              detail: "The actual image is sent to OpenRouter Auto Router, which selects a suitable vision model and falls back when available.",
+              status: "complete",
+            },
+          });
+          event(controller, {
+            type: "stage",
+            stage: {
+              id: "model-run",
+              label: isUpload ? "Analyse uploaded screenshot" : "Analyse captured website screenshot",
+              detail: "The AI is inspecting visible interface elements, hierarchy, content, controls and evidence in the supplied image.",
+              status: "active",
+            },
+          });
+
+          const result = await createAuditFromScreenshot(
+            bytes,
+            title + ".jpg",
+            (stage) => event(controller, { type: "stage", stage }),
+            models,
+            auditMode,
+          );
+
+          result.pages = result.pages.map((page) => ({
+            ...page,
+            clientName: project,
+            url: sourceUrl?.href || "Uploaded screenshot",
+            title,
+            createdAt: new Date().toISOString(),
+            auditMode,
+            viewportWidth,
+            viewportHeight,
+          }));
+
+          event(controller, {
+            type: "stage",
+            stage: {
+              id: "save",
+              label: "Save audit report",
+              detail: "Saving the screenshot evidence and AI findings to the audit knowledge base.",
+              status: "active",
+            },
+          });
+
+          const sourceLabel = isUpload ? "Screenshot upload" : "URL audit";
+          const auditId = await saveAudit(result, sourceLabel + " · " + project + " · " + title);
+
+          event(controller, {
+            type: "stage",
+            stage: {
+              id: "save",
+              label: "Save audit report",
+              detail: "Audit report saved successfully.",
+              status: "complete",
+            },
+          });
+          event(controller, { type: "result", payload: { page: result.pages[0], auditId } });
+          console.info("[uxaudit] screenshot_audit_ok", JSON.stringify({
+            source: isUpload ? "uploaded_screenshot" : "website_page",
+            auditId,
+            findingCount: result.pages[0]?.findings?.length ?? 0,
+          }));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "AI screenshot audit failed.";
+          console.error("[uxaudit] screenshot_audit_failed", JSON.stringify({ error: message }));
+          event(controller, { type: "error", error: message });
+        } finally {
+          controller.close();
+        }
+      })();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
+}
