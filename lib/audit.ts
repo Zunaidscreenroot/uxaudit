@@ -68,15 +68,27 @@ function normalizeMarker(value: unknown): MarkerPoint {
 
 function normalizeVisualPass(value: unknown): VisualPass {
   const root = value && typeof value === "object" ? value as Record<string, unknown> : {};
-  const observations = Array.isArray(root.observations) ? root.observations : [];
-  const rawClientName = typeof root.clientName === "string" ? root.clientName.trim() : "";
+  const candidate = root.observations ?? root.visualObservations ?? root.issues ?? root.findings ?? root.items;
+  const observations = Array.isArray(candidate) ? candidate : [];
+  const rawClientName = typeof root.clientName === "string" ? root.clientName.trim() : typeof root.brandName === "string" ? root.brandName.trim() : "";
   return {
     clientName: rawClientName || "Unknown client",
-    pageSummary: typeof root.pageSummary === "string" ? root.pageSummary.trim() : "The screenshot contains visible interface patterns that can be reviewed for hierarchy, usability and conversion friction.",
+    pageSummary: typeof root.pageSummary === "string" ? root.pageSummary.trim() : typeof root.summary === "string" ? root.summary.trim() : "The screenshot contains visible interface patterns that can be reviewed for hierarchy, usability and conversion friction.",
     observations: observations.slice(0, 10).map((raw, index) => {
       const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
-      return { id: typeof item.id === "string" ? item.id : `obs-${index + 1}`, section: typeof item.section === "string" ? item.section.trim() : "Page section", element: typeof item.element === "string" ? item.element.trim() : "Visible interface element", issue: typeof item.issue === "string" ? item.issue.trim() : "The visible pattern may create unnecessary friction.", whyItMatters: typeof item.whyItMatters === "string" ? item.whyItMatters.trim() : "It may make the intended action harder to understand.", marker: normalizeMarker(item.marker) };
-    }).filter((item) => item.section && item.element && item.issue),
+      const issue = item.issue ?? item.problem ?? item.title ?? item.description;
+      const section = item.section ?? item.region ?? item.area;
+      const element = item.element ?? item.component ?? item.target;
+      const why = item.whyItMatters ?? item.impact ?? item.rationale;
+      return {
+        id: typeof item.id === "string" ? item.id : typeof item.observationId === "string" ? item.observationId : `obs-${index + 1}`,
+        section: typeof section === "string" && section.trim() ? section.trim() : "Visible screenshot region",
+        element: typeof element === "string" && element.trim() ? element.trim() : "Visible interface element",
+        issue: typeof issue === "string" ? issue.trim() : "",
+        whyItMatters: typeof why === "string" && why.trim() ? why.trim() : "This visible pattern may make the intended action harder to understand.",
+        marker: normalizeMarker(item.marker ?? item.point ?? item.coordinates),
+      };
+    }).filter((item) => item.issue.length > 0),
   };
 }
 
@@ -95,10 +107,24 @@ async function createVisualPass(model: VerifiedModel, capture: Capture, timeoutM
   const aspect = capture.width / capture.height;
   const viewportHint = aspect < 0.75 ? "portrait or full-page narrow capture (verify actual visible UI; do not assume mobile solely from aspect ratio)" : aspect < 1.15 ? "square-ish or tablet-like capture (verify actual visible UI)" : "wide capture (likely desktop, but verify actual visible UI)";
   const prompt = `You are the IMAGE-TO-TEXT stage of a UX audit. Analyze the supplied screenshot itself, not an imagined website. Original dimensions are ${capture.width}x${capture.height}px; aspect-ratio hint: ${viewportHint}. Determine DEVICE / VIEWPORT from visible evidence first: narrow single-column layout, mobile hamburger/menu, stacked cards, mobile-sized controls, desktop multi-column layout, wide navigation, sidebars, or desktop utility bars. In JSON include "deviceType" as "mobile", "desktop", "tablet", or "uncertain" and explain the visible cue in pageSummary. Never label a full-page screenshot mobile just because it is tall; never label it desktop just because it contains lots of content.\n\nFIRST identify the CLIENT / BRAND NAME visible in the screenshot. Look specifically for explicit company or product text, logo/wordmark text, domain text, browser/site identity, distinctive brand naming, or a clearly visible legal/company name. Use the strongest explicit evidence. If the screenshot is Tata Capital, return exactly "Tata Capital". Do not infer a client from generic colours, layout style, or industry alone. If no reliable name is visible, return "Unknown client".\n\nThe final report will display the ENTIRE original screenshot once, with numbered colored dots overlaid on the exact regions you identify. There is NO CROPPING in this product. Do not return bounding boxes, crop widths, crop heights, or image snippets.\n\nFind 5–8 strong, DISTINCT UX observations. Each observation must refer to a different specific visible UI region and a different concrete issue grounded only in pixels actually visible in this screenshot. Do not repeat the same issue under synonyms, do not repeat generic labels such as "high density" for multiple unrelated sections, and do not reuse a title/issue/element for multiple observations. If the screenshot does not support 5 distinct issues, return fewer rather than inventing or duplicating. Titles must name the actual element and problem, not just a generic category. If the screenshot is narrow/tall, reason about the actual responsive mobile layout shown; never assume desktop. Prefer concrete issues involving hierarchy, labels, grouping, density, CTA competition, form clarity, content scanning, navigation, trust, or conversion friction.\n\nFor EVERY observation return ONE MARKER POINT at the visual centre of the specific UI region that demonstrates the issue. Coordinates must be normalized from 0 to 1 using the ORIGINAL supplied image dimensions: x=0 is the left edge, x=1 the right edge, y=0 is the top edge, y=1 the bottom edge. The dot should land ON the relevant text, control, card, image, navigation item, or other visible evidence—not in empty space. Use the exact visible location, not a section estimate or page-percentage guess. Never place two observations at the same point. Keep observations ordered from top to bottom of the screenshot.\n\nThe marker is the permanent spatial link between the visual observation and the later text review. Do not change or reinterpret the marker after choosing it.\n\nReturn JSON only: {"clientName":"Tata Capital","deviceType":"mobile|desktop|tablet|uncertain","pageSummary":"one factual sentence including visible device/layout cues","observations":[{"id":"obs-1","section":"exact visible section","element":"exact visible element","issue":"factual visible issue","whyItMatters":"user-visible consequence","marker":{"x":0.50,"y":0.20}}]}`;
-  const text = await modelGenerate(model, [{ text: prompt }, { inline_data: { mime_type: "image/jpeg", data: capture.analysisBuffer.toString("base64") } }], 1600, timeoutMs);
-  const result = normalizeVisualPass(extractJson(text));
-  if (!result.observations.length) throw new Error("The image-to-text model returned no usable visual observations.");
-  return result;
+  const imagePart = { inline_data: { mime_type: "image/jpeg", data: capture.analysisBuffer.toString("base64") } };
+  let lastProblem = "The image-to-text model returned no usable visual observations.";
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const retryPrompt = attempt === 0 ? prompt : `Inspect the attached screenshot and return ONLY valid JSON with this exact shape: {"clientName":"visible brand or Unknown client","pageSummary":"one sentence describing visible layout","observations":[{"id":"obs-1","section":"visible region","element":"visible control or content","issue":"specific UX issue visibly supported by screenshot","whyItMatters":"user impact","marker":{"x":0.5,"y":0.2}}]}. Return 3 to 6 observations only when supported by visible evidence. Coordinates must be numbers from 0 to 1. Do not return markdown or any other schema.`;
+    try {
+      const text = await modelGenerate(model, [{ text: retryPrompt }, imagePart], attempt === 0 ? 1600 : 1200, timeoutMs);
+      const parsed = extractJson(text);
+      const result = normalizeVisualPass(parsed);
+      if (result.observations.length) return result;
+      const keys = parsed && typeof parsed === "object" ? Object.keys(parsed as Record<string, unknown>) : [];
+      lastProblem = "No usable observations; returned JSON keys: " + (keys.join(", ") || "none");
+      console.warn("[uxaudit] visual_schema_mismatch", JSON.stringify({ attempt: attempt + 1, keys, responsePreview: text.slice(0, 500) }));
+    } catch (e) {
+      lastProblem = e instanceof Error ? e.message : "Visual analysis failed.";
+      if (attempt === 1) throw e;
+    }
+  }
+  throw new Error("The image-to-text model returned no usable visual observations after one retry. " + lastProblem);
 }
 
 async function createTextReview(model: VerifiedModel, visualPass: VisualPass, timeoutMs = 12000) {
