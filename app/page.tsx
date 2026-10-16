@@ -9,6 +9,7 @@ export default function Home() {
  const [error, setError] = useState("");
  const [verification, setVerification] = useState<Verification | null>(null);
  const [verificationError, setVerificationError] = useState("");
+ const [recentIa, setRecentIa] = useState<any>(null);
  useEffect(() => {
   let cancelled = false;
   (async () => {
@@ -29,6 +30,20 @@ export default function Home() {
    } catch (e) {
     if (!cancelled) setVerificationError(e instanceof Error ? e.message : "Model verification failed.");
    }
+  })();
+  return () => { cancelled = true; };
+ }, []);
+ useEffect(() => {
+  let cancelled = false;
+  (async () => {
+   try {
+    const id = localStorage.getItem("uxaudit-current-ia-session");
+    if (!id) return;
+    const r = await fetch("/api/ia-session?id=" + encodeURIComponent(id), { cache: "no-store" });
+    const d = await r.json();
+    if (r.ok && d.session && !cancelled) setRecentIa(d.session);
+    else if (!r.ok && r.status === 404) localStorage.removeItem("uxaudit-current-ia-session");
+   } catch {}
   })();
   return () => { cancelled = true; };
  }, []);
@@ -55,6 +70,10 @@ export default function Home() {
    <div style={{fontSize:11,fontWeight:800,letterSpacing:2,color:"#60708a"}}>IA FIRST · EVIDENCE-LED UX AUDIT</div>
    <h1 style={{fontSize:"clamp(40px,7vw,76px)",letterSpacing:"-3px",lineHeight:1.02,maxWidth:900,margin:"18px 0"}}>Start with the structure.<br/>Audit only what matters.</h1>
    <p style={{fontSize:18,lineHeight:1.7,color:"#667386",maxWidth:760}}>Enter a website URL to discover its pages and map the information architecture. Review structural issues, choose the pages you want, then capture screenshots and audit only that selection.</p>
+   {recentIa && <article style={{marginTop:24,padding:18,background:"#fff",border:"1px solid #cbd7e8",borderRadius:12,display:"flex",justifyContent:"space-between",alignItems:"center",gap:16,flexWrap:"wrap"}}>
+    <div><div style={{fontSize:11,fontWeight:800,letterSpacing:1,color:"#526b91"}}>RECENT IA · SAVED FOR 30 MINUTES</div><h2 style={{fontSize:18,margin:"7px 0"}}>{recentIa.title || recentIa.root}</h2><p style={{fontSize:12,color:"#687588",margin:0}}>{recentIa.root} · {recentIa.audited_pages?.length || 0} saved page result(s) · expires {new Date(recentIa.expires_at).toLocaleTimeString()}</p></div>
+    <a href={"/site-map?session="+encodeURIComponent(recentIa.id)} style={{background:"#192b49",color:"#fff",padding:"13px 16px",borderRadius:9,fontWeight:800,fontSize:13,textDecoration:"none"}}>Continue saved IA →</a>
+   </article>}
    <form onSubmit={start} style={{display:"flex",gap:10,marginTop:30,maxWidth:850,flexWrap:"wrap"}}>
     <input type="url" aria-label="Website URL" placeholder="https://example.com" value={url} onChange={e=>setUrl(e.target.value)} required style={{flex:"1 1 380px",padding:"17px 16px",fontSize:15,border:"1px solid #cbd3de",borderRadius:10,background:"white"}}/>
     <button disabled={loading} style={{padding:"16px 24px",border:0,borderRadius:10,background:"#192b49",color:"white",fontWeight:800,fontSize:14,cursor:"pointer"}}>{loading?"Opening…":"Get started →"}</button>
