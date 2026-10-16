@@ -10,10 +10,10 @@ type DiscoveredPage = { url: string; title: string; category: string; depth: num
 type Session = { id: string; root: string; title?: string; discovery: {root:string;title:string;pages:DiscoveredPage[];note?:string}; selected_urls?: string[]; audited_pages?: any[]; project_name?: string; stage?: string };
 
 const toolDefinitions = [
-  { name: "uxaudit_discover_site", title: "Discover website IA", requiredScope: "audit:read",
+  { name: "uxaudit_discover_site", title: "Discover website IA", requiredScope: "audit:read", annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
     description: "Discover a public website's linked pages, sitemap URLs, page labels, categories and URL depth. Does not run AI screenshot analysis.",
     inputSchema: { type: "object", properties: { url: { type: "string", description: "Website root URL." } }, required: ["url"], additionalProperties: false } },
-  { name: "uxaudit_run_page_audit", title: "Run desktop or mobile UX audit", requiredScope: "audit:run",
+  { name: "uxaudit_run_page_audit", title: "Run desktop or mobile UX audit", requiredScope: "audit:run", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     description: "Capture a public page and run evidence-led AI UX analysis. mode is desktop or mobile (393×852 CSS px). Uses the configured OpenRouter key and may incur model charges. If CDN/security blocks capture, the tool stops without treating the denial page as UX evidence.",
     inputSchema: { type: "object", properties: {
       url: { type: "string", description: "Exact page URL to audit." },
@@ -21,13 +21,13 @@ const toolDefinitions = [
       projectName: { type: "string", description: "Optional project/client label." },
       screenshotDataUrl: { type: "string", description: "Optional PNG/JPEG/WebP base64 data URL of the actual page screenshot. Never pass a CDN/403 error screenshot." },
     }, required: ["url"], additionalProperties: false } },
-  { name: "uxaudit_get_session_report", title: "Get saved UX Audit session", requiredScope: "audit:read",
+  { name: "uxaudit_get_session_report", title: "Get saved UX Audit session", requiredScope: "audit:read", annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     description: "Retrieve a recent saved IA session, discovered pages and audit metadata by session UUID. Sessions typically expire after 30 minutes.",
     inputSchema: { type: "object", properties: { sessionId: { type: "string", description: "UUID returned after a page audit." } }, required: ["sessionId"], additionalProperties: false } },
-  { name: "uxaudit_get_findings", title: "Get UX findings", requiredScope: "audit:read",
+  { name: "uxaudit_get_findings", title: "Get UX findings", requiredScope: "audit:read", annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     description: "Get concise findings from a saved IA session: severity, category, issue, recommendation, UX research and business analysis. Omits screenshot payloads.",
     inputSchema: { type: "object", properties: { sessionId: { type: "string", description: "UUID returned by UX Audit." }, pageUrl: { type: "string", description: "Optional URL filter." } }, required: ["sessionId"], additionalProperties: false } },
-  { name: "uxaudit_generate_improved_ia", title: "Generate improved information architecture", requiredScope: "ia:generate",
+  { name: "uxaudit_generate_improved_ia", title: "Generate improved information architecture", requiredScope: "ia:generate", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     description: "Generate a reviewable improved IA proposal from a saved session, audit findings and discovered pages. Optionally focus on one URL or finding. Does not change live website routes.",
     inputSchema: { type: "object", properties: {
       sessionId: { type: "string", description: "UUID returned by UX Audit." },
