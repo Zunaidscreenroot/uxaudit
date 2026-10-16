@@ -45,7 +45,7 @@ async function testOpenRouter(apiKey: string, model: string, image: Buffer): Pro
     const response: any = await client.chat.completions.create({
       model,
       messages: [{ role: "user", content: [
-        { type: "text", text: "Respond with exactly one short JSON object: {\\"ok\\":true}. This is a model connectivity test. Do not analyze the screenshot." },
+        { type: "text", text: "Respond with exactly one short JSON object: {\"ok\":true}. This is a model connectivity test. Do not analyze the screenshot." },
         { type: "image_url", image_url: { url: `data:image/jpeg;base64,${image.toString("base64")}` } },
       ] }],
       reasoning: { enabled: false },
@@ -70,7 +70,7 @@ async function testGemini(apiKey: string, model: string, image: Buffer): Promise
       method: "POST",
       headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
       body: JSON.stringify({ contents: [{ role: "user", parts: [
-        { text: "Respond with exactly one short JSON object: {\\"ok\\":true}. This is a model connectivity test. Do not analyze the screenshot." },
+        { text: "Respond with exactly one short JSON object: {\"ok\":true}. This is a model connectivity test. Do not analyze the screenshot." },
         { inline_data: { mime_type: "image/jpeg", data: image.toString("base64") } },
       ] }], generationConfig: { responseMimeType: "application/json", maxOutputTokens: 30, temperature: 0 } }),
       signal: AbortSignal.timeout(GEMINI_TIMEOUT),
