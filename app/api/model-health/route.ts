@@ -17,6 +17,7 @@ async function discoverOpenRouterVisionModels(apiKey: string): Promise<OpenRoute
   const models = Array.isArray(payload?.data) ? payload.data as OpenRouterVisionModel[] : [];
   return models
     .filter((model) => typeof model.id === "string" && model.architecture?.input_modalities?.includes("image"))
+    .filter(isAllowedOpenRouterModel)
     .sort((a, b) => {
       const aPrompt = Number(a.pricing?.prompt ?? "0");
       const bPrompt = Number(b.pricing?.prompt ?? "0");
@@ -27,7 +28,18 @@ async function discoverOpenRouterVisionModels(apiKey: string): Promise<OpenRoute
       if (aFree !== bFree) return aFree ? -1 : 1;
       return (aPrompt + aCompletion) - (bPrompt + bCompletion);
     })
-    .slice(0, 8);
+    .slice(0, 3);
+}
+
+// Keep only the three OpenRouter models the user explicitly named as allowed.
+// Match both the provider model ID and display name because catalog IDs can vary.
+function isAllowedOpenRouterModel(model: OpenRouterVisionModel): boolean {
+  const identity = `${model.id} ${model.name ?? ""}`.toLowerCase().replace(/[_-]+/g, " ");
+  return (
+    (identity.includes("nemotron") && identity.includes("super")) ||
+    (identity.includes("dots") && identity.includes("node") && identity.includes("preview")) ||
+    (identity.includes("nemotron") && identity.includes("content") && identity.includes("safety"))
+  );
 }
 
 const CONFIGURED_GEMINI_MODELS = [
