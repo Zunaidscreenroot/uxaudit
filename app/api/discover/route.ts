@@ -81,7 +81,7 @@ export async function POST(request: Request) {
         }
       } catch {}
     }
-    const result = [...pages.values()].sort((a, b) => a.depth - b.depth || a.category.localeCompare(b.category) || a.title.localeCompare(b.title)).slice(0, 120);
+    const result = Array.from(pages.values()).sort((a, b) => a.depth - b.depth || a.category.localeCompare(b.category) || a.title.localeCompare(b.title)).slice(0, 120);
     return Response.json({ root: origin, title: homeTitle, pages: result, scannedAt: new Date().toISOString(), note: "Discovery checks homepage links and common sitemap files. Pages behind login or not linked in the public site may not be discovered." });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Could not discover pages on this website." }, { status: 502 });
