@@ -14,6 +14,30 @@ const short=(p:Page)=>p.title||new URL(p.url).pathname.split("/").filter(Boolean
 function canonicalPageUrl(raw:string){try{const u=new URL(raw);u.hash="";u.search="";u.pathname=u.pathname.replace(/\/+$/,"")||"/";return u.origin+(u.pathname==="/"? "":u.pathname);}catch{return raw.replace(/\/$/,"");}}
 function segmentLabel(segment:string){let decoded=segment;try{decoded=decodeURIComponent(segment);}catch{}return decoded.replace(/[-_]+/g," ").replace(/\s+/g," ").replace(/\b\w/g,ch=>ch.toUpperCase());}
 function treeNodePath(raw:string){try{const path=new URL(raw).pathname;return path==="/"?"/":path.replace(/\/$/,"");}catch{return raw;}}
+async function compressScreenshotForAudit(file:File,mode:AuditMode):Promise<string>{
+ const bitmap=await createImageBitmap(file);
+ try{
+  const maxWidth=mode==="mobile"?393:1440;
+  let scale=Math.min(1,maxWidth/bitmap.width,18000/bitmap.height);
+  for(let pass=0;pass<5;pass++){
+   const canvas=document.createElement("canvas");
+   canvas.width=Math.max(1,Math.round(bitmap.width*scale));
+   canvas.height=Math.max(1,Math.min(18000,Math.round(bitmap.height*scale)));
+   const ctx=canvas.getContext("2d");
+   if(!ctx)throw new Error("Could not prepare the screenshot for upload.");
+   ctx.drawImage(bitmap,0,0,canvas.width,canvas.height);
+   for(const quality of [0.84,0.76,0.68,0.6]){
+    const blob=await new Promise<Blob|null>(resolve=>canvas.toBlob(resolve,"image/jpeg",quality));
+    if(blob&&blob.size<=2.8*1024*1024){
+     return await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>typeof reader.result==="string"?resolve(reader.result):reject(new Error("Could not encode the screenshot."));reader.onerror=()=>reject(new Error("Could not encode the screenshot."));reader.readAsDataURL(blob);});
+    }
+   }
+   scale*=0.82;
+  }
+  throw new Error("Could not reduce the screenshot enough to upload. Capture a shorter page or export a smaller image.");
+ }finally{bitmap.close();}
+}
+
 export default function SiteMapPage(){
  const [auditMode,setAuditMode]=useState<AuditMode>("desktop");
  const viewport:Viewport = auditMode === "mobile" ? {width:393,height:852} : {width:1440,height:900};
@@ -78,7 +102,7 @@ useEffect(()=>{if(sessionId&&data){saveSession().catch(e=>setError(e instanceof 
   if(file.size>12*1024*1024){setError("This screenshot is over 12 MB. Export a smaller JPG or WebP image and try again.");return;}
   setManualUploadBusy(true);setError("");
   try{
-   const screenshot=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>typeof reader.result==="string"?resolve(reader.result):reject(new Error("Could not read the uploaded screenshot."));reader.onerror=()=>reject(new Error("Could not read the uploaded screenshot."));reader.readAsDataURL(file);});
+   const screenshot=await compressScreenshotForAudit(file,auditMode);
    setPreviewScreenshot(screenshot);
    const mode=auditMode;
    setTimeline([{id:"capture",label:"Browser screenshot supplied",detail:"Using your screenshot of the actual page at "+(mode==="mobile"?"393 × 852":"desktop 1440")+" CSS pixels.",status:"complete"},{id:"analyse",label:"Analyse screenshot",detail:"Sending the uploaded screenshot to OpenRouter for UX analysis.",status:"active"}]);
@@ -160,7 +184,7 @@ useEffect(()=>{if(sessionId&&data){saveSession().catch(e=>setError(e instanceof 
     <h3 style={{margin:"8px 0",fontSize:17}}>The site is blocking automated capture</h3>
     <p style={{fontSize:13,lineHeight:1.6,color:"#695b42",maxWidth:840}}>Open this URL in your normal desktop browser and capture the actual website page (not the 403/CDN error). Use a full-page screenshot with a desktop viewport around 1440 CSS pixels wide. Upload the screenshot here and UX Audit will run the same AI analysis on it.</p>
     <div style={{fontSize:12,color:"#6b7280",overflowWrap:"anywhere",marginBottom:12}}>{manualCaptureTarget}</div>
-    <label style={{display:"inline-flex",flexDirection:"column",gap:8,fontSize:12,fontWeight:750,color:"#334155"}}>{manualUploadBusy?"Analysing uploaded screenshot…":"Upload actual desktop page screenshot (PNG, JPEG or WebP)"}
+    <label style={{display:"inline-flex",flexDirection:"column",gap:8,fontSize:12,fontWeight:750,color:"#334155"}}>{manualUploadBusy?"Analysing uploaded screenshot…":"Upload actual {auditMode==="mobile"?"mobile 393 × 852":"desktop 1440"} page screenshot (PNG, JPEG or WebP)"}
      <input type="file" accept="image/png,image/jpeg,image/webp" disabled={manualUploadBusy} onChange={e=>{const file=e.currentTarget.files?.[0];if(file)void auditManualScreenshot(file);e.currentTarget.value="";}} style={{maxWidth:"100%",padding:10,border:"1px solid #d8dee7",borderRadius:8,background:"#fff"}}/>
     </label>
     <p style={{fontSize:11,lineHeight:1.5,color:"#7b6a4b",marginBottom:0}}>Up to 12 MB. The screenshot is used as audit evidence; it does not bypass the website's access controls.</p>
