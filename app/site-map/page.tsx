@@ -6,7 +6,7 @@ type Discovery={root:string;title:string;pages:Page[];note:string}; type AuditFi
 const short=(p:Page)=>p.title||new URL(p.url).pathname.split("/").filter(Boolean).pop()||"Home";
 export default function SiteMapPage(){
  const [url,setUrl]=useState("");const [data,setData]=useState<Discovery|null>(null);const [selected,setSelected]=useState<string[]>([]);
- const [loading,setLoading]=useState(false);const [error,setError]=useState("");const [activeCategory,setActiveCategory]=useState("Home");const [hovered,setHovered]=useState<Page|null>(null);const [stage,setStage]=useState<"discover"|"select"|"results">("discover");const [running,setRunning]=useState(false);const [runStatus,setRunStatus]=useState("");const [audited,setAudited]=useState<AuditedPage[]>([]);const [activeAudit,setActiveAudit]=useState(0);const [sessionId,setSessionId]=useState("");const [projectName,setProjectName]=useState("");const [restoring,setRestoring]=useState(false);
+ const [loading,setLoading]=useState(false);const [error,setError]=useState("");const [activeCategory,setActiveCategory]=useState("Home");const [hovered,setHovered]=useState<Page|null>(null);const [stage,setStage]=useState<"discover"|"select"|"results">("discover");const [running,setRunning]=useState(false);const [runStatus,setRunStatus]=useState("");const [audited,setAudited]=useState<AuditedPage[]>([]);const [activeAudit,setActiveAudit]=useState(0);const [sessionId,setSessionId]=useState("");const [projectName,setProjectName]=useState("");const [restoring,setRestoring]=useState(false);const [previewScreenshot,setPreviewScreenshot]=useState("");const [activeRunUrl,setActiveRunUrl]=useState("");const [timeline,setTimeline]=useState<Array<{id:string;label:string;detail:string;status:"active"|"complete"|"failed"}>>([]);
  async function discoverUrl(target:string){setLoading(true);setError("");setData(null);setAudited([]);setStage("discover");const sid=crypto.randomUUID();setSessionId(sid);try{const r=await fetch("/api/discover",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:target})});const d=await r.json();if(!r.ok)throw new Error(d.error||"Page discovery failed");const chosen=d.pages.filter((p:Page)=>p.depth<=1).slice(0,8).map((p:Page)=>p.url);const host=new URL(d.root).hostname;const project=host.includes("ujjivan")?"Ujjivan Small Finance Bank":host;setData(d);setUrl(d.root);setProjectName(project);setSelected(chosen);setActiveCategory(Object.keys(d.pages.reduce((a:Record<string,Page[]>,p:Page)=>{(a[p.category]??=[]).push(p);return a;},{}))[0]||"Home");setStage("select");window.history.replaceState({}, "", "/site-map?session="+encodeURIComponent(sid));try{localStorage.setItem("uxaudit-current-ia-session",sid);}catch{}const save=await fetch("/api/ia-session",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:sid,root:d.root,title:d.title||d.root,discovery:d,selected_urls:chosen,audited_pages:[],stage:"select",project_name:project})});if(!save.ok)throw new Error("IA was created but could not be saved for resume.");}catch(e){setError(e instanceof Error?e.message:"Could not discover pages.");}finally{setLoading(false);}}
  useEffect(()=>{let cancelled=false;const q=new URLSearchParams(window.location.search);const existing=q.get("session");if(existing){setSessionId(existing);setRestoring(true);fetch("/api/ia-session?id="+encodeURIComponent(existing),{cache:"no-store"}).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||"Saved IA session expired.");const v=d.session;if(cancelled)return;setUrl(v.root);setProjectName(v.project_name||new URL(v.root).hostname);setData(v.discovery||null);setSelected(Array.isArray(v.selected_urls)?v.selected_urls:[]);setAudited(Array.isArray(v.audited_pages)?v.audited_pages:[]);setStage(v.stage==="results"?"results":v.discovery?"select":"discover");setRunStatus((v.audited_pages||[]).length?"Restored saved screenshots and audit results.":"Restored saved IA session.");}).catch(e=>{if(!cancelled)setError(e instanceof Error?e.message:"Could not restore saved session.");}).finally(()=>{if(!cancelled)setRestoring(false);});}else{const initial=q.get("url");if(initial){setUrl(initial);void discoverUrl(initial);}}return()=>{cancelled=true}},[]);
 async function saveSession(patch:Record<string,any>={}){if(!sessionId||!url)return;const root=data?.root||url;const r=await fetch("/api/ia-session",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:sessionId,root,title:data?.title||root,discovery:data,selected_urls:selected,audited_pages:audited,stage,project_name:projectName||new URL(root).hostname,...patch})});if(!r.ok)throw new Error("Could not save IA session.");try{localStorage.setItem("uxaudit-current-ia-session",sessionId);}catch{}}
@@ -40,19 +40,21 @@ useEffect(()=>{if(sessionId&&data){saveSession().catch(e=>setError(e instanceof 
    for (let i = 0; i < selected.length; i++) {
     const target = selected[i];
     if (!force && audited.some((p:any) => p.url === target)) continue;
-    setRunStatus("Capturing and auditing " + (i + 1) + " of " + selected.length + ": " + target);
-    const response = await fetch("/api/audit-url", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: target, root: data?.root, projectName, verifiedModels: verified }) });
-    const responseText = await response.text();
-    let result: any;
-    try { result = JSON.parse(responseText); }
-    catch {
-     const detail = responseText.trim().slice(0, 240);
-     if (response.status === 504 || /timed out|FUNCTION_INVOCATION_TIMEOUT|Task timed out/i.test(detail)) {
-      throw new Error("Audit request timed out before the server returned JSON. The backend may have exceeded Vercel's function time limit. No automatic re-run was started.");
-     }
-     throw new Error("Audit endpoint returned a non-JSON response (HTTP " + response.status + "). " + (detail || "Empty response"));
-    }
-    if (!response.ok) throw new Error(result.error || ("Capture failed for " + target));
+    setActiveRunUrl(target);setPreviewScreenshot("");setTimeline([{id:"capture",label:"Capture screenshot",detail:"Waiting for Thum.io to return the page screenshot.",status:"active"}]);
+    setRunStatus("Capturing screenshot " + (i + 1) + " of " + selected.length + ": " + target);
+    const captureResponse = await fetch("/api/capture-url", { method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:target,root:data?.root}) });
+    const captureResult = await captureResponse.json();
+    if(!captureResponse.ok) throw new Error(captureResult.error || "Screenshot capture failed.");
+    setPreviewScreenshot(captureResult.screenshot);
+    setTimeline([{id:"capture",label:"Screenshot captured",detail:"Thum.io returned a "+captureResult.width+" × "+captureResult.height+"px preview.",status:"complete"},{id:"analyse",label:"Image → text",detail:"Waiting for "+verified[0].model+" to analyze the screenshot.",status:"active"}]);
+    setRunStatus("Screenshot ready. AI analysis is running for " + target);
+    const auditResponse = await fetch("/api/audit-screenshot", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:target,projectName,verifiedModels:verified,screenshot:captureResult.screenshot})});
+    if(!auditResponse.ok){const d=await auditResponse.json().catch(()=>({}));throw new Error(d.error||"AI audit request failed.");}
+    if(!auditResponse.body) throw new Error("The audit stream was unavailable.");
+    const reader=auditResponse.body.getReader();const decoder=new TextDecoder();let buffer="";let result:any=null;
+    while(true){const chunk=await reader.read();if(chunk.done)break;buffer+=decoder.decode(chunk.value,{stream:true});const frames=buffer.split("\n\n");buffer=frames.pop()||"";for(const frame of frames){const line=frame.split("\n").find(x=>x.startsWith("data: "));if(!line)continue;const event=JSON.parse(line.slice(6));if(event.type==="stage"){setTimeline(prev=>{const next=prev.filter(s=>s.id!==event.stage.id);return [...next,{...event.stage}];});setRunStatus(event.stage.detail);}else if(event.type==="result"){result=event.payload;}else if(event.type==="error"){throw new Error(event.error||"AI analysis failed.");}}}
+    if(!result?.page)throw new Error("AI audit ended without a report. Check the timeline for the last completed stage.");
+    setTimeline(prev=>prev.map(s=>s.status==="active"?{...s,status:"complete" as const}:s));
     setAudited(prev => {const next=[...prev.filter((p:any)=>p.url!==target),result.page];void saveSession({audited_pages:next,stage:"results",selected_urls:selected,project_name:projectName});return next;});
     setActiveAudit(Math.max(0,audited.length));
    }
@@ -85,6 +87,19 @@ useEffect(()=>{if(sessionId&&data){saveSession().catch(e=>setError(e instanceof 
   <>
    <div className="iaWarning"><strong>{running ? "Audit running" : "Selected-page results"}</strong><br />{runStatus || "Start the audit to capture and analyse each selected URL."}</div>
    {error && <p className="iaError">{error}</p>}
+   {(previewScreenshot || timeline.length > 0) && <div style={{display:"grid",gridTemplateColumns:"minmax(0,1.35fr) minmax(280px,.65fr)",gap:16,alignItems:"start",marginTop:16}}>
+    <article style={{background:"#fff",border:"1px solid #dce2ea",borderRadius:12,padding:14,minWidth:0}}>
+     <div className="iaEyebrow">LIVE SCREENSHOT PREVIEW</div><h3 style={{margin:"8px 0 12px",fontSize:16,overflowWrap:"anywhere"}}>{activeRunUrl}</h3>
+     {previewScreenshot?<img src={previewScreenshot} alt={"Captured screenshot of "+activeRunUrl} style={{display:"block",width:"100%",height:"auto",border:"1px solid #e0e5ec",borderRadius:8}}/>:<div style={{minHeight:220,display:"grid",placeItems:"center",background:"#f6f8fb",borderRadius:8,color:"#64748b",fontSize:13}}>Waiting for screenshot from Thum.io…</div>}
+    </article>
+    <article style={{background:"#fff",border:"1px solid #dce2ea",borderRadius:12,padding:16}}>
+     <div className="iaEyebrow">BACKEND RUN TIMELINE</div><h3 style={{margin:"8px 0 14px",fontSize:16}}>Audit progress</h3>
+     {timeline.map((s,i)=><div key={s.id} style={{display:"grid",gridTemplateColumns:"22px 1fr",gap:9,paddingBottom:15}}>
+      <div style={{width:20,height:20,borderRadius:99,display:"grid",placeItems:"center",fontSize:11,fontWeight:800,background:s.status==="complete"?"#dcfce7":s.status==="failed"?"#fee2e2":"#e7eefb",color:s.status==="complete"?"#166534":s.status==="failed"?"#991b1b":"#25477c"}}>{s.status==="complete"?"✓":s.status==="failed"?"!":i+1}</div>
+      <div><strong style={{fontSize:13}}>{s.label}</strong><div className="iaMuted" style={{marginTop:4}}>{s.detail}</div><div className="iaMuted" style={{marginTop:3,fontWeight:700}}>{s.status==="complete"?"Completed":s.status==="failed"?"Failed":"Running"}</div></div>
+     </div>)}
+    </article>
+   </div>}
    {audited.length > 0 && (
     <>
      <div className="iaTabs">{audited.map((p, i) => <button key={p.url} className={"iaTab " + (activeAudit === i ? "on" : "")} onClick={() => setActiveAudit(i)}>{p.title} · {p.findings.length} findings</button>)}</div>
