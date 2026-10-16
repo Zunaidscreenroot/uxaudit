@@ -27,7 +27,6 @@ useEffect(()=>{if(sessionId&&data){saveSession().catch(e=>setError(e instanceof 
   if (!selected.length || running) return;
   setRunning(true); setError(""); setStage("results");
   try {
-   const routerModel="openrouter/auto";
    setRunStatus("OpenRouter Auto Router will select low-cost models for each audit stage.");
    for (let i = 0; i < selected.length; i++) {
     const target = selected[i];
