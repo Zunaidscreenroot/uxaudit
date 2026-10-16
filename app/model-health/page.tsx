@@ -79,14 +79,16 @@ async function readResponse(response: Response): Promise<any> {
 
 export default function ModelHealth() {
   const [file, setFile] = useState<File | null>(null);
-  const [config, setConfig] = useState<ConfigResponse | null>(null);\n  const [cost, setCost] = useState<CostStatus | null>(null);
+  const [config, setConfig] = useState<ConfigResponse | null>(null);
+  const [cost, setCost] = useState<CostStatus | null>(null);
   const [data, setData] = useState<HealthResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [filter, setFilter] = useState<"all" | "ok" | "error">("all");
 
   useEffect(() => {
-    fetch("/api/model-health").then(readResponse).then((payload) => setConfig(payload as ConfigResponse)).catch(() => setError("Could not load backend configuration status."));\n    fetch("/api/cost-status", { cache: "no-store" }).then(readResponse).then((payload) => setCost(payload as CostStatus)).catch(() => undefined);
+    fetch("/api/model-health").then(readResponse).then((payload) => setConfig(payload as ConfigResponse)).catch(() => setError("Could not load backend configuration status."));
+    fetch("/api/cost-status", { cache: "no-store" }).then(readResponse).then((payload) => setCost(payload as CostStatus)).catch(() => undefined);
   }, []);
 
   async function runCheck() {
