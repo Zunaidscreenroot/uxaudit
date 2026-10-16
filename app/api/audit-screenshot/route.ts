@@ -62,6 +62,10 @@ export async function POST(req: Request) {
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
+      // Keep long vision/reasoning requests alive through the Netlify streaming proxy.
+      const heartbeat = setInterval(() => {
+        try { event(controller, { type: "heartbeat", at: new Date().toISOString() }); } catch {}
+      }, 5000);
       void (async () => {
         try {
           console.info("[uxaudit] screenshot_audit_start", JSON.stringify({
@@ -110,6 +114,14 @@ export async function POST(req: Request) {
             viewportHeight,
           }));
 
+          // Deliver the analysis immediately; database persistence is a separate concern.
+          // If Supabase is slow or unavailable, the user should still receive the generated findings.
+          event(controller, { type: "result", payload: { page: result.pages[0] } });
+          console.info("[uxaudit] screenshot_analysis_ok", JSON.stringify({
+            source: isUpload ? "uploaded_screenshot" : "website_page",
+            findingCount: result.pages[0]?.findings?.length ?? 0,
+          }));
+
           event(controller, {
             type: "stage",
             stage: {
@@ -121,29 +133,40 @@ export async function POST(req: Request) {
           });
 
           const sourceLabel = isUpload ? "Screenshot upload" : "URL audit";
-          const auditId = await saveAudit(result, sourceLabel + " · " + project + " · " + title);
-
-          event(controller, {
-            type: "stage",
-            stage: {
-              id: "save",
-              label: "Save audit report",
-              detail: "Audit report saved successfully.",
-              status: "complete",
-            },
-          });
-          event(controller, { type: "result", payload: { page: result.pages[0], auditId } });
-          console.info("[uxaudit] screenshot_audit_ok", JSON.stringify({
-            source: isUpload ? "uploaded_screenshot" : "website_page",
-            auditId,
-            findingCount: result.pages[0]?.findings?.length ?? 0,
-          }));
+          try {
+            const auditId = await saveAudit(result, sourceLabel + " · " + project + " · " + title);
+            event(controller, {
+              type: "saved",
+              auditId,
+            });
+            event(controller, {
+              type: "stage",
+              stage: {
+                id: "save",
+                label: "Save audit report",
+                detail: "Audit report saved successfully.",
+                status: "complete",
+              },
+            });
+            console.info("[uxaudit] screenshot_audit_saved", JSON.stringify({
+              source: isUpload ? "uploaded_screenshot" : "website_page",
+              auditId,
+            }));
+          } catch (saveError) {
+            const saveMessage = saveError instanceof Error ? saveError.message : "Unknown knowledge-base error.";
+            console.error("[uxaudit] screenshot_audit_save_failed", JSON.stringify({ error: saveMessage }));
+            event(controller, {
+              type: "warning",
+              warning: "AI analysis completed, but saving to the knowledge base failed: " + saveMessage,
+            });
+          }
         } catch (error) {
           const message = error instanceof Error ? error.message : "AI screenshot audit failed.";
           console.error("[uxaudit] screenshot_audit_failed", JSON.stringify({ error: message }));
           event(controller, { type: "error", error: message });
         } finally {
-          controller.close();
+          clearInterval(heartbeat);
+          try { controller.close(); } catch {}
         }
       })();
     },
