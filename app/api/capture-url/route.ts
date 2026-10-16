@@ -119,7 +119,7 @@ export async function POST(req: Request) {
       const captureGuidance = auditMode === "mobile"
         ? "capture the actual page at a mobile viewport around 393 × 852 CSS pixels"
         : "capture the actual page as a full-page screenshot at about 1440 CSS pixels wide";
-      const securityBlocked = responseStatus !== 401;
+      const securityBlocked = responseStatus === 403 || responseStatus === 429 || cloudfrontBlock || securityChallenge;
       const message = securityBlocked
         ? "The target site returned a CDN/security block or challenge during automated screenshot capture (HTTP " + responseStatus + "). This is not a UX finding. Open the page in your normal browser, " + captureGuidance + ", and upload it in the audit workspace. Do not upload the CDN error or challenge page."
         : "The target site requires authentication (HTTP 401), so automated capture cannot access the page. Open the page in your normal browser session and upload a screenshot of the actual page.";
