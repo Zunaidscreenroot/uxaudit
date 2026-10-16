@@ -2,7 +2,7 @@
 const nextConfig = {
   experimental: {
     // Externalize Chromium so Next/Webpack preserves the package's runtime path.
-    serverComponentsExternalPackages: ["@sparticuz/chromium", "puppeteer-core"],
+    serverComponentsExternalPackages: ["@sparticuz/chromium", "playwright-core"],
     // The .br binaries are loaded by filesystem path, so file tracing may not
     // discover them automatically. Include them in the screenshot API function.
     outputFileTracingIncludes: {
@@ -20,7 +20,7 @@ const nextConfig = {
         : config.externals
           ? [config.externals]
           : [];
-      externals.push("@sparticuz/chromium", "puppeteer-core");
+      externals.push("@sparticuz/chromium", "playwright-core");
       config.externals = externals;
     }
     return config;
