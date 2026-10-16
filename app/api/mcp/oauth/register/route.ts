@@ -9,7 +9,7 @@ export async function POST(request: Request) {
   try {
     getMcpSecret();
     const body = await request.json();
-    const redirectUris = Array.isArray(body?.redirect_uris) ? [...new Set(body.redirect_uris)].slice(0, 10) : [];
+    const redirectUris = Array.isArray(body?.redirect_uris) ? Array.from(new Set(body.redirect_uris)).slice(0, 10) : [];
     if (!redirectUris.length || !redirectUris.every(validRedirect)) return Response.json({ error: "invalid_client_metadata", error_description: "One or more HTTPS redirect_uris are missing or invalid." }, { status: 400 });
     const clientName = typeof body?.client_name === "string" ? body.client_name.trim().slice(0, 160) : "ChatGPT MCP client";
     const clientId = "uxmcp_" + signMcpPayload({
