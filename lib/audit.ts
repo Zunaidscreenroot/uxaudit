@@ -158,8 +158,7 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   let review: unknown[]=[];let reviewOk=false;let reviewErrors:string[]=[];
   const textCandidates=[textModel,...allowedModels.filter(m=>m.model!==textModel.model)];
   for(let i=0;i<textCandidates.length;i++){const candidate=textCandidates[i];const timeoutMs=i===0?22000:i===1?15000:10000;try{review=await createTextReview(candidate,visualPass,timeoutMs);if(review.length){reviewOk=true;break;}reviewErrors.push(candidate.model+": empty findings");}catch(e){reviewErrors.push(candidate.model+": "+(e instanceof Error?e.message:"failed"));}}
-  if(!reviewOk)throw new Error("All verified models failed text review. "+reviewErrors.join(" | "));
-  onStage?.({ id: "quality", label: "Text → UX research", detail: "UX laws, definitions and research context are ready.", status: "complete" });
+  if(!reviewOk){console.warn("[uxaudit] text_review_degraded",JSON.stringify({errors:reviewErrors,observations:visualPass.observations.length}));onStage?.({id:"quality",label:"OpenRouter UX reasoning",detail:"OpenRouter did not return valid structured research findings; preserving screenshot evidence and using conservative evidence-linked fallback recommendations. "+reviewErrors.join(" | "),status:"complete"});review=[];}else{onStage?.({id:"quality",label:"OpenRouter UX reasoning",detail:"OpenRouter returned structured UX laws, research context and business-funnel hypotheses.",status:"complete"});}
 
   onStage?.({ id: "markers", label: "Place evidence markers", detail: "Linking each finding to its exact region on the original screenshot; no crops are created.", status: "active" });
   const reviewByObservation = new Map<string, unknown>();
