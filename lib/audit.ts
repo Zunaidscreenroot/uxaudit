@@ -129,11 +129,17 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
 
   onStage?.({ id: "capture", label: "Preparing screenshot", detail: `Using the original ${width} × ${height}px screenshot; no visual crops will be generated.`, status: "complete" });
   onStage?.({ id: "analyse", label: "Image → text", detail: "Vision model is identifying the client and locating concrete UX evidence with marker coordinates.", status: "active" });
-  const visualPass = await createVisualPass(visionModel, capture);
+  let visualPass: VisualPass | null = null;let visualErrors:string[]=[];
+  const visionCandidates=[visionModel,...allowedModels.filter(m=>m.model!==visionModel.model)];
+  for(const candidate of visionCandidates){try{visualPass=await createVisualPass(candidate,capture);break;}catch(e){visualErrors.push(candidate.model+": "+(e instanceof Error?e.message:"failed"));}}
+  if(!visualPass)throw new Error("All verified models failed image analysis. "+visualErrors.join(" | "));
   onStage?.({ id: "analyse", label: "Image → text", detail: `${visualPass.clientName} · ${visualPass.observations.length} visual regions identified on the full screenshot.`, status: "complete" });
 
   onStage?.({ id: "quality", label: "Text → UX research", detail: "A separate text model is interpreting the visual observations through UX research and design principles.", status: "active" });
-  const review = await createTextReview(textModel, visualPass);
+  let review: unknown[]=[];let reviewOk=false;let reviewErrors:string[]=[];
+  const textCandidates=[textModel,...allowedModels.filter(m=>m.model!==textModel.model)];
+  for(const candidate of textCandidates){try{review=await createTextReview(candidate,visualPass);if(review.length){reviewOk=true;break;}reviewErrors.push(candidate.model+": empty findings");}catch(e){reviewErrors.push(candidate.model+": "+(e instanceof Error?e.message:"failed"));}}
+  if(!reviewOk)throw new Error("All verified models failed text review. "+reviewErrors.join(" | "));
   onStage?.({ id: "quality", label: "Text → UX research", detail: "UX laws, definitions and research context are ready.", status: "complete" });
 
   onStage?.({ id: "markers", label: "Place evidence markers", detail: "Linking each finding to its exact region on the original screenshot; no crops are created.", status: "active" });
