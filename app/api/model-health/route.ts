@@ -82,6 +82,21 @@ async function testGemini(apiKey: string, model: string, image: Buffer): Promise
   }
 }
 
+
+export async function GET() {
+  const openRouterKey = process.env.OPENROUTER_API_KEY;
+  const geminiKey = process.env.GEMINI_API_KEY;
+  return Response.json({
+    checkedAt: new Date().toISOString(),
+    keys: { openRouter: Boolean(openRouterKey), gemini: Boolean(geminiKey) },
+    models: [
+      ...CONFIGURED_OPENROUTER_MODELS.map((model) => ({ provider: "OpenRouter", model, configured: Boolean(openRouterKey) })),
+      ...CONFIGURED_GEMINI_MODELS.map((model) => ({ provider: "Gemini", model, configured: Boolean(geminiKey) })),
+    ],
+    note: "This is configuration status only. Use the screenshot test below to verify live image-input responses from each model.",
+  });
+}
+
 export async function POST(request: Request) {
   try {
     const formData = await request.formData();
