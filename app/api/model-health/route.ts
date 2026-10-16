@@ -3,17 +3,19 @@ import OpenAI from "openai";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-// Explicit allowlist: do not discover/test unrelated models or spend test calls on them.
+// Keep only models that passed the latest live screenshot connectivity test.
+// OpenRouter-routed models (including Google models, if added later) must use
+// OPENROUTER_API_KEY and remain separate from native Gemini API models.
 const OPENROUTER_ALLOWED_MODELS = [
   "nvidia/nemotron-3.5-super-vl:free",
   "dots-studio/dots-3-note-preview:free",
   "nvidia/nemotron-3.5-content-safety:free",
 ] as const;
 
+// Native Google Gemini API only: retain the model that passed the latest test.
+// Do not put OpenRouter model IDs in this list.
 const GEMINI_ALLOWED_MODELS = [
-  "gemini-3.5-flash",
   "gemini-3.5-flash-lite",
-  "gemini-3.1-flash-lite",
 ] as const;
 
 const OPENROUTER_TIMEOUT = 12000;
@@ -43,7 +45,7 @@ async function testOpenRouter(apiKey: string, model: string, image: Buffer): Pro
     const response: any = await client.chat.completions.create({
       model,
       messages: [{ role: "user", content: [
-        { type: "text", text: "Respond with exactly one short JSON object: {\"ok\":true}. This is a model connectivity test. Do not analyze the screenshot." },
+        { type: "text", text: "Respond with exactly one short JSON object: {\\"ok\\":true}. This is a model connectivity test. Do not analyze the screenshot." },
         { type: "image_url", image_url: { url: `data:image/jpeg;base64,${image.toString("base64")}` } },
       ] }],
       reasoning: { enabled: false },
@@ -68,7 +70,7 @@ async function testGemini(apiKey: string, model: string, image: Buffer): Promise
       method: "POST",
       headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
       body: JSON.stringify({ contents: [{ role: "user", parts: [
-        { text: "Respond with exactly one short JSON object: {\"ok\":true}. This is a model connectivity test. Do not analyze the screenshot." },
+        { text: "Respond with exactly one short JSON object: {\\"ok\\":true}. This is a model connectivity test. Do not analyze the screenshot." },
         { inline_data: { mime_type: "image/jpeg", data: image.toString("base64") } },
       ] }], generationConfig: { responseMimeType: "application/json", maxOutputTokens: 30, temperature: 0 } }),
       signal: AbortSignal.timeout(GEMINI_TIMEOUT),
@@ -94,7 +96,7 @@ export async function GET() {
       ...OPENROUTER_ALLOWED_MODELS.map((model) => ({ provider: "OpenRouter", model, configured: Boolean(openRouterKey) })),
       ...GEMINI_ALLOWED_MODELS.map((model) => ({ provider: "Gemini", model, configured: Boolean(geminiKey) })),
     ],
-    note: "Exactly six allowlisted models are shown. Key configured means credentials exist; a model is confirmed responsive only after Check all models runs a live image-input request.",
+    note: "Only models that passed the latest live test are in the active allowlist. OpenRouter-routed models use OPENROUTER_API_KEY; native Gemini models use GEMINI_API_KEY. They are tested and reported separately. Key configured means credentials exist; responsiveness is confirmed only after Check all models runs a live image-input request.",
   }, { headers: { "Cache-Control": "no-store" } });
 }
 
@@ -135,7 +137,7 @@ export async function POST(request: Request) {
       ok,
       failed: results.length - ok,
       keys: { openRouter: Boolean(openRouterKey), gemini: Boolean(geminiKey) },
-      note: "Only the six explicitly approved models are tested. OpenRouter fallback is disabled so each result represents that exact model.",
+      note: "Only four approved, previously responding models are tested. OpenRouter fallback is disabled so each result represents that exact model; native Gemini requests use the Google Gemini API directly.",
       results,
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
