@@ -42,7 +42,16 @@ useEffect(()=>{if(sessionId&&data){saveSession().catch(e=>setError(e instanceof 
     if (!force && audited.some((p:any) => p.url === target)) continue;
     setRunStatus("Capturing and auditing " + (i + 1) + " of " + selected.length + ": " + target);
     const response = await fetch("/api/audit-url", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: target, root: data?.root, projectName, verifiedModels: verified }) });
-    const result = await response.json();
+    const responseText = await response.text();
+    let result: any;
+    try { result = JSON.parse(responseText); }
+    catch {
+     const detail = responseText.trim().slice(0, 240);
+     if (response.status === 504 || /timed out|FUNCTION_INVOCATION_TIMEOUT|Task timed out/i.test(detail)) {
+      throw new Error("Audit request timed out before the server returned JSON. The backend may have exceeded Vercel's function time limit. No automatic re-run was started.");
+     }
+     throw new Error("Audit endpoint returned a non-JSON response (HTTP " + response.status + "). " + (detail || "Empty response"));
+    }
     if (!response.ok) throw new Error(result.error || ("Capture failed for " + target));
     setAudited(prev => {const next=[...prev.filter((p:any)=>p.url!==target),result.page];void saveSession({audited_pages:next,stage:"results",selected_urls:selected,project_name:projectName});return next;});
     setActiveAudit(Math.max(0,audited.length));
