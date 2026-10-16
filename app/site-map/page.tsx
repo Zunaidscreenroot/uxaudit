@@ -18,12 +18,24 @@ export default function SiteMapPage(){
   if (!selected.length || running) return;
   setRunning(true); setError(""); setAudited([]); setStage("results");
   try {
-   setRunStatus("Verifying the configured models with minimal text-only prompts…");
-   const vr = await fetch("/api/model-verification", { method: "POST", cache: "no-store" });
-   const vd = await vr.json();
-   if (!vr.ok) throw new Error(vd.error || "Model verification failed.");
-   const verified = (vd.models || []).filter((m: any) => m.ok).sort((a: any, b: any) => ((a.promptPrice ?? Infinity) + (a.completionPrice ?? Infinity)) - ((b.promptPrice ?? Infinity) + (b.completionPrice ?? Infinity))).map((m: any) => ({ provider: "OpenRouter", model: m.model, tier: "paid" }));
-   if (!verified.length) throw new Error("None of the configured models verified. No pages were captured or audited.");
+   setRunStatus("Loading saved model verification…");
+   let vd: any = null;
+   try {
+    const saved = sessionStorage.getItem("uxaudit-fixed-model-verification");
+    if (saved) {
+     const parsed = JSON.parse(saved);
+     if (parsed.expiresAt > Date.now() && parsed.payload?.models?.length === 3) vd = parsed.payload;
+    }
+   } catch {}
+   if (!vd) {
+    const vr = await fetch("/api/model-verification", { method: "GET", cache: "no-store" });
+    vd = await vr.json();
+    if (!vr.ok) throw new Error(vd.error || "No saved model verification. Return to the landing page first.");
+   }
+   const verified = (vd.models || []).filter((m: any) => m.ok)
+    .sort((a: any, b: any) => ((a.promptPrice ?? Infinity) + (a.completionPrice ?? Infinity)) - ((b.promptPrice ?? Infinity) + (b.completionPrice ?? Infinity)))
+    .map((m: any) => ({ provider: "OpenRouter", model: m.model, tier: "paid" }));
+   if (verified.length < 2) throw new Error("Fewer than two configured models verified. Audit is paused so fallbacks remain available.");
    for (let i = 0; i < selected.length; i++) {
     const target = selected[i];
     setRunStatus("Capturing and auditing " + (i + 1) + " of " + selected.length + ": " + target);
@@ -58,6 +70,34 @@ export default function SiteMapPage(){
  <div className="iaTabs">{Object.keys(groups).map(cat=><button className={"iaTab "+(activeCategory===cat?"on":"")} key={cat} onClick={()=>setActiveCategory(cat)}>{cat} ({groups[cat].length})</button>)}</div>
  <div className="iaPageList">{activePages.map(p=><label className="iaPageOption" key={p.url}><input type="checkbox" checked={selected.includes(p.url)} onChange={()=>toggle(p.url)}/><span><strong>{short(p)}</strong><small>{p.url}</small><small>Level {p.depth+1} · {p.source==="sitemap"?"Sitemap":"Navigation link"}</small></span></label>)}</div>
  <div className="iaFooter"><div><strong>{selected.length} pages selected</strong><div className="iaMuted">Only selected URLs are eligible for screenshot capture; discovery itself never captures screenshots.</div></div><button className="iaBtn" disabled={!selected.length||running} onClick={runSelectedAudits}>{running?"Capturing & auditing…":"Start audit for selected pages →"}</button></div>
- {stage==="results"&&<div className="iaWarning"><strong>{running?"Audit running":"Selected-page results"}</strong><br/>{runStatus||"Start the audit to capture and analyse each selected URL."}</div>{error&&<p className="iaError">{error}</p>}{audited.length>0&&<><div className="iaTabs">{audited.map((p,i)=><button key={p.url} className={"iaTab "+(activeAudit===i?"on":"")} onClick={()=>setActiveAudit(i)}>{p.title} · {p.findings.length} findings</button>)}</div>{audited[activeAudit]&&<div style={{display:"grid",gridTemplateColumns:"minmax(0,1.1fr) minmax(300px,1fr)",gap:16,alignItems:"start"}}><div style={{border:"1px solid #dce2ea",borderRadius:12,overflow:"hidden",background:"#fff"}}><div style={{padding:12,fontSize:12,fontWeight:800}}>PAGE PREVIEW · {audited[activeAudit].url}</div><iframe title={audited[activeAudit].title} src={audited[activeAudit].url} sandbox="allow-same-origin allow-scripts allow-forms allow-popups" referrerPolicy="no-referrer" style={{width:"100%",height:430,border:0}}/><details style={{padding:12}}><summary>Captured screenshot used for audit</summary><img src={audited[activeAudit].screenshot} alt={audited[activeAudit].title+" screenshot"} style={{width:"100%",marginTop:10}}/></details></div><div style={{display:"grid",gap:10,maxHeight:760,overflow:"auto"}}><strong>{audited[activeAudit].findings.length} UX findings · {audited[activeAudit].screenshotWidth}×{audited[activeAudit].screenshotHeight}px</strong>{audited[activeAudit].findings.map((f,i)=><article key={f.id||i} style={{border:"1px solid #e0e5ec",borderRadius:10,padding:14,background:"#fff"}}><div style={{fontSize:10,fontWeight:800,color:f.severity==="high"?"#b42318":"#9a6700"}}>{f.severity.toUpperCase()} · {f.category}</div><strong style={{display:"block",marginTop:6}}>{f.title}</strong><p style={{fontSize:12,lineHeight:1.55,color:"#596579"}}>{f.description}</p><div style={{fontSize:12}}><b>Recommendation</b><br/>{f.recommendation}</div></article>)}</div></div></>}}</section></>}
+ {stage === "results" && (
+  <>
+   <div className="iaWarning"><strong>{running ? "Audit running" : "Selected-page results"}</strong><br />{runStatus || "Start the audit to capture and analyse each selected URL."}</div>
+   {error && <p className="iaError">{error}</p>}
+   {audited.length > 0 && (
+    <>
+     <div className="iaTabs">{audited.map((p, i) => <button key={p.url} className={"iaTab " + (activeAudit === i ? "on" : "")} onClick={() => setActiveAudit(i)}>{p.title} · {p.findings.length} findings</button>)}</div>
+     {audited[activeAudit] && (
+      <div style={{display:"grid",gridTemplateColumns:"minmax(0,1.1fr) minmax(300px,1fr)",gap:16,alignItems:"start"}}>
+       <div style={{border:"1px solid #dce2ea",borderRadius:12,overflow:"hidden",background:"#fff"}}>
+        <div style={{padding:12,fontSize:12,fontWeight:800}}>CAPTURED SCREENSHOT · {audited[activeAudit].url}</div>
+        <img src={audited[activeAudit].screenshot} alt={audited[activeAudit].title + " captured screenshot"} style={{width:"100%",height:"auto",display:"block"}} />
+        <details style={{padding:12}}><summary>Live page iframe preview</summary><iframe title={audited[activeAudit].title + " live page"} src={audited[activeAudit].url} sandbox="allow-same-origin allow-scripts allow-forms allow-popups" referrerPolicy="no-referrer" style={{width:"100%",height:430,border:0,marginTop:10}} /></details>
+       </div>
+       <div style={{display:"grid",gap:10,maxHeight:760,overflow:"auto"}}>
+        <strong>{audited[activeAudit].findings.length} UX findings · {audited[activeAudit].screenshotWidth}×{audited[activeAudit].screenshotHeight}px</strong>
+        {audited[activeAudit].findings.map((f, i) => <article key={f.id || i} style={{border:"1px solid #e0e5ec",borderRadius:10,padding:14,background:"#fff"}}>
+         <div style={{fontSize:10,fontWeight:800,color:f.severity==="high"?"#b42318":"#9a6700"}}>{f.severity.toUpperCase()} · {f.category}</div>
+         <strong style={{display:"block",marginTop:6}}>{f.title}</strong>
+         <p style={{fontSize:12,lineHeight:1.55,color:"#596579"}}>{f.description}</p>
+         <div style={{fontSize:12}}><b>Recommendation</b><br />{f.recommendation}</div>
+        </article>)}
+       </div>
+      </div>
+     )}
+    </>
+   )}
+  </>
+ )}</section></>}
  </div></main>;
 }
