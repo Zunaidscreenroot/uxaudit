@@ -67,13 +67,13 @@ useEffect(()=>{if(sessionId&&data){saveSession().catch(e=>setError(e instanceof 
    for (let i = 0; i < selected.length; i++) {
     const target = selected[i];
     if (!force && audited.some((p:any) => p.url === target)) continue;
-    setActiveRunUrl(target);setPreviewScreenshot("");setTimeline([{id:"capture",label:"Capture screenshot",detail:"Waiting for Thum.io to return the page screenshot.",status:"active"}]);
+    setActiveRunUrl(target);setPreviewScreenshot("");setTimeline([{id:"capture",label:"Capture screenshot",detail:"Launching server-side Chromium and waiting for the rendered page.",status:"active"}]);
     setRunStatus("Capturing screenshot " + (i + 1) + " of " + selected.length + ": " + target);
     const captureResponse = await fetch("/api/capture-url", { method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:target,root:data?.root,auditMode,viewport}) });
     const captureResult = await captureResponse.json().catch(()=>({}));
     if(!captureResponse.ok) {if(captureResult.requiresManualScreenshot){setManualCaptureNeeded(true);setManualCaptureTarget(target);}throw new Error(captureResult.error || "Screenshot capture failed.");}
     setPreviewScreenshot(captureResult.screenshot);
-    setTimeline([{id:"capture",label:"Screenshot captured",detail:"Thum.io returned a "+captureResult.width+" × "+captureResult.height+"px "+(auditMode==="mobile"?"mobile viewport":"desktop capture")+".",status:"complete"},{id:"analyse",label:"Image → text",detail:"OpenRouter Auto Router is selecting a vision-capable model.",status:"active"}]);
+    setTimeline([{id:"capture",label:"Screenshot captured",detail:"Server-side Chromium captured a "+captureResult.width+" × "+captureResult.height+"px rendered "+(captureResult.fullPage?"full-page":"viewport")+" screenshot at a "+(auditMode==="mobile"?"393 × 852":"1440 × 900")+" CSS-pixel viewport.",status:"complete"},{id:"analyse",label:"Image → text",detail:"OpenRouter Auto Router is selecting a vision-capable model.",status:"active"}]);
     setRunStatus("Screenshot ready. AI analysis is running for " + target);
     const auditResponse = await fetch("/api/audit-screenshot", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:target,projectName,screenshot:captureResult.screenshot,auditMode,viewport:captureResult.viewport||viewport})});
     if(!auditResponse.ok){const d=await auditResponse.json().catch(()=>({}));throw new Error(d.error||"AI audit request failed.");}
@@ -105,7 +105,7 @@ useEffect(()=>{if(sessionId&&data){saveSession().catch(e=>setError(e instanceof 
    const screenshot=await compressScreenshotForAudit(file,auditMode);
    setPreviewScreenshot(screenshot);
    const mode=auditMode;
-   setTimeline([{id:"capture",label:"Browser screenshot supplied",detail:"Using your screenshot of the actual page at "+(mode==="mobile"?"393 × 852":"desktop 1440")+" CSS pixels.",status:"complete"},{id:"analyse",label:"Analyse screenshot",detail:"Sending the uploaded screenshot to OpenRouter for UX analysis.",status:"active"}]);
+   setTimeline([{id:"capture",label:"Browser screenshot supplied",detail:"Using your screenshot of the actual page at "+(mode==="mobile"?"393 × 852":"1440 × 900")+" CSS pixels.",status:"complete"},{id:"analyse",label:"Analyse screenshot",detail:"Sending the uploaded screenshot to OpenRouter for UX analysis.",status:"active"}]);
    setActiveRunUrl(manualCaptureTarget);setRunStatus("Analysing the screenshot you supplied for "+manualCaptureTarget);
    const auditResponse=await fetch("/api/audit-screenshot",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:manualCaptureTarget,projectName,screenshot,auditMode:mode,viewport:mode==="mobile"?{width:393,height:852}:{width:1440,height:900}})});
    if(!auditResponse.ok){const d=await auditResponse.json().catch(()=>({}));throw new Error(d.error||"AI audit request failed.");}
@@ -182,7 +182,7 @@ useEffect(()=>{if(sessionId&&data){saveSession().catch(e=>setError(e instanceof 
    {manualCaptureNeeded && manualCaptureTarget && <article style={{marginTop:14,padding:18,border:"1px solid #e8c36e",borderRadius:12,background:"#fffaf0"}}>
     <div className="iaEyebrow">MANUAL SCREENSHOT FALLBACK</div>
     <h3 style={{margin:"8px 0",fontSize:17}}>The site is blocking automated capture</h3>
-    <p style={{fontSize:13,lineHeight:1.6,color:"#695b42",maxWidth:840}}>Open this URL in your normal desktop browser and capture the actual website page (not the 403/CDN error). Use a full-page screenshot with a desktop viewport around 1440 CSS pixels wide. Upload the screenshot here and UX Audit will run the same AI analysis on it.</p>
+    <p style={{fontSize:13,lineHeight:1.6,color:"#695b42",maxWidth:840}}>Open this URL in your normal browser and capture the actual website page (not the CDN/security error). Use a {auditMode==="mobile"?"mobile viewport around 393 × 852 CSS pixels":"desktop viewport around 1440 CSS pixels wide"} and capture the full page where possible. Upload the screenshot here and UX Audit will run the same AI analysis on it.</p>
     <div style={{fontSize:12,color:"#6b7280",overflowWrap:"anywhere",marginBottom:12}}>{manualCaptureTarget}</div>
     <label style={{display:"inline-flex",flexDirection:"column",gap:8,fontSize:12,fontWeight:750,color:"#334155"}}>{manualUploadBusy?"Analysing uploaded screenshot…":`Upload actual ${auditMode==="mobile"?"mobile 393 × 852":"desktop 1440"} page screenshot (PNG, JPEG or WebP)`}
      <input type="file" accept="image/png,image/jpeg,image/webp" disabled={manualUploadBusy} onChange={e=>{const file=e.currentTarget.files?.[0];if(file)void auditManualScreenshot(file);e.currentTarget.value="";}} style={{maxWidth:"100%",padding:10,border:"1px solid #d8dee7",borderRadius:8,background:"#fff"}}/>
@@ -192,7 +192,7 @@ useEffect(()=>{if(sessionId&&data){saveSession().catch(e=>setError(e instanceof 
    {(previewScreenshot || timeline.length > 0) && <div style={{display:"grid",gridTemplateColumns:"minmax(0,1.35fr) minmax(280px,.65fr)",gap:16,alignItems:"start",marginTop:16}}>
     <article style={{background:"#fff",border:"1px solid #dce2ea",borderRadius:12,padding:14,minWidth:0}}>
      <div className="iaEyebrow">LIVE SCREENSHOT PREVIEW</div><h3 style={{margin:"8px 0 12px",fontSize:16,overflowWrap:"anywhere"}}>{activeRunUrl}</h3>
-     {previewScreenshot?<img src={previewScreenshot} alt={"Captured screenshot of "+activeRunUrl} style={{display:"block",width:"100%",height:"auto",border:"1px solid #e0e5ec",borderRadius:8}}/>:<div style={{minHeight:220,display:"grid",placeItems:"center",background:"#f6f8fb",borderRadius:8,color:"#64748b",fontSize:13}}>Waiting for screenshot from Thum.io…</div>}
+     {previewScreenshot?<img src={previewScreenshot} alt={"Captured screenshot of "+activeRunUrl} style={{display:"block",width:"100%",height:"auto",border:"1px solid #e0e5ec",borderRadius:8}}/>:<div style={{minHeight:220,display:"grid",placeItems:"center",background:"#f6f8fb",borderRadius:8,color:"#64748b",fontSize:13}}>Waiting for server-side Chromium…</div>}
     </article>
     <article style={{background:"#fff",border:"1px solid #dce2ea",borderRadius:12,padding:16}}>
      <div className="iaEyebrow">BACKEND RUN TIMELINE</div><h3 style={{margin:"8px 0 14px",fontSize:16}}>Audit progress</h3>
