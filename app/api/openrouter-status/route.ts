@@ -1,6 +1,6 @@
 export const runtime="nodejs";
 export const dynamic="force-dynamic";
-export async function GET(req:Request){
+export async function GET(){
  const key=process.env.OPENROUTER_API_KEY;
  if(!key)return Response.json({connected:false,provider:"OpenRouter",error:"OPENROUTER_API_KEY is not configured on the server."},{status:503,headers:{"Cache-Control":"no-store"}});
  try{
