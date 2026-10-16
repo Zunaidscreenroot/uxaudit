@@ -42,7 +42,7 @@ export async function POST(req:Request){try{
  const root=canon(rootUrl.href),websiteTitle=txt(body.websiteTitle,rootUrl.hostname,200),pageMap=new Map<string,any>();
  for(const p of (Array.isArray(body.pages)?body.pages:[]).slice(0,120)){if(typeof p?.url!=="string")continue;const u=canon(p.url);try{if(new URL(u).origin!==rootUrl.origin)continue;}catch{continue;}if(!u||pageMap.has(u))continue;pageMap.set(u,{url:u,title:txt(p.title,u===root?"Home":new URL(u).pathname.split("/").filter(Boolean).pop()||"Page",140),category:txt(p.category,"Other Pages",80),depth:Number(p.depth)||0});}
  if(!pageMap.has(root))pageMap.set(root,{url:root,title:websiteTitle,category:"Home",depth:0});
- const pages=[...pageMap.values()];
+ const pages=Array.from(pageMap.values());
  if(!pages.length)return Response.json({error:"No discovered pages were supplied."},{status:400});
  const findings=(Array.isArray(body.findings)?body.findings:[]).slice(0,100).filter((f:any)=>f&&pageMap.has(canon(f.url))).map((f:any)=>({id:txt(f.id,"finding",300),sourceId:txt(f.sourceId,"",120),url:canon(f.url),title:txt(f.title,"UX finding",180),category:txt(f.category,"Visual design",80),severity:txt(f.severity,"medium",20),description:txt(f.description,"",600),recommendation:txt(f.recommendation,"",600)}));
  const warnings=(Array.isArray(body.iaWarnings)?body.iaWarnings:[]).slice(0,20).map((w:any,i:number)=>({id:txt(w.id,"warning-"+i,100),title:txt(w.title,"IA warning",160),detail:txt(w.detail,"",500),urls:(Array.isArray(w.urls)?w.urls:[]).filter((u:any)=>typeof u==="string").map(canon).filter((u:string)=>pageMap.has(u)).slice(0,40)}));
