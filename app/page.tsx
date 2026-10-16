@@ -91,6 +91,12 @@ export default function Home() {
   const [auditId, setAuditId] = useState("");
 
   useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("mode") === "screenshot") {
+      setMode("screenshot");
+    }
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
