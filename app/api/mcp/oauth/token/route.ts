@@ -11,7 +11,7 @@ function equal(left: string, right: string) {
 function tokenResponse(issuer: string, clientId: string, scope: string) {
   const now = Math.floor(Date.now() / 1000);
   return {
-    access_token: signMcpPayload({ typ: "access", jti: randomUUID(), iss: issuer, aud: issuer + "/api/mcp", sub: "uxaudit-owner", client_id: clientId, scope, iat: now, exp: now + 3600 }),
+    access_token: signMcpPayload({ typ: "access", jti: randomUUID(), iss: issuer, aud: issuer + "/mcp", sub: "uxaudit-owner", client_id: clientId, scope, iat: now, exp: now + 3600 }),
     token_type: "Bearer", expires_in: 3600,
     refresh_token: signMcpPayload({ typ: "refresh", jti: randomUUID(), iss: issuer, sub: "uxaudit-owner", client_id: clientId, scope, iat: now, exp: now + 60 * 60 * 24 * 90 }),
     scope,

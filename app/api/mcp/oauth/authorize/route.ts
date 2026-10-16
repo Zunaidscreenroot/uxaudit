@@ -1,5 +1,5 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { getMcpIssuer, getMcpSecret, htmlEscape, signMcpPayload, verifyMcpPayload, MCP_SCOPES } from "@/lib/mcp-oauth";
+import { getMcpIssuer, getMcpSecret, readMcpEnv, htmlEscape, signMcpPayload, verifyMcpPayload, MCP_SCOPES } from "@/lib/mcp-oauth";
 export const runtime = "nodejs";
 type AuthorizeInput = { clientId: string; redirectUri: string; state: string; scope: string; challenge: string; method: string; clientName: string };
 function getInput(values: URLSearchParams | FormData): AuthorizeInput | null {
@@ -57,7 +57,7 @@ export async function POST(request: Request) {
     const form = await request.formData();
     const input = getInput(form);
     if (!input || form.get("consent") !== "yes") return new Response("Invalid authorization request or consent was not provided.", { status: 400 });
-    const expectedPassword = process.env.UXAUDIT_MCP_LOGIN_CODE || "";
+    const expectedPassword = readMcpEnv("UXAUDIT_MCP_LOGIN_CODE");
     const suppliedPassword = String(form.get("password") || "");
     const actual = Buffer.from(suppliedPassword), expected = Buffer.from(expectedPassword);
     if (!expectedPassword || suppliedPassword.length > 500 || actual.length !== expected.length || !timingSafeEqual(actual, expected)) {

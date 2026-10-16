@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { getMcpIssuer, verifyMcpPayload } from "@/lib/mcp-oauth";
+import { getMcpIssuer, verifyMcpPayload } from "../../../lib/mcp-oauth";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -223,7 +223,7 @@ async function runTool(name: string, args: any, request: Request) {
 export async function POST(request: Request) {
   const token = verifyMcpPayload(getBearer(request), "access") as unknown as AuthClaims | null;
   const issuer = getMcpIssuer(request);
-  if (!token || token.iss !== issuer || token.aud !== issuer + "/api/mcp") return unauthorized(request);
+  if (!token || token.iss !== issuer || !([issuer + "/api/mcp", issuer + "/mcp"].includes(String(token.aud || "")))) return unauthorized(request);
   let rpc: JsonRpc;
   try { rpc = await request.json() as JsonRpc; } catch { return jsonRpcError(null, -32700, "Invalid JSON-RPC request."); }
   const id = rpc.id;

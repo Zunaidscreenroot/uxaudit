@@ -1,8 +1,12 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 export type McpClaims = Record<string, unknown> & { typ: "client" | "code" | "access" | "refresh"; exp?: number };
 export const MCP_SCOPES = ["audit:read", "audit:run", "ia:generate", "offline_access"] as const;
+export function readMcpEnv(key: string): string {
+  const runtime = (globalThis as typeof globalThis & { Netlify?: { env?: { get?: (name: string) => string | undefined } } }).Netlify;
+  return runtime?.env?.get?.(key) || process.env[key] || "";
+}
 export function getMcpSecret(): string {
-  const value = process.env.UXAUDIT_MCP_OAUTH_SECRET || "";
+  const value = readMcpEnv("UXAUDIT_MCP_OAUTH_SECRET");
   if (value.length < 32) throw new Error("UXAUDIT_MCP_OAUTH_SECRET must be configured with at least 32 characters.");
   return value;
 }
@@ -26,7 +30,7 @@ export function verifyMcpPayload(token: string, expectedType?: McpClaims["typ"])
   } catch { return null; }
 }
 export function getMcpIssuer(request: Request): string {
-  const configured = (process.env.UXAUDIT_MCP_ISSUER_URL || "").trim().replace(/\/+$/, "");
+  const configured = readMcpEnv("UXAUDIT_MCP_ISSUER_URL").trim().replace(/\/+$/, "");
   return configured || new URL(request.url).origin;
 }
 export function pkceChallenge(verifier: string): string { return createHash("sha256").update(verifier).digest("base64url"); }
