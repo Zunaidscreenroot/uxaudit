@@ -1,4 +1,4 @@
-import { createAuditFromScreenshot, type AuditMode, type AuditStage } from "@/lib/audit";
+import { createAuditFromScreenshot, type AuditStage } from "@/lib/audit";
 import { saveAudit } from "@/lib/knowledge-base";
 
 export const runtime = "nodejs";
@@ -12,8 +12,6 @@ export async function POST(request: Request) {
     if (!file.type.startsWith("image/")) return Response.json({ error: "Please upload a PNG, JPG, JPEG, or WebP screenshot." }, { status: 400 });
     if (file.size > 15 * 1024 * 1024) return Response.json({ error: "Screenshot is too large. Please upload an image smaller than 15 MB." }, { status: 400 });
 
-    const auditModeRaw = formData.get("auditMode");
-    const auditMode: AuditMode = auditModeRaw === "mobile" ? "mobile" : "desktop";
     const verifiedRaw=formData.get("verifiedModels");
     let verifiedModels: Array<{provider:"OpenRouter"|"Gemini";model:string;tier:"free"|"paid"}> = [];
     try { verifiedModels=JSON.parse(typeof verifiedRaw==="string"?verifiedRaw:"[]"); } catch { verifiedModels=[]; }
@@ -26,7 +24,7 @@ export async function POST(request: Request) {
         const stage = (value: AuditStage) => send({ type: "stage", stage: value });
         try {
           send({ type: "start" });
-          const result = await createAuditFromScreenshot(buffer, file.name || "uploaded-screenshot", stage, verifiedModels, auditMode);
+          const result = await createAuditFromScreenshot(buffer, file.name || "uploaded-screenshot", stage, verifiedModels);
           const auditId = await saveAudit(result, file.name || "uploaded-screenshot");
           result.pages = result.pages.map((page) => ({ ...page, id: auditId, createdAt: new Date().toISOString() }));
           send({ type: "result", result });
