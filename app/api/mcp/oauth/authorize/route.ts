@@ -30,10 +30,10 @@ function htmlPage(issuer: string, input: AuthorizeInput, error = ""): Response {
     '<div class="notice">AI audits and IA generation use your configured OpenRouter API key and may incur model charges. Only authorize this connection from your own ChatGPT account.</div>',
     error ? '<p class="notice">' + htmlEscape(error) + '</p>' : "",
     '<form method="post" action="' + htmlEscape(issuer + "/api/mcp/oauth/authorize") + '">' + hidden,
-    '<div class="field"><label for="password">UX Audit MCP connection password</label><input id="password" name="password" type="password" required autocomplete="current-password" autofocus></div>',
+    '<div class="field"><label for="password">UX Audit MCP connection code</label><input id="password" name="password" type="password" required autocomplete="current-password" autofocus></div>',
     '<div class="checks"><input id="consent" name="consent" type="checkbox" value="yes" required><label for="consent">I approve access to discover public sites, run desktop/mobile screenshot audits, read saved audit findings, and generate proposed information architectures.</label></div>',
     '<button type="submit">Authorize ChatGPT</button></form>',
-    '<p class="small">The proposal does not change the live website. You can revoke the connection by rotating the MCP OAuth secret in Vercel and reconnecting. Keep this connection password private.</p></main></body></html>',
+    '<p class="small">The proposal does not change the live website. You can revoke the connection by rotating the MCP OAuth secret in Vercel and reconnecting. Keep this connection code private.</p></main></body></html>',
   ].join("");
   return new Response(html, { status: 200, headers: {
     "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store",
@@ -57,11 +57,11 @@ export async function POST(request: Request) {
     const form = await request.formData();
     const input = getInput(form);
     if (!input || form.get("consent") !== "yes") return new Response("Invalid authorization request or consent was not provided.", { status: 400 });
-    const expectedPassword = process.env.UXAUDIT_MCP_LOGIN_PASSWORD || "";
+    const expectedPassword = process.env.UXAUDIT_MCP_LOGIN_CODE || "";
     const suppliedPassword = String(form.get("password") || "");
     const actual = Buffer.from(suppliedPassword), expected = Buffer.from(expectedPassword);
     if (!expectedPassword || suppliedPassword.length > 500 || actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
-      return htmlPage(issuer, input, "The connection password was not accepted. Please try again.");
+      return htmlPage(issuer, input, "The connection code was not accepted. Please try again.");
     }
     const now = Math.floor(Date.now() / 1000);
     const code = signMcpPayload({
