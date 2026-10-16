@@ -60,7 +60,9 @@ useEffect(()=>{if(sessionId&&data){saveSession().catch(e=>setError(e instanceof 
    }
    setRunStatus("Completed selected page audits. Saved results are reused on resume; use Re-run to refresh them.");void saveSession({stage:"results",audited_pages:audited,selected_urls:selected,project_name:projectName});
   } catch (e) {
-   setError(e instanceof Error ? e.message : "Selected-page audit failed.");
+   const message=e instanceof Error ? e.message : "Selected-page audit failed.";
+   setTimeline(prev=>prev.map(s=>s.status==="active"?{...s,status:"failed" as const,detail:message}:s));
+   setError(message);
    setRunStatus("Audit stopped. Completed page results remain available.");void saveSession({stage:"results",audited_pages:audited,selected_urls:selected,project_name:projectName});
   } finally {
    setRunning(false);
