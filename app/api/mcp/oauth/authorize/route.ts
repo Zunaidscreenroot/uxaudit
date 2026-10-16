@@ -14,7 +14,7 @@ function getInput(values: URLSearchParams | FormData): AuthorizeInput | null {
   if (!client || !redirects.includes(redirectUri) || val("response_type") !== "code" || method !== "S256" ||
       !/^[A-Za-z0-9_-]{43,128}$/.test(challenge) || state.length > 2048 ||
       requested.some(value => !(MCP_SCOPES as readonly string[]).includes(value))) return null;
-  return { clientId, redirectUri, state, scope: [...new Set(requested)].join(" "), challenge, method, clientName: String(client.client_name || "ChatGPT MCP client") };
+  return { clientId, redirectUri, state, scope: Array.from(new Set(requested)).join(" "), challenge, method, clientName: String(client.client_name || "ChatGPT MCP client") };
 }
 function htmlPage(issuer: string, input: AuthorizeInput, error = ""): Response {
   const hidden = [
