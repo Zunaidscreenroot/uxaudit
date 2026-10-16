@@ -15,7 +15,7 @@ useEffect(()=>{if(sessionId&&data){saveSession().catch(e=>setError(e instanceof 
  const groups=useMemo(()=>data?.pages.reduce((a:Record<string,Page[]>,p)=>{(a[p.category]??=[]).push(p);return a;}, {})||{},[data]);
  const activePages=groups[activeCategory]||[];
  const heuristicIssues=useMemo(()=>{if(!data)return [];const deep=data.pages.filter(p=>p.depth>=3);const other=data.pages.filter(p=>p.category==="Other Pages");const about=data.pages.filter(p=>p.category==="About Us");return [...(deep.length?[{title:"Deep page hierarchy",detail:`${deep.length} URLs are three or more levels deep. Consider bringing priority journeys closer to the top level.`,urls:deep.map(p=>p.url)}]:[]),...(about.length>=4?[{title:"About Us sprawl",detail:`${about.length} About Us pages found. Check overlap and whether related content can be consolidated.`,urls:about.map(p=>p.url)}]:[]),...(other.length?[{title:"Unclear page grouping",detail:`${other.length} pages could not be classified confidently from their URL/title.`,urls:other.map(p=>p.url)}]:[])];},[data]);
- function toggle(url:string){setSelected(s=>{const next=s.includes(url)?s.filter(x=>x!==url):[...s,url];void saveSession({selected_urls:next});return next;}}
+ function toggle(url:string){setSelected(s=>{const next=s.includes(url)?s.filter(x=>x!==url):[...s,url];void saveSession({selected_urls:next});return next;});}
  const runSelectedAudits = async (force=false) => {
   if (!selected.length || running) return;
   setRunning(true); setError(""); setStage("results");
