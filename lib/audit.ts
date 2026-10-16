@@ -112,7 +112,7 @@ async function createVisualPass(model: VerifiedModel, capture: Capture, timeoutM
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const retryPrompt = attempt === 0 ? prompt : `Inspect the attached screenshot and return ONLY valid JSON with this exact shape: {"clientName":"visible brand or Unknown client","pageSummary":"one sentence describing visible layout","observations":[{"id":"obs-1","section":"visible region","element":"visible control or content","issue":"specific UX issue visibly supported by screenshot","whyItMatters":"user impact","marker":{"x":0.5,"y":0.2}}]}. Return 3 to 6 observations only when supported by visible evidence. Coordinates must be numbers from 0 to 1. Do not return markdown or any other schema.`;
     try {
-      const text = await modelGenerate(model, [{ text: retryPrompt }, imagePart], attempt === 0 ? 1600 : 1200, timeoutMs);
+      const text = await modelGenerate(model, [{ text: retryPrompt }, imagePart], attempt === 0 ? 3000 : 2200, timeoutMs);
       const parsed = extractJson(text);
       const result = normalizeVisualPass(parsed);
       if (result.observations.length) return result;
