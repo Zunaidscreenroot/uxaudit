@@ -1,3 +1,6 @@
+# Next.js configuration for Netlify Git builds and Deploy Previews.
+# This branch is a preview migration; it does not publish or change production by itself.
+
 [build]
   command = "npm run build"
   publish = ".next"
