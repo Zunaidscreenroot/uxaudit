@@ -15,6 +15,7 @@ const MARKER_COLORS = ["pink", "purple", "orange", "blue", "green", "yellow", "v
 
 type ReportTab = "findings" | "business" | "summary";
 type VerifiedModel = {provider:"OpenRouter"|"Gemini";model:string;tier:"free"|"paid"};
+type AuditMode = "desktop" | "mobile";
 
 function markerColor(index: number) { return MARKER_COLORS[index % MARKER_COLORS.length]; }
 
@@ -48,23 +49,50 @@ async function prepareAuditUpload(file: File): Promise<File> {
 
 export default function Home() {
   const [file, setFile] = useState<File | null>(null); const [preview, setPreview] = useState(""); const [previewUrl, setPreviewUrl] = useState("");
-  const [result, setResult] = useState<AuditResult | null>(null); const [loading, setLoading] = useState(false); const [error, setError] = useState(""); const [stages, setStages] = useState<Record<string, AuditStage>>({});
+  const [result, setResult] = useState<AuditResult | null>(null); const [loading, setLoading] = useState(false); const [error, setError] = useState(""); const [stages, setStages] = useState<Record<string, AuditStage>>({}); const [showModePicker, setShowModePicker] = useState(false);
   const [activeTab, setActiveTab] = useState<ReportTab>("findings"); const [activeFinding, setActiveFinding] = useState(0);
   const [verifiedModels,setVerifiedModels]=useState<VerifiedModel[]>([]); const [modelCheckState,setModelCheckState]=useState<"checking"|"ready"|"error">("checking"); const [modelCheckMessage,setModelCheckMessage]=useState("Checking model availability…");
   useEffect(()=>{let cancelled=false;(async()=>{try{let payload:any=null;try{const saved=sessionStorage.getItem("uxaudit-model-scan");if(saved){const parsed=JSON.parse(saved);if(parsed.expiresAt>Date.now()&&parsed.payload?.selected)payload=parsed.payload;}}catch{}if(!payload){const response=await fetch("/api/model-health/scan",{method:"POST",cache:"no-store"});payload=await response.json();if(!response.ok)throw new Error(payload.error??"Model availability check failed.");try{sessionStorage.setItem("uxaudit-model-scan",JSON.stringify({expiresAt:Date.now()+30*60*1000,payload}));}catch{}}if(cancelled)return;const candidates=Array.isArray(payload.selectedModels)?payload.selectedModels.filter((m:any)=>m?.ok&&typeof m.model==="string").slice(0,3):payload.selected?.ok?[payload.selected]:[];const selected=candidates.map((m:any)=>({provider:m.provider,model:m.model,tier:m.tier}));setVerifiedModels(selected);setModelCheckState(selected.length>=2?"ready":"error");setModelCheckMessage(selected.length>=2?`Verified · ${selected.length} cheapest image-capable models ready: ${selected.map((m:any)=>m.model).join(", ")}`:selected.length===1?`Only one model verified (${selected[0].model}); fallback requirement not met, audit disabled.`:"No verified image-capable models available. Audit is disabled.");}catch(e){if(!cancelled){setModelCheckState("error");setModelCheckMessage(e instanceof Error?e.message:"Model check failed.");}}})();return()=>{cancelled=true}},[]);
   const inputRef = useRef<HTMLInputElement>(null); const findingRefs = useRef<Record<string, HTMLElement | null>>({}); const page = result?.pages[0] as AuditPage | undefined;
   function selectFile(event: ChangeEvent<HTMLInputElement>) { const selected = event.target.files?.[0]; if (!selected) return; if (previewUrl) URL.revokeObjectURL(previewUrl); const url = URL.createObjectURL(selected); setError(""); setResult(null); setActiveTab("findings"); setActiveFinding(0); setFile(selected); setPreview(url); setPreviewUrl(url); }
   function clearFile() { if (previewUrl) URL.revokeObjectURL(previewUrl); setFile(null); setPreview(""); setPreviewUrl(""); if (inputRef.current) inputRef.current.value = ""; }
-  async function runAudit(event: FormEvent) {
-    event.preventDefault(); if (!file) { setError("Upload a screenshot first."); return; }
+  function openModePicker(event: FormEvent) {
+    event.preventDefault();
+    if (!file) { setError("Upload a screenshot first."); return; }
+    if (modelCheckState !== "ready") { setError("Wait for verified model availability before starting the audit."); return; }
+    setError("");
+    setShowModePicker(true);
+  }
+  async function runAudit(mode: AuditMode) {
+    setShowModePicker(false);
+    if (!file) { setError("Upload a screenshot first."); return; }
     setLoading(true); setError(""); setResult(null); setStages({});
     try {
-      if(!verifiedModels.length)throw new Error("No verified models are available. Refresh the page and retry when model status is green."); const upload = await prepareAuditUpload(file); const body = new FormData(); body.append("screenshot", upload); body.append("verifiedModels",JSON.stringify(verifiedModels)); const response = await fetch("/api/audit", { method: "POST", body });
+      if (!verifiedModels.length) throw new Error("No verified models are available. Refresh the page and retry when model status is green.");
+      const upload = await prepareAuditUpload(file);
+      const body = new FormData();
+      body.append("screenshot", upload);
+      body.append("verifiedModels", JSON.stringify(verifiedModels));
+      body.append("auditMode", mode);
+      const response = await fetch("/api/audit", { method: "POST", body });
       if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.error ?? "Audit failed."); }
       if (!response.body) throw new Error("The audit server did not return a progress stream.");
       const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
-      while (true) { const { value, done } = await reader.read(); if (done) break; buffer += decoder.decode(value, { stream: true }); const lines = buffer.split("\n"); buffer = lines.pop() ?? ""; for (const line of lines) { if (!line.trim()) continue; const eventData = JSON.parse(line) as { type: string; stage?: AuditStage; result?: AuditResult; error?: string }; if (eventData.type === "stage" && eventData.stage) setStages((previous) => ({ ...previous, [eventData.stage!.id]: eventData.stage! })); if (eventData.type === "result" && eventData.result) setResult(eventData.result); if (eventData.type === "error") throw new Error(eventData.error ?? "Audit failed."); } }
-    } catch (err) { setError(err instanceof Error ? err.message : "Something went wrong."); } finally { setLoading(false); }
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n"); buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const eventData = JSON.parse(line) as { type: string; stage?: AuditStage; result?: AuditResult; error?: string };
+          if (eventData.type === "stage" && eventData.stage) setStages((previous) => ({ ...previous, [eventData.stage!.id]: eventData.stage! }));
+          if (eventData.type === "result" && eventData.result) setResult(eventData.result);
+          if (eventData.type === "error") throw new Error(eventData.error ?? "Audit failed.");
+        }
+      }
+    } catch (err) { setError(err instanceof Error ? err.message : "Something went wrong."); }
+    finally { setLoading(false); }
   }
   const findings = page?.findings ?? []; const high = findings.filter((f) => f.severity === "high").length; const medium = findings.filter((f) => f.severity === "medium").length; const low = findings.filter((f) => f.severity === "low").length;
   function focusFinding(index: number) { setActiveFinding(index); setActiveTab("findings"); const finding = findings[index]; if (finding) findingRefs.current[finding.id]?.scrollIntoView({ behavior: "smooth", block: "center" }); }
@@ -72,15 +100,38 @@ export default function Home() {
   return <main className="shell">
     <nav className="nav"><div className="brandLockup"><div className="brand">UX Audit</div></div><div className="navActions"><div className="navMeta">Evidence-first UX review</div><div className="navMeta" style={{display:"flex",alignItems:"center",gap:7,color:modelCheckState==="ready"?"#17663a":modelCheckState==="error"?"#a31d1d":"#805b00"}}><span aria-hidden="true" style={{width:8,height:8,borderRadius:"50%",display:"inline-block",background:modelCheckState==="ready"?"#16803d":modelCheckState==="error"?"#c62828":"#e5a000"}} />{modelCheckMessage}</div><a className="connectionLink" href="/site-map">Site map audit</a><a className="connectionLink" href="/model-health"><span className="connectionDot" aria-hidden="true" />AI spend & connection status <span aria-hidden="true">↗</span></a></div></nav>
     <section className="hero"><div className="eyebrow">Screenshot → UX evidence</div><h1>Show clients exactly where the experience breaks.</h1><p className="lede">Upload a full-page website screenshot and get evidence-backed UX findings, research context and business funnel recommendations. The report keeps the original screenshot intact and places a numbered marker on every analysed region.</p>
-      <form className="auditForm" onSubmit={runAudit}><input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={selectFile} hidden /><button className="uploadButton" type="button" onClick={() => inputRef.current?.click()} disabled={loading}>{file ? "Change screenshot" : "Upload screenshot"}</button><button className="auditButton" type="submit" disabled={loading || !file || modelCheckState!=="ready"}>{loading ? "Running two-stage audit…" : "Run UX audit"}</button></form>
+      <form className="auditForm" onSubmit={openModePicker}><input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={selectFile} hidden /><button className="uploadButton" type="button" onClick={() => inputRef.current?.click()} disabled={loading}>{file ? "Change screenshot" : "Upload screenshot"}</button><button className="auditButton" type="submit" disabled={loading || !file || modelCheckState!=="ready"}>{loading ? "Running two-stage audit…" : "Run UX audit"}</button></form>
       {file && <div className="uploadInfo"><span><strong>{file.name}</strong> · {(file.size / 1024 / 1024).toFixed(1)} MB{file.size > MAX_UPLOAD_BYTES ? " · will be optimized before upload" : ""}</span><button type="button" onClick={clearFile} disabled={loading}>Remove</button></div>}
       {preview && !loading && !result && <div className="uploadPreview"><img src={preview} alt="Uploaded website screenshot preview" /></div>}
-      {!file && <p className="uploadHint">PNG, JPG, JPEG or WebP · full-page desktop or mobile responsive screenshots work best.</p>}
+      {!file && <p className="uploadHint">PNG, JPG, JPEG or WebP · choose Desktop or Mobile when you start the audit. For Mobile, capture at a 393 × 852 CSS viewport; a full-page screenshot may be taller.</p>}
       {error && <div className="error">{error}</div>}
     </section>
+    {showModePicker && <div className="modeDialogBackdrop" role="presentation" onClick={() => setShowModePicker(false)}>
+      <section className="modeDialog" role="dialog" aria-modal="true" aria-labelledby="modeDialogTitle" onClick={(event) => event.stopPropagation()}>
+        <div className="eyebrow">CHOOSE AUDIT MODE</div>
+        <h2 id="modeDialogTitle">Which experience should we audit?</h2>
+        <p className="modeDialogIntro">Choose the device experience represented by your uploaded screenshot. The audit will use device-specific UX criteria.</p>
+        <div className="modeOptions">
+          <button className="modeOption" type="button" onClick={() => void runAudit("desktop")} disabled={loading}>
+            <span className="modeIcon" aria-hidden="true">▱</span>
+            <strong>Desktop audit</strong>
+            <span>Navigation, wide-screen hierarchy, page density and desktop interactions.</span>
+            <small>Use a desktop screenshot</small>
+          </button>
+          <button className="modeOption" type="button" onClick={() => void runAudit("mobile")} disabled={loading}>
+            <span className="modeIcon mobileIcon" aria-hidden="true">▯</span>
+            <strong>Mobile audit</strong>
+            <span>Responsive layout, touch targets, compact navigation, readability and mobile conversion friction.</span>
+            <small>Target viewport · 393 × 852</small>
+          </button>
+        </div>
+        <p className="modeDialogNote">This workflow audits the screenshot you upload; it does not open a URL or capture the site automatically. For Mobile, upload a screenshot captured at a 393 × 852 CSS viewport. Full-page screenshots can be taller.</p>
+        <button className="modeCancel" type="button" onClick={() => setShowModePicker(false)}>Cancel</button>
+      </section>
+    </div>}
     {loading && <section className="results progressResults"><ProgressPanel stages={stages} /></section>}
     {result && page && <section className="results reportResults" aria-live="polite">
-      <div className="reportHeader"><div><div className="reportKicker">Screenshot UX audit</div><h2>{page.title}</h2><span className="sourceLabel">Source: original uploaded screenshot · {page.screenshotWidth} × {page.screenshotHeight}px</span></div><div className="reportOutcome"><span>Client-ready findings</span><strong>{findings.length}</strong><small>Every finding maps to a visible marker</small></div></div>
+      <div className="reportHeader"><div><div className="reportKicker">{page.auditMode === "mobile" ? "Mobile website UX audit" : "Desktop website UX audit"}</div><h2>{page.title}</h2><span className="sourceLabel">Source: original uploaded screenshot · {page.screenshotWidth} × {page.screenshotHeight}px{page.auditMode === "mobile" ? " · Mobile reference viewport 393 × 852 CSS px" : ""}</span></div><div className="reportOutcome"><span>Client-ready findings</span><strong>{findings.length}</strong><small>Every finding maps to a visible marker</small></div></div>
       <div className="reportTabs" role="tablist" aria-label="Audit report sections"><button className={activeTab === "findings" ? "active" : ""} onClick={() => setActiveTab("findings")} role="tab" aria-selected={activeTab === "findings"}>UX Findings</button><button className={activeTab === "business" ? "active" : ""} onClick={() => setActiveTab("business")} role="tab" aria-selected={activeTab === "business"}>Business Analysis</button><button className={activeTab === "summary" ? "active" : ""} onClick={() => setActiveTab("summary")} role="tab" aria-selected={activeTab === "summary"}>Summary</button></div>
 
       {activeTab === "findings" && <div className="auditWorkspace">
