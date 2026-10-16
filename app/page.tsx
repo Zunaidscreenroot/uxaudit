@@ -14,6 +14,7 @@ const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
 const MARKER_COLORS = ["pink", "purple", "orange", "blue", "green", "yellow", "violet", "teal", "rose", "cyan"];
 
 type ReportTab = "findings" | "business" | "summary";
+type VerifiedModel = {provider:"OpenRouter"|"Gemini";model:string;tier:"free"|"paid"};
 
 function markerColor(index: number) { return MARKER_COLORS[index % MARKER_COLORS.length]; }
 
@@ -49,6 +50,8 @@ export default function Home() {
   const [file, setFile] = useState<File | null>(null); const [preview, setPreview] = useState(""); const [previewUrl, setPreviewUrl] = useState("");
   const [result, setResult] = useState<AuditResult | null>(null); const [loading, setLoading] = useState(false); const [error, setError] = useState(""); const [stages, setStages] = useState<Record<string, AuditStage>>({});
   const [activeTab, setActiveTab] = useState<ReportTab>("findings"); const [activeFinding, setActiveFinding] = useState(0);
+  const [verifiedModels,setVerifiedModels]=useState<VerifiedModel[]>([]); const [modelCheckState,setModelCheckState]=useState<"checking"|"ready"|"error">("checking"); const [modelCheckMessage,setModelCheckMessage]=useState("Checking model availability…");
+  useEffect(()=>{let cancelled=false;(async()=>{try{const response=await fetch("/api/model-health/scan",{method:"POST",cache:"no-store"});const payload=await response.json();if(!response.ok)throw new Error(payload.error??"Model availability check failed.");const working=(payload.working??[]).filter((m:any)=>m.ok&&typeof m.model==="string").map((m:any)=>({provider:m.provider,model:m.model,tier:m.tier}));if(cancelled)return;setVerifiedModels(working);setModelCheckState(working.length?"ready":"error");setModelCheckMessage(working.length?`${working.length} verified model${working.length===1?"":"s"} ready`:"No verified models available. Audit is disabled.");}catch(e){if(!cancelled){setModelCheckState("error");setModelCheckMessage(e instanceof Error?e.message:"Model check failed.");}}})();return()=>{cancelled=true}},[]);
   const inputRef = useRef<HTMLInputElement>(null); const findingRefs = useRef<Record<string, HTMLElement | null>>({}); const page = result?.pages[0] as AuditPage | undefined;
   function selectFile(event: ChangeEvent<HTMLInputElement>) { const selected = event.target.files?.[0]; if (!selected) return; if (previewUrl) URL.revokeObjectURL(previewUrl); const url = URL.createObjectURL(selected); setError(""); setResult(null); setActiveTab("findings"); setActiveFinding(0); setFile(selected); setPreview(url); setPreviewUrl(url); }
   function clearFile() { if (previewUrl) URL.revokeObjectURL(previewUrl); setFile(null); setPreview(""); setPreviewUrl(""); if (inputRef.current) inputRef.current.value = ""; }
@@ -56,7 +59,7 @@ export default function Home() {
     event.preventDefault(); if (!file) { setError("Upload a screenshot first."); return; }
     setLoading(true); setError(""); setResult(null); setStages({});
     try {
-      const upload = await prepareAuditUpload(file); const body = new FormData(); body.append("screenshot", upload); const response = await fetch("/api/audit", { method: "POST", body });
+      if(!verifiedModels.length)throw new Error("No verified models are available. Refresh the page and retry when model status is green."); const upload = await prepareAuditUpload(file); const body = new FormData(); body.append("screenshot", upload); body.append("verifiedModels",JSON.stringify(verifiedModels)); const response = await fetch("/api/audit", { method: "POST", body });
       if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.error ?? "Audit failed."); }
       if (!response.body) throw new Error("The audit server did not return a progress stream.");
       const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
@@ -67,9 +70,9 @@ export default function Home() {
   function focusFinding(index: number) { setActiveFinding(index); setActiveTab("findings"); const finding = findings[index]; if (finding) findingRefs.current[finding.id]?.scrollIntoView({ behavior: "smooth", block: "center" }); }
 
   return <main className="shell">
-    <nav className="nav"><div className="brandLockup"><div className="brand">UX Audit</div></div><div className="navActions"><div className="navMeta">Evidence-first UX review</div><a className="connectionLink" href="/site-map">Site map audit</a><a className="connectionLink" href="/model-health"><span className="connectionDot" aria-hidden="true" />AI spend & connection status <span aria-hidden="true">↗</span></a></div></nav>
+    <nav className="nav"><div className="brandLockup"><div className="brand">UX Audit</div></div><div className="navActions"><div className="navMeta">Evidence-first UX review</div><div className="navMeta" style={{display:"flex",alignItems:"center",gap:7,color:modelCheckState==="ready"?"#17663a":modelCheckState==="error"?"#a31d1d":"#805b00"}}><span aria-hidden="true" style={{width:8,height:8,borderRadius:"50%",display:"inline-block",background:modelCheckState==="ready"?"#16803d":modelCheckState==="error"?"#c62828":"#e5a000"}} />{modelCheckMessage}</div><a className="connectionLink" href="/site-map">Site map audit</a><a className="connectionLink" href="/model-health"><span className="connectionDot" aria-hidden="true" />AI spend & connection status <span aria-hidden="true">↗</span></a></div></nav>
     <section className="hero"><div className="eyebrow">Screenshot → UX evidence</div><h1>Show clients exactly where the experience breaks.</h1><p className="lede">Upload a full-page website screenshot and get evidence-backed UX findings, research context and business funnel recommendations. The report keeps the original screenshot intact and places a numbered marker on every analysed region.</p>
-      <form className="auditForm" onSubmit={runAudit}><input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={selectFile} hidden /><button className="uploadButton" type="button" onClick={() => inputRef.current?.click()} disabled={loading}>{file ? "Change screenshot" : "Upload screenshot"}</button><button className="auditButton" type="submit" disabled={loading || !file}>{loading ? "Running two-stage audit…" : "Run UX audit"}</button></form>
+      <form className="auditForm" onSubmit={runAudit}><input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={selectFile} hidden /><button className="uploadButton" type="button" onClick={() => inputRef.current?.click()} disabled={loading}>{file ? "Change screenshot" : "Upload screenshot"}</button><button className="auditButton" type="submit" disabled={loading || !file || modelCheckState!=="ready"}>{loading ? "Running two-stage audit…" : "Run UX audit"}</button></form>
       {file && <div className="uploadInfo"><span><strong>{file.name}</strong> · {(file.size / 1024 / 1024).toFixed(1)} MB{file.size > MAX_UPLOAD_BYTES ? " · will be optimized before upload" : ""}</span><button type="button" onClick={clearFile} disabled={loading}>Remove</button></div>}
       {preview && !loading && !result && <div className="uploadPreview"><img src={preview} alt="Uploaded website screenshot preview" /></div>}
       {!file && <p className="uploadHint">PNG, JPG, JPEG or WebP · full-page desktop or mobile responsive screenshots work best.</p>}
