@@ -13,7 +13,7 @@ export default function SiteMapPage() {
   const [auditMode,setAuditMode]=useState<AuditMode>("desktop"); const [planMessage,setPlanMessage]=useState("");
   const viewport:Viewport = auditMode === "mobile" ? {width:393,height:852} : {width:1440,height:900};
   async function copySelectedUrls() {
-    try { await navigator.clipboard.writeText(selected.join("\\n")); setPlanMessage(`Copied ${selected.length} selected page URLs.`); }
+    try { await navigator.clipboard.writeText(selected.join("\n")); setPlanMessage(`Copied ${selected.length} selected page URLs.`); }
     catch { setPlanMessage("Clipboard access failed. Check browser permissions and try again."); }
   }
   async function copyAuditPlan() {
