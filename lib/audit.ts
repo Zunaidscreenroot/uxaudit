@@ -305,7 +305,7 @@ function fallbackFinding(observation: VisualObservation, index: number): Finding
 export async function createAuditFromScreenshot(buffer: Buffer, filename: string, onStage?: (stage: AuditStage) => void, verifiedModels: VerifiedModel[] = [], auditMode: "desktop" | "mobile" = "desktop", onPartialResult?: (result: AuditResult) => void): Promise<AuditResult> {
   if (buffer.byteLength > MAX_SCREENSHOT_BYTES) throw new Error("Screenshot is too large. Please upload an image smaller than 15 MB.");
   const metadata = await sharp(buffer).metadata(); const width = metadata.width ?? 0; const height = metadata.height ?? 0;
-  const screenshotMime = metadata.format === "png" ? "image/png" : metadata.format === "webp" ? "image/webp" : metadata.format === "gif" ? "image/gif" : metadata.format === "avif" ? "image/avif" : "image/jpeg";
+  const screenshotMime = metadata.format === "png" ? "image/png" : metadata.format === "webp" ? "image/webp" : metadata.format === "gif" ? "image/gif" : "image/jpeg";
   // Reuse the already validated screenshot bytes; re-encoding a full-page image after both model calls can push serverless requests past their time budget.
   const screenshot = `data:${screenshotMime};base64,${buffer.toString("base64")}`;
   if (!width || !height) throw new Error("The uploaded file is not a valid image.");
