@@ -12,13 +12,13 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
+    "@sparticuz/chromium": "153.0.0",
     "next": "14.2.32",
     "openai": "^7.10.0",
+    "playwright-core": "1.64.1",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "sharp": "^0.34.3",
-    "@sparticuz/chromium": "153.0.0",
-    "puppeteer-core": "25.11.0"
+    "sharp": "^0.34.3"
   },
   "devDependencies": {
     "@types/node": "20.17.30",
