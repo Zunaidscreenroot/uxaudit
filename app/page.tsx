@@ -163,6 +163,7 @@ export default function Home() {
     setAuditId("");
     setAuditStages([{ id: "prepare", label: "Prepare screenshot", detail: "Validating and compressing the image while preserving its layout and proportions.", status: "active" }]);
     setAuditStatus("Preparing your screenshot for AI analysis.");
+    const streamed: { result: { page?: AuditPage; auditId?: string; partial?: boolean } | null } = { result: null };
 
     try {
       const prepared = await prepareScreenshot(screenshotFile, uploadMode);
@@ -190,8 +191,6 @@ export default function Home() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      const streamed: { result: { page?: AuditPage; auditId?: string; partial?: boolean } | null } = { result: null };
-
       const dispatchEvent = (event: any) => {
         if (!event || typeof event !== "object") return;
         if (event.type === "stage" && event.stage) {
