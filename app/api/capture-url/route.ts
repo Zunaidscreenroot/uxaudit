@@ -81,7 +81,6 @@ export async function POST(req: Request) {
       deviceScaleFactor: 1,
       isMobile: mobile,
       hasTouch: mobile,
-      isLandscape: false,
       serviceWorkers: "block",
       userAgent: mobile ? MOBILE_USER_AGENT : undefined,
       extraHTTPHeaders: { "Accept-Language": "en-US,en;q=0.9" },
