@@ -1,5 +1,5 @@
 "use client";
-import { ChangeEvent, FormEvent, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import type { AuditPage, AuditResult, AuditStage } from "@/lib/audit";
 
 const PIPELINE = [
