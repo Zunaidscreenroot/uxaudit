@@ -101,6 +101,10 @@ export async function POST(req: Request) {
             (stage) => event(controller, { type: "stage", stage }),
             models,
             auditMode,
+            (partial) => {
+              const page = partial.pages[0];
+              if (page) event(controller, { type: "result", payload: { page: { ...page, screenshot: "" }, partial: true } });
+            },
           );
 
           result.pages = result.pages.map((page) => ({
@@ -116,7 +120,8 @@ export async function POST(req: Request) {
 
           // Deliver the analysis immediately; database persistence is a separate concern.
           // If Supabase is slow or unavailable, the user should still receive the generated findings.
-          event(controller, { type: "result", payload: { page: result.pages[0] } });
+          const responsePage = isUpload ? { ...result.pages[0], screenshot: "" } : result.pages[0];
+          event(controller, { type: "result", payload: { page: responsePage, partial: false } });
           console.info("[uxaudit] screenshot_analysis_ok", JSON.stringify({
             source: isUpload ? "uploaded_screenshot" : "website_page",
             findingCount: result.pages[0]?.findings?.length ?? 0,
