@@ -53,13 +53,26 @@ export async function POST(request:Request) {
  const started=Date.now();
  if(provider==="OpenRouter"){
  const key=process.env.OPENROUTER_API_KEY;if(!key)return Response.json({error:"OPENROUTER_API_KEY is not configured."},{status:503});
- const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:`Bearer ${key}`,"Content-Type":"application/json","HTTP-Referer":"https://uxauditscreenroot.vercel.app","X-Title":"UX Audit Model Connection Test"},
- body:JSON.stringify({model,messages:[{role:"user",content:"Reply with exactly: OK"}],max_tokens:8,temperature:0,provider:{allow_fallbacks:false}}),signal:AbortSignal.timeout(12000),cache:"no-store"});
- const result=await response.json().catch(()=>({})); if(!response.ok)return Response.json({model,provider,status:"error",latencyMs:Date.now()-started,error:`HTTP ${response.status}: ${result?.error?.message??"Provider request failed"}`});
+ let response:Response|undefined,result:any={},attempts=0;
+ for(let attempt=0;attempt<2;attempt++){
+  attempts=attempt+1;
+  try {
+   response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:`Bearer ${key}`,"Content-Type":"application/json","HTTP-Referer":"https://uxauditscreenroot.vercel.app","X-Title":"UX Audit Model Connection Test"},
+    body:JSON.stringify({model,messages:[{role:"user",content:"Reply with exactly: OK"}],max_tokens:8,temperature:0,provider:{allow_fallbacks:true}}),signal:AbortSignal.timeout(12000),cache:"no-store"});
+   result=await response.json().catch(()=>({}));
+   if(response.ok||![429,500,502,503,504].includes(response.status)||attempt===1)break;
+   await new Promise(resolve=>setTimeout(resolve,700));
+  } catch(err) {
+   if(attempt===1) throw err;
+   await new Promise(resolve=>setTimeout(resolve,700));
+  }
+ }
+ if(!response)throw new Error("OpenRouter did not return a response.");
+ if(!response.ok)return Response.json({model,provider,status:"error",latencyMs:Date.now()-started,attempts,upstreamStatus:response.status,error:`Provider HTTP ${response.status}: ${result?.error?.message??"The model provider is temporarily unavailable. Try again shortly."}`,note:"Transient 429/5xx errors were retried once. No screenshot was sent."});
  const content=result?.choices?.[0]?.message?.content,usage=result?.usage??{};
  return Response.json({model,provider,status:typeof content==="string"&&content.trim()?"connected":"no_response",latencyMs:Date.now()-started,responsePreview:typeof content==="string"?content.slice(0,80):"",
  usage:{promptTokens:usage.prompt_tokens??null,completionTokens:usage.completion_tokens??null,totalTokens:usage.total_tokens??null,costUsd:usage.cost??null},
- note:"One short text-only prompt was sent. Paid models may incur a small charge; no screenshot is used."},{headers:{"Cache-Control":"no-store"}});
+ attempts,note:"One short text-only prompt was sent. Paid models may incur a small charge; no screenshot is used."},{headers:{"Cache-Control":"no-store"}});
  }
  const key=process.env.GEMINI_API_KEY;if(!key)return Response.json({error:"GEMINI_API_KEY is not configured."},{status:503});
  const response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,{method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":key},
