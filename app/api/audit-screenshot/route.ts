@@ -1,5 +1,4 @@
 import { createAuditFromScreenshot, type AuditStage, type AuditResult } from "@/lib/audit";
-import { calibrateMobileMarkers } from "@/lib/mobile-marker-calibration";
 import { saveAudit } from "@/lib/knowledge-base";
 export const runtime="nodejs";
 export const maxDuration=60;
@@ -10,15 +9,14 @@ export async function POST(request:Request){
  let target:URL;try{target=new URL(body?.url)}catch{return Response.json({error:"A valid page URL is required."},{status:400});}
  if(!["http:","https:"].includes(target.protocol))return Response.json({error:"Only HTTP/HTTPS URLs can be audited."},{status:400});
  const parsed=parseImage(body?.screenshot);if(!parsed||!parsed.bytes.length)return Response.json({error:"Captured screenshot is missing or invalid."},{status:400});if(parsed.bytes.length>4200000)return Response.json({error:"Screenshot is too large; keep each page image under 4 MB."},{status:413});
- const mode=body.auditMode==="mobile"?"mobile":"desktop";const title=typeof body.title==="string"&&body.title.trim()?body.title.trim().slice(0,160):(target.pathname==="/"?"Homepage":target.pathname.split("/").filter(Boolean).pop()?.replace(/[-_]/g," ")||target.hostname);const project=typeof body.projectName==="string"&&body.projectName.trim()?body.projectName.trim().slice(0,180):target.hostname;
+ const mode=body.auditMode==="mobile"?"mobile":"desktop";const viewportWidth=mode==="mobile"?393:1440;const viewportHeight=mode==="mobile"?852:900;const title=typeof body.title==="string"&&body.title.trim()?body.title.trim().slice(0,160):(target.pathname==="/"?"Homepage":target.pathname.split("/").filter(Boolean).pop()?.replace(/[-_]/g," ")||target.hostname);const project=typeof body.projectName==="string"&&body.projectName.trim()?body.projectName.trim().slice(0,180):target.hostname;
  const stream=new ReadableStream<Uint8Array>({start(controller){void(async()=>{try{
   const stage=(s:AuditStage)=>send(controller,{type:"stage",stage:s});
   stage({id:"capture",label:"Prepare screenshot",detail:"Validating screenshot evidence for "+title+".",status:"complete"});
   stage({id:"analyse",label:"Analyse screenshot",detail:"Running the current UX Audit vision and reasoning pipeline.",status:"active"});
   let result:AuditResult=await createAuditFromScreenshot(parsed.bytes,title+".jpg",stage);
   let page=result.pages[0];if(!page)throw new Error("The audit pipeline returned no page result.");
-  const createdAt=new Date().toISOString();page.clientName=project;page.url=target.href;page.title=title;page.viewMode=mode;page.createdAt=createdAt;
-  if(mode==="mobile"&&process.env.GEMINI_API_KEY){result=await calibrateMobileMarkers(process.env.GEMINI_API_KEY,result,parsed.bytes,parsed.mime);page=result.pages[0];if(page){page.clientName=project;page.url=target.href;page.title=title;page.viewMode=mode;page.createdAt=createdAt;}}
+  const createdAt=new Date().toISOString();page.clientName=project;page.url=target.href;page.title=title;page.auditMode=mode;page.viewportWidth=viewportWidth;page.viewportHeight=viewportHeight;page.createdAt=createdAt;
   stage({id:"save",label:"Save audit report",detail:"Saving the page audit to the UX Audit knowledge base.",status:"active"});
   const auditId=await saveAudit(result,"URL audit · "+project+" · "+title);
   stage({id:"save",label:"Save audit report",detail:"Audit report saved successfully.",status:"complete"});
