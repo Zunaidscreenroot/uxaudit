@@ -18,7 +18,7 @@ function responseText(value:unknown):string {
 function parse(value:unknown):any {
  const source=responseText(value).replace(/^\uFEFF/,"").trim();
  if(!source)return null;
- const cleaned=source.replace(/{3}(?:json)?/gi,"").replace(/{3}/g,"").trim();
+ const cleaned=source.replace(/```json/gi,"").replace(/```/g,"").trim();
  try { const direct=JSON.parse(cleaned); if(direct&&typeof direct==="object"&&!Array.isArray(direct)) return direct; } catch {}
  for(let start=0;start<cleaned.length;start++){
   if(cleaned[start]!=="{")continue;
