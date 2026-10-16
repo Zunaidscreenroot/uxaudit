@@ -42,7 +42,7 @@ function recoverVisualPassJson(text: string): unknown | null {
   // Some vision providers add prose or truncate the outer JSON object despite
   // JSON mode. Recover any individually complete observation objects instead
   // of dropping an otherwise useful visual response.
-  const keyMatch = text.match(/"observations"\\s*:\\s*\\[/) ?? text.match(/"visualObservations"\\s*:\\s*\\[/) ?? text.match(/"findings"\\s*:\\s*\\[/);
+  const keyMatch = text.match(/"observations"\s*:\s*\[/) ?? text.match(/"visualObservations"\s*:\s*\[/) ?? text.match(/"findings"\s*:\s*\[/);
   if (!keyMatch || keyMatch.index === undefined) return null;
   const arrayStart = text.indexOf("[", keyMatch.index);
   if (arrayStart < 0) return null;
@@ -52,7 +52,7 @@ function recoverVisualPassJson(text: string): unknown | null {
     const ch = text[i];
     if (inString) {
       if (escaped) escaped = false;
-      else if (ch === "\\\\") escaped = true;
+      else if (ch === "\\") escaped = true;
       else if (ch === '"') inString = false;
       continue;
     }
@@ -72,7 +72,7 @@ function recoverVisualPassJson(text: string): unknown | null {
   }
   if (!observations.length) return null;
   const readString = (key: string, fallback: string) => {
-    const match = text.match(new RegExp('"' + key + '"\\\\s*:\\\\s*("(?:\\\\\\\\.|[^"\\\\\\\\])*")'));
+    const match = text.match(new RegExp('"' + key + '"\\s*:\\s*("(?:\\\\.|[^"\\\\])*")'));
     if (!match) return fallback;
     try { const value = JSON.parse(match[1]); return typeof value === "string" ? value : fallback; } catch { return fallback; }
   };
