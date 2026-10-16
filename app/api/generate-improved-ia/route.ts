@@ -2,7 +2,37 @@ export const runtime="nodejs";
 export const maxDuration=60;
 function canon(raw:string){try{const u=new URL(raw);u.hash="";u.pathname=u.pathname.replace(/\/+$/,"")||"/";return u.origin+(u.pathname==="/"? "":u.pathname)+u.search;}catch{return "";}}
 function txt(v:unknown,fallback="",max=700){return typeof v==="string"&&v.trim()?v.trim().slice(0,max):fallback;}
-function parse(v:unknown):any{const s=typeof v==="string"?v:Array.isArray(v)?v.map((x:any)=>x?.text||"").join(""):"";try{return JSON.parse(s.trim());}catch{}const a=s.indexOf("{"),b=s.lastIndexOf("}");if(a>=0&&b>a){try{return JSON.parse(s.slice(a,b+1));}catch{}}return null;}
+function responseText(value:unknown):string {
+ if(typeof value==="string") return value;
+ if(Array.isArray(value)) return value.map(responseText).filter(Boolean).join("\n");
+ if(value&&typeof value==="object"){
+  const v=value as Record<string,unknown>;
+  for(const key of ["text","output_text","content","message"]){
+   const candidate=v[key];
+   if(typeof candidate==="string") return candidate;
+   if(Array.isArray(candidate)){const nested=candidate.map(responseText).filter(Boolean).join("\n");if(nested)return nested;}
+  }
+ }
+ return "";
+}
+function parse(value:unknown):any {
+ const source=responseText(value).replace(/^\uFEFF/,"").trim();
+ if(!source)return null;
+ const cleaned=source.replace(/{3}(?:json)?/gi,"").replace(/{3}/g,"").trim();
+ try { const direct=JSON.parse(cleaned); if(direct&&typeof direct==="object"&&!Array.isArray(direct)) return direct; } catch {}
+ for(let start=0;start<cleaned.length;start++){
+  if(cleaned[start]!=="{")continue;
+  let depth=0,inString=false,escaped=false;
+  for(let i=start;i<cleaned.length;i++){
+   const ch=cleaned[i];
+   if(inString){if(escaped)escaped=false;else if(ch==="\\")escaped=true;else if(ch==='"')inString=false;continue;}
+   if(ch==='"'){inString=true;continue;}
+   if(ch==="{")depth++;
+   else if(ch==="}"){depth--;if(depth===0){try{const parsed=JSON.parse(cleaned.slice(start,i+1));if(parsed&&typeof parsed==="object"&&!Array.isArray(parsed))return parsed;}catch{}break;}}
+  }
+ }
+ return null;
+}
 type Node={id:string;label:string;url:string|null;type:"page"|"group";depth:number;rationale:string;findingIds:string[];children:Node[]};
 function urls(n:Node):string[]{return [...(n.url?[canon(n.url)]:[]),...n.children.flatMap(urls)];}
 function status(v:unknown):"addressed"|"partially_addressed"|"outside_ia_scope"{const s=typeof v==="string"?v.toLowerCase().replace(/[\s-]+/g,"_"):"";if(["addressed","resolved","resolved_in_ia"].includes(s))return "addressed";if(["partial","partially_addressed"].includes(s))return "partially_addressed";return "outside_ia_scope";}
