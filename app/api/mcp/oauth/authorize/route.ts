@@ -24,20 +24,22 @@ function htmlPage(issuer: string, input: AuthorizeInput, error = ""): Response {
   ].map(([name, value]) => '<input type="hidden" name="' + name + '" value="' + htmlEscape(value) + '">').join("");
   const html = [
     '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect UX Audit</title>',
-    '<style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f4f6fa;color:#182235;font:15px/1.5 system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;padding:24px}.card{width:min(100%,480px);border:1px solid #dce3ed;border-radius:18px;background:#fff;padding:30px;box-shadow:0 14px 48px #17203312}.brand{font-size:11px;font-weight:900;letter-spacing:.12em;color:#31598f}.mark{display:grid;place-items:center;width:46px;height:46px;border-radius:12px;background:#172b49;color:#fff;font-weight:900;margin:16px 0}.muted{color:#637086;font-size:13px}.notice{background:#fff8e9;border:1px solid #e9cd8e;border-radius:9px;padding:10px;color:#815b12;font-size:12px}.field{display:grid;gap:6px;margin-top:17px}.field label{font-size:12px;font-weight:800}.field input{width:100%;padding:12px;border:1px solid #cbd5e1;border-radius:9px;font:inherit}.checks{display:flex;gap:10px;margin:18px 0;color:#5d6b80;font-size:12px}.checks input{margin-top:4px}button{width:100%;border:0;border-radius:9px;background:#1d3559;color:#fff;padding:13px;font-size:13px;font-weight:900;cursor:pointer}button:hover{background:#112747}.small{margin-top:15px;color:#78869a;font-size:11px;line-height:1.6}</style></head><body>',
+    '<style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f4f6fa;color:#182235;font:15px/1.5 system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;padding:24px}.card{width:min(100%,480px);border:1px solid #dce3ed;border-radius:18px;background:#fff;padding:30px;box-shadow:0 14px 48px #17203312}.brand{font-size:11px;font-weight:900;letter-spacing:.12em;color:#31598f}.mark{display:grid;place-items:center;width:46px;height:46px;border-radius:12px;background:#172b49;color:#fff;font-weight:900;margin:16px 0}.muted{color:#637086;font-size:13px}.notice{background:#fff8e9;border:1px solid #e9cd8e;border-radius:9px;padding:10px;color:#815b12;font-size:12px}.field{display:grid;gap:6px;margin-top:17px}.field label{font-size:12px;font-weight:800}.field input{width:100%;padding:12px;border:1px solid #cbd5e1;border-radius:9px;font:inherit}.checks{display:flex;gap:10px;margin:18px 0;color:#5d6b80;font-size:12px}.checks input{margin-top:4px}button{width:100%;border:0;border-radius:9px;background:#1d3559;color:#fff;padding:13px;font-size:13px;font-weight:900;cursor:pointer}button:hover{background:#112747}button:disabled{opacity:.7;cursor:wait}.small{margin-top:15px;color:#78869a;font-size:11px;line-height:1.6}</style></head><body>',
     '<main class="card"><div class="brand">UX AUDIT · SECURE CONNECTION</div><div class="mark">UX</div><h1>Connect ChatGPT to UX Audit</h1>',
     '<p class="muted"><strong>' + htmlEscape(input.clientName) + '</strong> is requesting access to your UX Audit workspace.</p>',
     '<div class="notice">AI audits and IA generation use your configured OpenRouter API key and may incur model charges. Only authorize this connection from your own ChatGPT account.</div>',
     error ? '<p class="notice">' + htmlEscape(error) + '</p>' : "",
-    '<form method="post" action="' + htmlEscape(issuer + "/api/mcp/oauth/authorize") + '">' + hidden,
+    '<form id="authorize-form" method="post" action="/api/mcp/oauth/authorize" accept-charset="UTF-8">' + hidden,
     '<div class="field"><label for="password">UX Audit MCP connection code</label><input id="password" name="password" type="password" required autocomplete="current-password" autofocus></div>',
     '<div class="checks"><input id="consent" name="consent" type="checkbox" value="yes" required><label for="consent">I approve access to discover public sites, run desktop/mobile screenshot audits, read saved audit findings, and generate proposed information architectures.</label></div>',
-    '<button type="submit">Authorize ChatGPT</button></form>',
+    '<button id="authorize-button" type="submit">Authorize ChatGPT</button></form>',
+    '<p id="submit-status" class="small" role="status" aria-live="polite"></p>',
+    '<script>var f=document.getElementById("authorize-form");if(f){f.addEventListener("submit",function(){var b=document.getElementById("authorize-button");var s=document.getElementById("submit-status");if(b){b.disabled=true;b.textContent="Authorizing…";}if(s){s.textContent="Submitting authorization securely. You should return to ChatGPT shortly.";}});}</script>',
     '<p class="small">The proposal does not change the live website. You can revoke the connection by rotating the MCP OAuth secret in Vercel and reconnecting. Keep this connection code private.</p></main></body></html>',
   ].join("");
   return new Response(html, { status: 200, headers: {
     "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store",
-    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
   }});
 }
 export async function GET(request: Request) {
@@ -61,7 +63,7 @@ export async function POST(request: Request) {
     const input = getInput(form);
     if (!input || form.get("consent") !== "yes") return new Response("Invalid authorization request or consent was not provided.", { status: 400 });
     if (input.resource !== issuer + "/api/mcp") return new Response("The OAuth resource does not match this MCP server.", { status: 400, headers: { "Cache-Control": "no-store" } });
-    const expectedPassword = readMcpEnv("UXAUDIT_MCP_LOGIN_PASSWORD") || readMcpEnv("UXAUDIT_MCP_LOGIN_CODE");
+    const expectedPassword = readMcpEnv("UXAUDIT_MCP_CONNECTION_CODE") || readMcpEnv("UXAUDIT_MCP_LOGIN_PASSWORD") || readMcpEnv("UXAUDIT_MCP_LOGIN_CODE");
     const suppliedPassword = String(form.get("password") || "");
     const actual = Buffer.from(suppliedPassword), expected = Buffer.from(expectedPassword);
     if (!expectedPassword || suppliedPassword.length > 500 || actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
