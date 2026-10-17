@@ -1,26 +1,26 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { getMcpIssuer, getMcpSecret, readMcpEnv, htmlEscape, signMcpPayload, verifyMcpPayload, MCP_SCOPES } from "@/lib/mcp-oauth";
 export const runtime = "nodejs";
-type AuthorizeInput = { clientId: string; redirectUri: string; state: string; scope: string; challenge: string; method: string; clientName: string };
+type AuthorizeInput = { clientId: string; redirectUri: string; state: string; scope: string; challenge: string; method: string; clientName: string; resource: string };
 function getInput(values: URLSearchParams | FormData): AuthorizeInput | null {
   const val = (key: string) => String(values.get(key) || "");
   const clientId = val("client_id");
   const client = verifyMcpPayload(clientId.startsWith("uxmcp_") ? clientId.slice(6) : "", "client");
   const redirectUri = val("redirect_uri"), state = val("state");
   const scope = val("scope") || "audit:read audit:run ia:generate offline_access";
-  const challenge = val("code_challenge"), method = val("code_challenge_method");
+  const challenge = val("code_challenge"), method = val("code_challenge_method"), resource = val("resource");
   const redirects = Array.isArray(client?.redirect_uris) ? client.redirect_uris.filter((x): x is string => typeof x === "string") : [];
   const requested = scope.split(/\s+/).filter(Boolean);
   if (!client || !redirects.includes(redirectUri) || val("response_type") !== "code" || method !== "S256" ||
       !/^[A-Za-z0-9_-]{43,128}$/.test(challenge) || state.length > 2048 ||
       requested.some(value => !(MCP_SCOPES as readonly string[]).includes(value))) return null;
-  return { clientId, redirectUri, state, scope: [...new Set(requested)].join(" "), challenge, method, clientName: String(client.client_name || "ChatGPT MCP client") };
+  return { clientId, redirectUri, state, scope: [...new Set(requested)].join(" "), challenge, method, clientName: String(client.client_name || "ChatGPT MCP client"), resource };
 }
 function htmlPage(issuer: string, input: AuthorizeInput, error = ""): Response {
   const hidden = [
     ["response_type", "code"], ["client_id", input.clientId], ["redirect_uri", input.redirectUri],
     ["state", input.state], ["scope", input.scope], ["code_challenge", input.challenge],
-    ["code_challenge_method", input.method],
+    ["code_challenge_method", input.method], ["resource", input.resource],
   ].map(([name, value]) => '<input type="hidden" name="' + name + '" value="' + htmlEscape(value) + '">').join("");
   const html = [
     '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect UX Audit</title>',
@@ -43,9 +43,12 @@ function htmlPage(issuer: string, input: AuthorizeInput, error = ""): Response {
 export async function GET(request: Request) {
   try {
     getMcpSecret();
+    const issuer = getMcpIssuer(request);
     const input = getInput(new URL(request.url).searchParams);
     if (!input) return new Response("Invalid OAuth authorization request. Restart the connection from ChatGPT.", { status: 400, headers: { "Cache-Control": "no-store" } });
-    return htmlPage(getMcpIssuer(request), input);
+    const resource = input.resource || issuer + "/api/mcp";
+    if (resource !== issuer + "/api/mcp") return new Response("The OAuth resource does not match this MCP server.", { status: 400, headers: { "Cache-Control": "no-store" } });
+    return htmlPage(issuer, { ...input, resource });
   } catch {
     return new Response("UX Audit MCP OAuth is not configured on this deployment.", { status: 503 });
   }
@@ -57,6 +60,7 @@ export async function POST(request: Request) {
     const form = await request.formData();
     const input = getInput(form);
     if (!input || form.get("consent") !== "yes") return new Response("Invalid authorization request or consent was not provided.", { status: 400 });
+    if (input.resource !== issuer + "/api/mcp") return new Response("The OAuth resource does not match this MCP server.", { status: 400, headers: { "Cache-Control": "no-store" } });
     const expectedPassword = readMcpEnv("UXAUDIT_MCP_LOGIN_PASSWORD") || readMcpEnv("UXAUDIT_MCP_LOGIN_CODE");
     const suppliedPassword = String(form.get("password") || "");
     const actual = Buffer.from(suppliedPassword), expected = Buffer.from(expectedPassword);
@@ -67,7 +71,7 @@ export async function POST(request: Request) {
     const code = signMcpPayload({
       typ: "code", jti: randomUUID(), iss: issuer, sub: "uxaudit-owner", client_id: input.clientId,
       redirect_uri: input.redirectUri, code_challenge: input.challenge, scope: input.scope,
-      iat: now, exp: now + 300,
+      resource: input.resource, iat: now, exp: now + 300,
     });
     const callback = new URL(input.redirectUri);
     callback.searchParams.set("code", code);

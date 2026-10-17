@@ -48,8 +48,17 @@ function jsonRpcError(id: string | number | null | undefined, code: number, mess
   return Response.json({ jsonrpc: "2.0", id: id ?? null, error: { code, message } }, { headers: { "Cache-Control": "no-store" } });
 }
 function unauthorized(request: Request) {
-  const metadata = getMcpIssuer(request) + "/.well-known/oauth-protected-resource";
-  return Response.json({ error: "unauthorized", error_description: "A valid UX Audit MCP OAuth token is required." }, { status: 401, headers: { "WWW-Authenticate": 'Bearer resource_metadata="' + metadata + '"', "Cache-Control": "no-store" } });
+  const metadata = getMcpIssuer(request) + "/.well-known/oauth-protected-resource/api/mcp";
+  return Response.json(
+    { error: "unauthorized", error_description: "A valid UX Audit MCP OAuth token is required." },
+    {
+      status: 401,
+      headers: {
+        "WWW-Authenticate": 'Bearer resource_metadata="' + metadata + '", scope="audit:read audit:run ia:generate"',
+        "Cache-Control": "no-store",
+      },
+    },
+  );
 }
 function getBearer(request: Request): string {
   const header = request.headers.get("authorization") || "";
@@ -273,7 +282,9 @@ export async function POST(request: Request) {
   }
   return jsonRpcError(id, -32601, "Method not found.");
 }
-export async function GET() {
-  return new Response("UX Audit MCP uses Streamable HTTP POST requests.", { status: 405, headers: { Allow: "POST, OPTIONS", "Cache-Control": "no-store" } });
+export async function GET(request: Request) {
+  // Advertise OAuth discovery on the initial unauthenticated probe, even when
+  // the client first tries GET against a Streamable HTTP endpoint.
+  return unauthorized(request);
 }
 export async function OPTIONS() { return new Response(null, { status: 204, headers: { Allow: "POST, OPTIONS", "Cache-Control": "no-store" } }); }
