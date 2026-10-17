@@ -4,9 +4,12 @@ const nextConfig = {
     // Externalize Chromium so Next/Webpack preserves the package's runtime path.
     serverComponentsExternalPackages: ["@sparticuz/chromium", "puppeteer-core"],
     // The .br binaries are loaded by filesystem path, so file tracing may not
-    // discover them automatically. Include them in the screenshot API function.
+    // discover them automatically. Include them in functions that capture screenshots.
     outputFileTracingIncludes: {
       "/api/capture-url": [
+        "./node_modules/@sparticuz/chromium/bin/**/*",
+      ],
+      "/api/mcp": [
         "./node_modules/@sparticuz/chromium/bin/**/*",
       ],
     },
