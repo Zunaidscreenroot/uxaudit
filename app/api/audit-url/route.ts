@@ -61,19 +61,21 @@ export async function POST(req: Request) {
       : [];
     if (!models.length) return Response.json({ error: "No verified model is available." }, { status: 503 });
 
+    const auditMode = body?.auditMode === "mobile" ? "mobile" : "desktop";
+    const viewport = auditMode === "mobile" ? { width: 393, height: 852 } : { width: 1440, height: 900 };
     const requestStarted = Date.now();
     const captureStarted = Date.now();
     console.info("[uxaudit] screenshot_capture_start", JSON.stringify({
-      provider: "thum.io→browserless fallback", host: u.hostname, viewport: { width: 1440, height: 900 }
+      provider: "thum.io→browserless fallback", host: u.hostname, auditMode, viewport, fullPage: true
     }));
 
-    const captured = await captureWebsiteScreenshot({ url: u.href, width: 1440, height: 900 });
+    const captured = await captureWebsiteScreenshot({ url: u.href, width: viewport.width, height: viewport.height });
     const bytes = captured.bytes;
     console.info("[uxaudit] screenshot_provider_selected", JSON.stringify({
       provider: captured.provider, host: u.hostname, elapsedMs: Date.now() - captureStarted, bytes: bytes.length
     }));
     console.info("[uxaudit] screenshot_capture_ok", JSON.stringify({
-      provider: captured.provider, elapsedMs: Date.now() - captureStarted, bytes: bytes.length
+      provider: captured.provider, elapsedMs: Date.now() - captureStarted, bytes: bytes.length, auditMode, viewport, fullPage: true
     }));
     if (!bytes.length || bytes.length > 15 * 1024 * 1024) {
       return Response.json({ error: "Screenshot was empty or too large." }, { status: 502 });
