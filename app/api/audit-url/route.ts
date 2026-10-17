@@ -54,11 +54,6 @@ export async function POST(req: Request) {
       }
     }
 
-    const token = process.env.BROWSERLESS_API_TOKEN;
-    if (!token) {
-      console.error("[uxaudit] browserless_config_missing");
-      return Response.json({ error: "Browserless screenshot service is not configured. Set BROWSERLESS_API_TOKEN in the production environment." }, { status: 503 });
-    }
 
     const models = Array.isArray(body?.verifiedModels)
       ? body.verifiedModels.filter((m: any) => m?.provider === "OpenRouter" && typeof m.model === "string").slice(0, 3)
@@ -68,34 +63,24 @@ export async function POST(req: Request) {
     const requestStarted = Date.now();
     const captureStarted = Date.now();
     console.info("[uxaudit] screenshot_capture_start", JSON.stringify({
-      provider: "browserless.io", host: u.hostname, viewport: { width: 1440, height: 900 }
+      provider: "thum.io", host: u.hostname, viewport: { width: 1440, height: 900 }
     }));
 
-    const shot = await fetch("https://production-sfo.browserless.io/screenshot?token=" + encodeURIComponent(token), {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "image/jpeg" },
-      body: JSON.stringify({
-        url: u.href,
-        viewport: { width: 1440, height: 900, deviceScaleFactor: 1 },
-        options: { type: "jpeg", quality: 88, fullPage: false, timeout: 25000 },
-        gotoOptions: { waitUntil: "domcontentloaded", timeout: 25000 }
-      }),
-      signal: AbortSignal.timeout(35000),
-      cache: "no-store"
-    });
+    const captureUrl = "https://image.thum.io/get/width/1440/crop/900/noanimate/" + u.href;
+    const shot = await fetch(captureUrl, { method: "GET", headers: { Accept: "image/*" }, signal: AbortSignal.timeout(30000), cache: "no-store" });
 
     const contentType = shot.headers.get("content-type") || "";
     if (!shot.ok || !contentType.startsWith("image/")) {
       const detail = !shot.ok ? "HTTP " + shot.status : "non-image response";
       console.warn("[uxaudit] screenshot_capture_failed", JSON.stringify({
-        provider: "browserless.io", host: u.hostname, status: shot.status, contentType
+        provider: "thum.io", host: u.hostname, status: shot.status, contentType
       }));
-      return Response.json({ error: "Browserless could not capture this page (" + detail + "). Try again later or upload a screenshot of the actual page." }, { status: 502 });
+      return Response.json({ error: "thum.io could not capture this page (" + detail + "). Try again later or upload a screenshot of the actual page." }, { status: 502 });
     }
 
     const bytes = Buffer.from(await shot.arrayBuffer());
     console.info("[uxaudit] screenshot_capture_ok", JSON.stringify({
-      provider: "browserless.io", elapsedMs: Date.now() - captureStarted, bytes: bytes.length, contentType
+      provider: "thum.io", elapsedMs: Date.now() - captureStarted, bytes: bytes.length, contentType
     }));
     if (!bytes.length || bytes.length > 15 * 1024 * 1024) {
       return Response.json({ error: "Screenshot was empty or too large." }, { status: 502 });
