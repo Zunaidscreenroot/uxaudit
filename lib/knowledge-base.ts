@@ -106,7 +106,7 @@ export async function retrieveRelevantAuditKnowledge(query: string, limit = 6): 
     const rows = await supabaseRequest("audit_findings?select=finding,created_at,audits!audit_findings_audit_id_fkey(client_name,title,created_at)&order=created_at.desc&limit=120");
     if (!Array.isArray(rows) || !rows.length) return "";
     const stop = new Set(["the","and","for","with","from","that","this","into","your","have","has","are","was","were","will","their","they","them","page","site","website","user","users","visible","issue","finding","because","could","should","would","about","when","where","what","how","not","can","may","more","less"]);
-    const terms = (value: string) => [...new Set(value.toLowerCase().replace(/[^a-z0-9]+/g," ").split(/\\s+/).filter(w=>w.length>2&&!stop.has(w)))];
+    const terms = (value: string) => [...new Set(value.toLowerCase().replace(/[^a-z0-9]+/g," ").split(" ").filter(w=>w.length>2&&!stop.has(w)))];
     const queryTerms = terms(query);
     const ranked = rows.map((row:any) => {
       const finding = row.finding && typeof row.finding === "object" ? row.finding : {};
