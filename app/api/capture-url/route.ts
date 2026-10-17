@@ -59,7 +59,7 @@ export async function POST(req: Request) {
     const viewport = mobile ? { width: 393, height: 852 } : { width: 1440, height: 900 };
     const started = Date.now();
     console.info("[uxaudit] screenshot_capture_start", JSON.stringify({
-      provider: "thum.io→browserless fallback", host: url.hostname, auditMode, viewport, fullPage: false
+      provider: "thum.io→browserless fallback", host: url.hostname, auditMode, viewport, fullPage: true
     }));
 
     const captured = await captureWebsiteScreenshot({ url: url.href, width: viewport.width, height: viewport.height });
@@ -89,11 +89,11 @@ export async function POST(req: Request) {
       title, auditMode, viewportWidth: viewport.width, viewportHeight: viewport.height,
       viewport: { ...viewport, unit: "CSS px" },
       actualViewport: { innerWidth: viewport.width, innerHeight: viewport.height, devicePixelRatio: 1 },
-      captureMethod: captured.provider, fullPage: false
+      captureMethod: captured.provider, fullPage: true
     };
     console.info("[uxaudit] screenshot_capture_ok", JSON.stringify({
       provider: captured.provider, host: url.hostname, elapsedMs: Date.now() - started,
-      auditMode, screenshot: { width: result.width, height: result.height }, fullPage: false
+      auditMode, screenshot: { width: result.width, height: result.height }, fullPage: true
     }));
     return Response.json(result, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
