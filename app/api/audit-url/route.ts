@@ -1,9 +1,123 @@
 import { isIP } from "node:net";
+import { lookup } from "node:dns/promises";
 import { createAuditFromScreenshot } from "@/lib/audit";
 import { saveAudit } from "@/lib/knowledge-base";
-export const runtime="nodejs"; export const maxDuration=60;
-function privateHost(host:string){const h=host.toLowerCase().replace(/^\[|\]$/g,"");if(h==="localhost"||h.endsWith(".localhost")||h.endsWith(".local"))return true;const v=isIP(h);if(v===4){const [a,b]=h.split(".").map(Number);return a===10||a===127||a===0||(a===169&&b===254)||(a===172&&b>=16&&b<=31)||(a===192&&b===168)||a>=224;}return v===6&&(h==="::1"||h.startsWith("fc")||h.startsWith("fd")||h.startsWith("fe80:"));}
-export async function POST(req:Request){try{const body=await req.json();let u:URL;try{u=new URL(body?.url)}catch{return Response.json({error:"A valid selected page URL is required."},{status:400})}if(!["http:","https:"].includes(u.protocol)||privateHost(u.hostname))return Response.json({error:"Only public HTTP/HTTPS pages can be captured."},{status:400});if(body?.root&&new URL(body.root).origin!==u.origin)return Response.json({error:"Selected URL must belong to the discovered site."},{status:400});const models=Array.isArray(body?.verifiedModels)?body.verifiedModels.filter((m:any)=>m?.provider==="OpenRouter"&&typeof m.model==="string").slice(0,3):[];if(!models.length)return Response.json({error:"No verified model is available."},{status:503});
-const requestStarted=Date.now();console.info("[uxaudit] audit_request_start",JSON.stringify({host:u.hostname,path:u.pathname,modelCount:models.length}));const captureStarted=Date.now();console.info("[uxaudit] screenshot_capture_start",JSON.stringify({provider:"thum.io",timeoutMs:12000}));const shot=await fetch("https://image.thum.io/get/width/1440/crop/900/noanimate/"+u.href,{signal:AbortSignal.timeout(12000),cache:"no-store"});if(!shot.ok||!(shot.headers.get("content-type")||"").startsWith("image/"))return Response.json({error:"Screenshot service did not return an image. Try again later."},{status:502});const bytes=Buffer.from(await shot.arrayBuffer());console.info("[uxaudit] screenshot_capture_ok",JSON.stringify({elapsedMs:Date.now()-captureStarted,bytes:bytes.length,contentType:shot.headers.get("content-type")}));if(!bytes.length||bytes.length>15*1024*1024)return Response.json({error:"Screenshot was empty or too large."},{status:502});
-const title=u.pathname==="/"?"Homepage":u.pathname.split("/").filter(Boolean).pop()?.replace(/[-_]/g," ")||u.hostname;console.info("[uxaudit] ai_audit_start",JSON.stringify({elapsedMs:Date.now()-requestStarted,models:models.map((m:any)=>m.model)}));const result=await createAuditFromScreenshot(bytes,title+".jpg",undefined,models);console.info("[uxaudit] ai_audit_ok",JSON.stringify({elapsedMs:Date.now()-requestStarted,findings:result.pages[0]?.findings?.length}));result.pages=result.pages.map(p=>({...p,clientName:typeof body.projectName==="string"&&body.projectName.trim()?body.projectName.trim():u.hostname,url:u.href,title,createdAt:new Date().toISOString()}));const auditId=await saveAudit(result,"URL audit · "+(typeof body.projectName==="string"&&body.projectName.trim()?body.projectName.trim():u.hostname)+" · "+title);const response=Response.json({page:result.pages[0],auditId},{headers:{"Cache-Control":"no-store"}});console.info("[uxaudit] audit_request_ok",JSON.stringify({elapsedMs:Date.now()-requestStarted,auditId}));return response;
-}catch(e){console.error("[uxaudit] audit_request_failed",JSON.stringify({error:e instanceof Error?e.message:"Could not capture and audit this page."}));return Response.json({error:e instanceof Error?e.message:"Could not capture and audit this page."},{status:502})}}
+
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
+function privateHost(host: string) {
+  const h = host.toLowerCase().replace(/^\[|\]$/g, "");
+  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local")) return true;
+  const v = isIP(h);
+  if (v === 4) {
+    const [a, b] = h.split(".").map(Number);
+    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a >= 224;
+  }
+  return v === 6 && (h === "::1" || h.startsWith("fc") || h.startsWith("fd") || h.startsWith("fe80:"));
+}
+
+async function resolvesToPrivateAddress(host: string) {
+  if (isIP(host.replace(/^\[|\]$/g, ""))) return privateHost(host);
+  try {
+    const addresses = await lookup(host, { all: true, verbatim: true });
+    return !addresses.length || addresses.some((address) => privateHost(address.address));
+  } catch {
+    return true;
+  }
+}
+
+export async function POST(req: Request) {
+  try {
+    const body = await req.json();
+    let u: URL;
+    try {
+      u = new URL(body?.url);
+    } catch {
+      return Response.json({ error: "A valid selected page URL is required." }, { status: 400 });
+    }
+
+    if (!["http:", "https:"].includes(u.protocol) || privateHost(u.hostname)) {
+      return Response.json({ error: "Only public HTTP/HTTPS pages can be captured." }, { status: 400 });
+    }
+    if (await resolvesToPrivateAddress(u.hostname)) {
+      return Response.json({ error: "The selected hostname did not resolve to a verified public address." }, { status: 400 });
+    }
+    if (body?.root) {
+      try {
+        if (new URL(body.root).origin !== u.origin) {
+          return Response.json({ error: "Selected URL must belong to the discovered site." }, { status: 400 });
+        }
+      } catch {
+        return Response.json({ error: "The discovered website root is invalid." }, { status: 400 });
+      }
+    }
+
+    const token = process.env.BROWSERLESS_API_TOKEN;
+    if (!token) {
+      console.error("[uxaudit] browserless_config_missing");
+      return Response.json({ error: "Browserless screenshot service is not configured. Set BROWSERLESS_API_TOKEN in the production environment." }, { status: 503 });
+    }
+
+    const models = Array.isArray(body?.verifiedModels)
+      ? body.verifiedModels.filter((m: any) => m?.provider === "OpenRouter" && typeof m.model === "string").slice(0, 3)
+      : [];
+    if (!models.length) return Response.json({ error: "No verified model is available." }, { status: 503 });
+
+    const requestStarted = Date.now();
+    const captureStarted = Date.now();
+    console.info("[uxaudit] screenshot_capture_start", JSON.stringify({
+      provider: "browserless.io", host: u.hostname, viewport: { width: 1440, height: 900 }
+    }));
+
+    const shot = await fetch("https://production-sfo.browserless.io/screenshot?token=" + encodeURIComponent(token), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "image/jpeg" },
+      body: JSON.stringify({
+        url: u.href,
+        viewport: { width: 1440, height: 900, deviceScaleFactor: 1 },
+        options: { type: "jpeg", quality: 88, fullPage: false, timeout: 25000 },
+        gotoOptions: { waitUntil: "domcontentloaded", timeout: 25000 }
+      }),
+      signal: AbortSignal.timeout(35000),
+      cache: "no-store"
+    });
+
+    const contentType = shot.headers.get("content-type") || "";
+    if (!shot.ok || !contentType.startsWith("image/")) {
+      const detail = !shot.ok ? "HTTP " + shot.status : "non-image response";
+      console.warn("[uxaudit] screenshot_capture_failed", JSON.stringify({
+        provider: "browserless.io", host: u.hostname, status: shot.status, contentType
+      }));
+      return Response.json({ error: "Browserless could not capture this page (" + detail + "). Try again later or upload a screenshot of the actual page." }, { status: 502 });
+    }
+
+    const bytes = Buffer.from(await shot.arrayBuffer());
+    console.info("[uxaudit] screenshot_capture_ok", JSON.stringify({
+      provider: "browserless.io", elapsedMs: Date.now() - captureStarted, bytes: bytes.length, contentType
+    }));
+    if (!bytes.length || bytes.length > 15 * 1024 * 1024) {
+      return Response.json({ error: "Screenshot was empty or too large." }, { status: 502 });
+    }
+
+    const title = u.pathname === "/" ? "Homepage" : u.pathname.split("/").filter(Boolean).pop()?.replace(/[-_]/g, " ") || u.hostname;
+    console.info("[uxaudit] ai_audit_start", JSON.stringify({ elapsedMs: Date.now() - requestStarted, models: models.map((m: any) => m.model) }));
+    const result = await createAuditFromScreenshot(bytes, title + ".jpg", undefined, models);
+    console.info("[uxaudit] ai_audit_ok", JSON.stringify({ elapsedMs: Date.now() - requestStarted, findings: result.pages[0]?.findings?.length }));
+    result.pages = result.pages.map((p) => ({
+      ...p,
+      clientName: typeof body.projectName === "string" && body.projectName.trim() ? body.projectName.trim() : u.hostname,
+      url: u.href,
+      title,
+      createdAt: new Date().toISOString()
+    }));
+    const auditId = await saveAudit(result, "URL audit · " + (typeof body.projectName === "string" && body.projectName.trim() ? body.projectName.trim() : u.hostname) + " · " + title);
+    console.info("[uxaudit] audit_request_ok", JSON.stringify({ elapsedMs: Date.now() - requestStarted, auditId }));
+    return Response.json({ page: result.pages[0], auditId }, { headers: { "Cache-Control": "no-store" } });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "Could not capture and audit this page.";
+    console.error("[uxaudit] audit_request_failed", JSON.stringify({ error: message }));
+    return Response.json({ error: message }, { status: 502 });
+  }
+}
