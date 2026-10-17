@@ -96,7 +96,17 @@ useEffect(()=>{if(sessionId&&data){saveSession().catch(e=>setError(e instanceof 
   }
  };
 
- useEffect(()=>{\n  const onPaste=(event:ClipboardEvent)=>{\n   if(!manualCaptureNeeded||manualUploadBusy||!manualCaptureTarget)return;\n   const item=Array.from(event.clipboardData?.items||[]).find(entry=>entry.type.startsWith("image/"));\n   const file=item?.getAsFile();\n   if(file){event.preventDefault();void auditManualScreenshot(file);}\n  };\n  window.addEventListener("paste",onPaste);\n  return()=>window.removeEventListener("paste",onPaste);\n },[manualCaptureNeeded,manualUploadBusy,manualCaptureTarget,auditMode]);\n async function auditManualScreenshot(file:File){
+ useEffect(()=>{
+  const onPaste=(event:ClipboardEvent)=>{
+   if(!manualCaptureNeeded||manualUploadBusy||!manualCaptureTarget)return;
+   const item=Array.from(event.clipboardData?.items||[]).find(entry=>entry.type.startsWith("image/"));
+   const file=item?.getAsFile();
+   if(file){event.preventDefault();void auditManualScreenshot(file);}
+  };
+  window.addEventListener("paste",onPaste);
+  return()=>window.removeEventListener("paste",onPaste);
+ },[manualCaptureNeeded,manualUploadBusy,manualCaptureTarget,auditMode]);
+ async function auditManualScreenshot(file:File){
   if(manualUploadBusy||!manualCaptureTarget)return;
   if(!/^image\/(png|jpeg|webp)$/.test(file.type)){setError("Use a PNG, JPEG or WebP screenshot.");return;}
   if(file.size>12*1024*1024){setError("This screenshot is over 12 MB. Export a smaller JPG or WebP image and try again.");return;}
