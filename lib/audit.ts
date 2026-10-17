@@ -323,6 +323,9 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   const visionCandidates=[visionModel,...allowedModels.filter(m=>m.model!==visionModel.model)];
   for(let i=0;i<visionCandidates.length;i++){const candidate=visionCandidates[i];const timeoutMs=i===0?18000:i===1?10000:8000;try{visualPass=await createVisualPass(candidate,capture,timeoutMs,auditMode);break;}catch(e){visualErrors.push(candidate.model+": "+(e instanceof Error?e.message:"failed"));}}
   if(!visualPass)throw new Error("OpenRouter Auto Router could not analyze the screenshot. "+visualErrors.join(" | "));
+  const captureEvidence=[visualPass.pageSummary,...visualPass.observations.map(o=>o.issue+" "+o.element+" "+o.whyItMatters)].join(" ").toLowerCase();
+  const blockedCapturePatterns=[/err_tunnel_connection_failed/,/err_connection_(?:failed|timed_out|refused)/,/dns_probe_finished_nxdomain/,/this site can.t be reached/,/403 forbidden/,/access denied/,/verify you are human/,/checking your browser/,/cloudflare ray id/,/robot check/];
+  if(blockedCapturePatterns.some(pattern=>pattern.test(captureEvidence)))throw new Error("Screenshot capture appears to show a browser, proxy, CDN, or access-block page rather than the intended website. No UX findings were generated. Open the site in your normal browser and upload/paste a screenshot of the actual page.");
   onStage?.({ id: "analyse", label: "Image → text", detail: `${visualPass.clientName} · ${visualPass.observations.length} visual regions identified on the full screenshot.`, status: "complete" });
 
   onStage?.({ id: "quality", label: "OpenRouter UX reasoning", detail: "OpenRouter Auto Router · low-cost tier · text-only UX research and business analysis. OpenRouter selects the reasoning model.", status: "active" });
