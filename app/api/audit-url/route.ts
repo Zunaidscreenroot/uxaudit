@@ -73,7 +73,7 @@ export async function POST(req: Request) {
       provider: captured.provider, host: u.hostname, elapsedMs: Date.now() - captureStarted, bytes: bytes.length
     }));
     console.info("[uxaudit] screenshot_capture_ok", JSON.stringify({
-      provider: "thum.io", elapsedMs: Date.now() - captureStarted, bytes: bytes.length, provider: captured.provider
+      provider: captured.provider, elapsedMs: Date.now() - captureStarted, bytes: bytes.length
     }));
     if (!bytes.length || bytes.length > 15 * 1024 * 1024) {
       return Response.json({ error: "Screenshot was empty or too large." }, { status: 502 });
