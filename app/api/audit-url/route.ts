@@ -66,7 +66,7 @@ export async function POST(req: Request) {
       provider: "thum.io", host: u.hostname, viewport: { width: 1440, height: 900 }
     }));
 
-    const captureUrl = "https://image.thum.io/get/width/1440/crop/900/noanimate/" + u.href;
+    const captureUrl = "https://image.thum.io/get/width/1440/viewportWidth/1440/crop/900/maxAge/0/noanimate/" + u.href;
     const shot = await fetch(captureUrl, { method: "GET", headers: { Accept: "image/*" }, signal: AbortSignal.timeout(30000), cache: "no-store" });
 
     const contentType = shot.headers.get("content-type") || "";
