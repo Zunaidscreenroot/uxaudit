@@ -86,8 +86,6 @@ export async function POST(request: Request) {
     const callback = new URL(input.redirectUri);
     callback.searchParams.set("code", code);
     if (input.state) callback.searchParams.set("state", input.state);
-    // RFC 9207 issuer identification helps OAuth clients validate the callback's authorization server.
-    callback.searchParams.set("iss", issuer);
     console.info("[uxaudit] mcp_oauth_authorize_redirect", JSON.stringify({ callbackHost: callback.hostname, issuerIncluded: true }));
     return Response.redirect(callback.toString(), 303);
   } catch (error) {
