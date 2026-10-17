@@ -1,12 +1,12 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type Finding={severity:string;category:string;title:string;recommendation:string;};
 type Report={name:string;url:string;findings:Finding[];error?:string;};
 const initial=[{name:"Competitor 1",url:""},{name:"Competitor 2",url:""},{name:"Competitor 3",url:""}];
 function normalizeUrl(raw:string){const s=raw.trim();if(!s)return "";const u=new URL(/^https?:\/\//i.test(s)?s:"https://"+s);if(!["http:","https:"].includes(u.protocol))throw new Error("Use a public HTTP or HTTPS website.");return u.origin;}
 export default function BenchmarkPage(){
- const [clientName,setClientName]=useState("Ujjivan Small Finance Bank");
+ const [connection,setConnection]=useState<{connected:boolean;error?:string}|null>(null);\n useEffect(()=>{let cancelled=false;fetch("/api/openrouter-status",{cache:"no-store"}).then(r=>r.json()).then(d=>{if(!cancelled)setConnection(d)}).catch(()=>{if(!cancelled)setConnection({connected:false,error:"Could not check OpenRouter connection"})});return()=>{cancelled=true}},[]);\n const [clientName,setClientName]=useState("Ujjivan Small Finance Bank");
  const [clientUrl,setClientUrl]=useState("https://www.ujjivansfb.in/");
  const [competitors,setCompetitors]=useState(initial);
  const [busy,setBusy]=useState(false);
@@ -39,7 +39,7 @@ export default function BenchmarkPage(){
  const count=(r:Report,severity:string)=>r.findings.filter(f=>f.severity.toLowerCase()===severity).length;
  return <main style={{minHeight:"100vh",background:"#f4f6f9",color:"#172033",fontFamily:"Inter,Arial,sans-serif",padding:"26px clamp(16px,4vw,56px)"}}>
   <div style={{maxWidth:1320,margin:"0 auto"}}>
-   <nav style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:16,borderBottom:"1px solid #dce2ea",paddingBottom:18}}><a href="/" style={{fontSize:20,fontWeight:850,color:"#172033",textDecoration:"none"}}>UX AUDIT</a><div style={{display:"flex",gap:16,fontSize:13}}><a href="/site-map" style={{color:"#34445d"}}>IA & Audit</a><a href="/benchmark" style={{color:"#34445d",fontWeight:800}}>Benchmark</a></div></nav>
+   <nav style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:16,borderBottom:"1px solid #dce2ea",paddingBottom:18}}><a href="/" style={{fontSize:20,fontWeight:850,color:"#172033",textDecoration:"none"}}>UX AUDIT</a><div style={{display:"flex",gap:16,alignItems:"center",fontSize:13,flexWrap:"wrap"}}><a href="/site-map" style={{color:"#34445d"}}>IA & Audit</a><a href="/benchmark" style={{color:"#34445d",fontWeight:800}}>Benchmark</a><span title={connection?.error||"OpenRouter status"} style={{border:"1px solid "+(connection?.connected?"#b6ddc2":"#dfe3e8"),background:connection?.connected?"#e9f7ef":"#fff",color:connection?.connected?"#18723d":"#647084",borderRadius:8,padding:"8px 10px",fontSize:11,fontWeight:800}}>{connection?.connected?"● OpenRouter connected":connection?"● OpenRouter unavailable":"Checking OpenRouter…"}</span></div></nav>
    <header style={{padding:"34px 0 24px"}}><div style={{fontSize:11,fontWeight:850,letterSpacing:1.8,color:"#64748b"}}>COMPETITIVE UX INTELLIGENCE</div><h1 style={{fontSize:"clamp(34px,5vw,58px)",letterSpacing:"-2px",lineHeight:1.03,maxWidth:900,margin:"12px 0"}}>Benchmark the experience, not just the visuals.</h1><p style={{maxWidth:820,color:"#647084",fontSize:16,lineHeight:1.7}}>Audit a client and up to three competitors using the same screenshot-based UX workflow. Compare evidence-backed issues by severity and category—without pretending the finding count is a universal UX score.</p></header>
    <section style={{background:"#fff",border:"1px solid #e0e5ec",borderRadius:16,padding:"22px",boxShadow:"0 8px 24px #17203308"}}>
     <h2 style={{fontSize:19,margin:"0 0 16px"}}>1. Client baseline</h2><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:14}}><label style={{display:"grid",gap:7,fontSize:12,fontWeight:750}}>Client / project name<input value={clientName} onChange={e=>setClientName(e.target.value)} style={inputStyle}/></label><label style={{display:"grid",gap:7,fontSize:12,fontWeight:750}}>Client homepage URL<input value={clientUrl} onChange={e=>setClientUrl(e.target.value)} placeholder="https://client.com" style={inputStyle}/></label></div>
