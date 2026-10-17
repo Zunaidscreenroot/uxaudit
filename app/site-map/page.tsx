@@ -96,7 +96,7 @@ useEffect(()=>{if(sessionId&&data){saveSession().catch(e=>setError(e instanceof 
   }
  };
 
- async function auditManualScreenshot(file:File){
+ useEffect(()=>{\n  const onPaste=(event:ClipboardEvent)=>{\n   if(!manualCaptureNeeded||manualUploadBusy||!manualCaptureTarget)return;\n   const item=Array.from(event.clipboardData?.items||[]).find(entry=>entry.type.startsWith("image/"));\n   const file=item?.getAsFile();\n   if(file){event.preventDefault();void auditManualScreenshot(file);}\n  };\n  window.addEventListener("paste",onPaste);\n  return()=>window.removeEventListener("paste",onPaste);\n },[manualCaptureNeeded,manualUploadBusy,manualCaptureTarget,auditMode]);\n async function auditManualScreenshot(file:File){
   if(manualUploadBusy||!manualCaptureTarget)return;
   if(!/^image\/(png|jpeg|webp)$/.test(file.type)){setError("Use a PNG, JPEG or WebP screenshot.");return;}
   if(file.size>12*1024*1024){setError("This screenshot is over 12 MB. Export a smaller JPG or WebP image and try again.");return;}
@@ -182,7 +182,7 @@ useEffect(()=>{if(sessionId&&data){saveSession().catch(e=>setError(e instanceof 
    {manualCaptureNeeded && manualCaptureTarget && <article style={{marginTop:14,padding:18,border:"1px solid #e8c36e",borderRadius:12,background:"#fffaf0"}}>
     <div className="iaEyebrow">MANUAL SCREENSHOT FALLBACK</div>
     <h3 style={{margin:"8px 0",fontSize:17}}>The site is blocking automated capture</h3>
-    <p style={{fontSize:13,lineHeight:1.6,color:"#695b42",maxWidth:840}}>Open this URL in your normal browser and capture the actual website page (not the CDN/security error). Use a {auditMode==="mobile"?"mobile viewport around 393 × 852 CSS pixels":"desktop viewport around 1440 CSS pixels wide"} and capture the full page where possible. Upload the screenshot here and UX Audit will run the same AI analysis on it.</p>
+    <p style={{fontSize:13,lineHeight:1.6,color:"#695b42",maxWidth:840}}>Open this URL in your normal browser and capture the actual website page (not the CDN/security error). You can upload a file or copy the screenshot and press Ctrl/⌘+V here. Use a {auditMode==="mobile"?"mobile viewport around 393 × 852 CSS pixels":"desktop viewport around 1440 CSS pixels wide"} and capture the full page where possible. Upload the screenshot here and UX Audit will run the same AI analysis on it.</p>
     <div style={{fontSize:12,color:"#6b7280",overflowWrap:"anywhere",marginBottom:12}}>{manualCaptureTarget}</div>
     <label style={{display:"inline-flex",flexDirection:"column",gap:8,fontSize:12,fontWeight:750,color:"#334155"}}>{manualUploadBusy?"Analysing uploaded screenshot…":`Upload actual ${auditMode==="mobile"?"mobile 393 × 852":"desktop 1440"} page screenshot (PNG, JPEG or WebP)`}
      <input type="file" accept="image/png,image/jpeg,image/webp" disabled={manualUploadBusy} onChange={e=>{const file=e.currentTarget.files?.[0];if(file)void auditManualScreenshot(file);e.currentTarget.value="";}} style={{maxWidth:"100%",padding:10,border:"1px solid #d8dee7",borderRadius:8,background:"#fff"}}/>
