@@ -1,6 +1,7 @@
 import { isIP } from "node:net";
 import { lookup } from "node:dns/promises";
 import { createAuditFromScreenshot } from "@/lib/audit";
+import { captureWebsiteScreenshot } from "@/lib/capture-screenshot";
 import { saveAudit } from "@/lib/knowledge-base";
 
 export const runtime = "nodejs";
@@ -63,24 +64,16 @@ export async function POST(req: Request) {
     const requestStarted = Date.now();
     const captureStarted = Date.now();
     console.info("[uxaudit] screenshot_capture_start", JSON.stringify({
-      provider: "thum.io", host: u.hostname, viewport: { width: 1440, height: 900 }
+      provider: "thum.io→browserless fallback", host: u.hostname, viewport: { width: 1440, height: 900 }
     }));
 
-    const captureUrl = "https://image.thum.io/get/width/1440/viewportWidth/1440/crop/900/maxAge/0/noanimate/" + u.href;
-    const shot = await fetch(captureUrl, { method: "GET", headers: { Accept: "image/*" }, signal: AbortSignal.timeout(30000), cache: "no-store" });
-
-    const contentType = shot.headers.get("content-type") || "";
-    if (!shot.ok || !contentType.startsWith("image/")) {
-      const detail = !shot.ok ? "HTTP " + shot.status : "non-image response";
-      console.warn("[uxaudit] screenshot_capture_failed", JSON.stringify({
-        provider: "thum.io", host: u.hostname, status: shot.status, contentType
-      }));
-      return Response.json({ error: "thum.io could not capture this page (" + detail + "). Try again later or upload a screenshot of the actual page." }, { status: 502 });
-    }
-
-    const bytes = Buffer.from(await shot.arrayBuffer());
+    const captured = await captureWebsiteScreenshot({ url: u.href, width: 1440, height: 900 });
+    const bytes = captured.bytes;
+    console.info("[uxaudit] screenshot_provider_selected", JSON.stringify({
+      provider: captured.provider, host: u.hostname, elapsedMs: Date.now() - captureStarted, bytes: bytes.length
+    }));
     console.info("[uxaudit] screenshot_capture_ok", JSON.stringify({
-      provider: "thum.io", elapsedMs: Date.now() - captureStarted, bytes: bytes.length, contentType
+      provider: "thum.io", elapsedMs: Date.now() - captureStarted, bytes: bytes.length, provider: captured.provider
     }));
     if (!bytes.length || bytes.length > 15 * 1024 * 1024) {
       return Response.json({ error: "Screenshot was empty or too large." }, { status: 502 });

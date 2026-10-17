@@ -1,6 +1,7 @@
 import { isIP } from "node:net";
 import { lookup } from "node:dns/promises";
 import sharp from "sharp";
+import { captureWebsiteScreenshot } from "@/lib/capture-screenshot";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -58,29 +59,12 @@ export async function POST(req: Request) {
     const viewport = mobile ? { width: 393, height: 852 } : { width: 1440, height: 900 };
     const started = Date.now();
     console.info("[uxaudit] screenshot_capture_start", JSON.stringify({
-      provider: "thum.io", host: url.hostname, auditMode, viewport, fullPage: false
+      provider: "thum.io→browserless fallback", host: url.hostname, auditMode, viewport, fullPage: false
     }));
 
-    const captureUrl = "https://image.thum.io/get/width/" + viewport.width + "/viewportWidth/" + viewport.width + "/crop/" + viewport.height + "/maxAge/0/noanimate/" + url.href;
-    const response = await fetch(captureUrl, { method: "GET", headers: { "Accept": "image/*" }, signal: AbortSignal.timeout(30000), cache: "no-store" });
-
-    if (!response.ok) {
-      const detail = (await response.text().catch(() => "")).slice(0, 500);
-      console.error("[uxaudit] browserless_capture_failed", JSON.stringify({
-        host: url.hostname, status: response.status, detail, elapsedMs: Date.now() - started
-      }));
-      return Response.json({
-        error: "thum.io could not capture this page (HTTP " + response.status + "). " + (detail || "Check the Browserless token, quota, and target-site access."),
-        code: "BROWSERLESS_CAPTURE_FAILED"
-      }, { status: 502, headers: { "Cache-Control": "no-store" } });
-    }
-
-    const contentType = response.headers.get("content-type") || "";
-    if (!contentType.startsWith("image/")) {
-      const detail = (await response.text().catch(() => "")).slice(0, 300);
-      throw new Error("thum.io returned a non-image response (" + contentType + "). " + detail);
-    }
-    const raw = Buffer.from(await response.arrayBuffer());
+    const captured = await captureWebsiteScreenshot({ url: url.href, width: viewport.width, height: viewport.height });
+    const raw = captured.bytes;
+    console.info("[uxaudit] screenshot_provider_selected", JSON.stringify({ provider: captured.provider, host: url.hostname, elapsedMs: Date.now() - started }));
     if (!raw.length || raw.length > 15 * 1024 * 1024) {
       throw new Error("The screenshot is empty or exceeds the 15 MB analysis limit.");
     }
@@ -105,10 +89,10 @@ export async function POST(req: Request) {
       title, auditMode, viewportWidth: viewport.width, viewportHeight: viewport.height,
       viewport: { ...viewport, unit: "CSS px" },
       actualViewport: { innerWidth: viewport.width, innerHeight: viewport.height, devicePixelRatio: 1 },
-      captureMethod: "thum.io", fullPage: false
+      captureMethod: captured.provider, fullPage: false
     };
     console.info("[uxaudit] screenshot_capture_ok", JSON.stringify({
-      provider: "thum.io", host: url.hostname, elapsedMs: Date.now() - started,
+      provider: captured.provider, host: url.hostname, elapsedMs: Date.now() - started,
       auditMode, screenshot: { width: result.width, height: result.height }, fullPage: false
     }));
     return Response.json(result, { headers: { "Cache-Control": "no-store" } });
