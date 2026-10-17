@@ -72,7 +72,7 @@ export async function POST(req: Request) {
       body: JSON.stringify({
         url: url.href,
         viewport: { ...viewport, deviceScaleFactor: 1, isMobile: mobile, hasTouch: mobile, isLandscape: false },
-        options: { type: "jpeg", quality: 88, fullPage: true, timeout: 35000 },
+        options: { type: "jpeg", quality: 88, fullPage: true },
         gotoOptions: { waitUntil: "domcontentloaded", timeout: 30000 },
         ...(mobile ? { userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1" } : {})
       }),
