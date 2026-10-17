@@ -119,7 +119,7 @@ export async function POST(req: Request) {
         ? "capture the actual page at a mobile viewport around 393 × 852 CSS pixels"
         : "capture the actual page as a full-page screenshot at about 1440 CSS pixels wide";
       const message = cloudfrontBlock || responseStatus === 403
-        ? "The target site returned a CDN/security block or challenge during automated screenshot capture (HTTP " + responseStatus + "). This is not a UX finding. Open the page in your normal browser, " + captureGuidance + ", and upload it in the audit workspace. Do not upload the CDN error or challenge page."
+        ? "The target site returned a CDN/security block or challenge during automated screenshot capture (HTTP " + responseStatus + "). This is not a UX finding. Open the page in your normal browser, " + captureGuidance + ", then return to the UX Audit landing page and choose \"Audit an attached screenshot\" to upload the real page. Do not upload the CDN error or challenge page."
         : "The target site requires authentication (HTTP 401), so automated capture cannot access the page. Open the page in your normal browser session and upload a screenshot of the actual page.";
       console.warn("[uxaudit] browser_capture_blocked", JSON.stringify({
         host: url.hostname, auditMode, status: responseStatus, cloudfrontBlock

@@ -38,16 +38,61 @@ function extractJson(text: string): unknown | null {
   return null;
 }
 
+function recoverVisualPassJson(text: string): unknown | null {
+  // Some vision providers add prose or truncate the outer JSON object despite
+  // JSON mode. Recover any individually complete observation objects instead
+  // of dropping an otherwise useful visual response.
+  const keyMatch = text.match(/"observations"\s*:\s*\[/) ?? text.match(/"visualObservations"\s*:\s*\[/) ?? text.match(/"findings"\s*:\s*\[/);
+  if (!keyMatch || keyMatch.index === undefined) return null;
+  const arrayStart = text.indexOf("[", keyMatch.index);
+  if (arrayStart < 0) return null;
+  const observations: Record<string, unknown>[] = [];
+  let objectStart = -1, depth = 0, inString = false, escaped = false;
+  for (let i = arrayStart + 1; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === "{") { if (depth === 0) objectStart = i; depth += 1; continue; }
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0 && objectStart >= 0) {
+        try {
+          const value = JSON.parse(text.slice(objectStart, i + 1));
+          if (value && typeof value === "object" && !Array.isArray(value)) observations.push(value as Record<string, unknown>);
+        } catch {}
+        objectStart = -1;
+      }
+    }
+    if (ch === "]" && depth === 0) break;
+  }
+  if (!observations.length) return null;
+  const readString = (key: string, fallback: string) => {
+    const match = text.match(new RegExp('"' + key + '"\\s*:\\s*("(?:\\\\.|[^"\\\\])*")'));
+    if (!match) return fallback;
+    try { const value = JSON.parse(match[1]); return typeof value === "string" ? value : fallback; } catch { return fallback; }
+  };
+  return {
+    clientName: readString("clientName", "Unknown client"),
+    pageSummary: readString("pageSummary", "Visual observations recovered from a partially formatted model response."),
+    observations,
+  };
+}
+
 type VerifiedModel = {provider:"OpenRouter"|"Gemini";model:string;tier:"free"|"paid"};
 async function modelGenerate(model: VerifiedModel, parts: Array<Record<string, unknown>>, maxOutputTokens = 6000, timeoutMs = 12000) {
  if(model.provider!=="OpenRouter")throw new Error("Only verified OpenRouter models are enabled for UX Audit.");
- const key=process.env.OPENROUTER_API_KEY;if(!key)throw new Error("Configure OPENROUTER_API_KEY before running an audit.");
+ const key=(process.env.OPENROUTER_API_KEY??"").trim();if(!key)throw new Error("OPENROUTER_API_KEY is missing or empty in the Netlify function runtime for this deploy context. Set it for Deploy Preview with Functions/Runtime scope, then redeploy.");if(!key.startsWith("sk-or-v1-"))throw new Error("OPENROUTER_API_KEY is present but does not match the expected standard OpenRouter API key format. Replace it with a standard inference API key, not a Management API key, then redeploy.");
  const content:any[]=[];for(const part of parts){if(typeof part.text==="string")content.push({type:"text",text:part.text});else if(part.inline_data&&typeof part.inline_data==="object"){const im=part.inline_data as {mime_type?:string;data?:string};if(im.data)content.push({type:"image_url",image_url:{url:"data:"+(im.mime_type||"image/jpeg")+";base64,"+im.data}});}}
  let lastError="OpenRouter model request failed.";const started=Date.now();
  try{
-  const stage=parts.some(p=>typeof p.text==="string"&&/IMAGE-TO-TEXT stage/.test(String(p.text)))?"visual":"text";
+  const stage=parts.some(p=>p.inline_data&&typeof p.inline_data==="object")?"visual":"text";
   console.info("[uxaudit] model_request_start",JSON.stringify({model:model.model,stage,timeoutMs,maxOutputTokens}));
-  const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:"Bearer "+key,"Content-Type":"application/json","HTTP-Referer":"https://uxauditscreenroot.vercel.app","X-Title":"UX Audit","X-OpenRouter-Metadata":"enabled"},body:JSON.stringify({model:model.model,messages:[{role:"user",content}],max_tokens:maxOutputTokens,temperature:0.1,reasoning:{effort:"low",exclude:true},response_format:{type:"json_object"},plugins:[{id:"auto-router",cost_tier:"low"}],provider:{allow_fallbacks:true,max_price:{prompt:0.5,completion:2}}}),signal:AbortSignal.timeout(timeoutMs),cache:"no-store"});
+  const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{authorization:"Bearer "+key,"Content-Type":"application/json","HTTP-Referer":"https://uxauditscreenroot.vercel.app","X-Title":"UX Audit","X-OpenRouter-Metadata":"enabled"},body:JSON.stringify({model:model.model,messages:[{role:"user",content}],max_tokens:maxOutputTokens,temperature:0.1,reasoning:{effort:"low",exclude:true},response_format:{type:"json_object"},plugins:[{id:"auto-router",cost_tier:"low"}],provider:{allow_fallbacks:true,max_price:{prompt:0.5,completion:2}}}),signal:AbortSignal.timeout(timeoutMs),cache:"no-store"});
   const rawBody=await response.text();let payload:any={};try{payload=rawBody?JSON.parse(rawBody):{};}catch{throw new Error("OpenRouter returned invalid JSON (HTTP "+response.status+"): "+rawBody.slice(0,180));}
   if(response.ok){
    const message=payload?.choices?.[0]?.message;const raw=message?.content;
@@ -255,11 +300,14 @@ async function createVisualPass(model: VerifiedModel, capture: Capture, timeoutM
   const prompt = `You are the IMAGE-TO-TEXT stage of a UX audit. ${modeInstruction} Analyze the supplied screenshot itself, not an imagined website. Original dimensions are ${capture.width}x${capture.height}px; aspect-ratio hint: ${viewportHint}. Determine DEVICE / VIEWPORT from visible evidence first: narrow single-column layout, mobile hamburger/menu, stacked cards, mobile-sized controls, desktop multi-column layout, wide navigation, sidebars, or desktop utility bars. In JSON include "deviceType" as "mobile", "desktop", "tablet", or "uncertain" and explain the visible cue in pageSummary. Never label a full-page screenshot mobile just because it is tall; never label it desktop just because it contains lots of content.\n\nFIRST identify the CLIENT / BRAND NAME visible in the screenshot. Look specifically for explicit company or product text, logo/wordmark text, domain text, browser/site identity, distinctive brand naming, or a clearly visible legal/company name. Use the strongest explicit evidence. If the screenshot is Tata Capital, return exactly "Tata Capital". Do not infer a client from generic colours, layout style, or industry alone. If no reliable name is visible, return "Unknown client".\n\nThe final report will display the ENTIRE original screenshot once, with numbered colored dots overlaid on the exact regions you identify. There is NO CROPPING in this product. Do not return bounding boxes, crop widths, crop heights, or image snippets.\n\nFind 5–8 strong, DISTINCT UX observations. Each observation must refer to a different specific visible UI region and a different concrete issue grounded only in pixels actually visible in this screenshot. Do not repeat the same issue under synonyms, do not repeat generic labels such as "high density" for multiple unrelated sections, and do not reuse a title/issue/element for multiple observations. If the screenshot does not support 5 distinct issues, return fewer rather than inventing or duplicating. Titles must name the actual element and problem, not just a generic category. If the screenshot is narrow/tall, reason about the actual responsive mobile layout shown; never assume desktop. Prefer concrete issues involving hierarchy, labels, grouping, density, CTA competition, form clarity, content scanning, navigation, trust, or conversion friction.\n\nFor EVERY observation return ONE MARKER POINT at the visual centre of the specific UI region that demonstrates the issue. Coordinates must be normalized from 0 to 1 using the ORIGINAL supplied image dimensions: x=0 is the left edge, x=1 the right edge, y=0 is the top edge, y=1 the bottom edge. The dot should land ON the relevant text, control, card, image, navigation item, or other visible evidence—not in empty space. Use the exact visible location, not a section estimate or page-percentage guess. Never place two observations at the same point. Keep observations ordered from top to bottom of the screenshot.\n\nThe marker is the permanent spatial link between the visual observation and the later text review. Do not change or reinterpret the marker after choosing it.\n\nReturn JSON only: {"clientName":"Tata Capital","deviceType":"mobile|desktop|tablet|uncertain","pageSummary":"one factual sentence including visible device/layout cues","observations":[{"id":"obs-1","section":"exact visible section","element":"exact visible element","issue":"factual visible issue","whyItMatters":"user-visible consequence","marker":{"x":0.50,"y":0.20}}]}`;
   const imagePart = { inline_data: { mime_type: "image/jpeg", data: capture.analysisBuffer.toString("base64") } };
   let lastProblem = "The image-to-text model returned no usable visual observations.";
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  // Large screenshots often need 15–18 seconds for vision inference. Do not burn the remaining request budget repeating the same expensive image request after a timeout; the caller can then preserve/report any existing visual output or return a precise timeout error.
+  const maxAttempts = 2;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const retryPrompt = attempt === 0 ? prompt : `Inspect the attached screenshot and return ONLY valid JSON with this exact shape: {"clientName":"visible brand or Unknown client","pageSummary":"one sentence describing visible layout","observations":[{"id":"obs-1","section":"visible region","element":"visible control or content","issue":"specific UX issue visibly supported by screenshot","whyItMatters":"user impact","marker":{"x":0.5,"y":0.2}}]}. Return 3 to 6 observations only when supported by visible evidence. Coordinates must be numbers from 0 to 1. Do not return markdown or any other schema.`;
     try {
-      const text = await modelGenerate(model, [{ text: retryPrompt }, imagePart], attempt === 0 ? 4500 : 3500, timeoutMs);
-      const parsed = extractJson(text);
+      const attemptTimeoutMs = attempt === 0 ? timeoutMs : Math.min(timeoutMs, 4500);
+      const text = await modelGenerate(model, [{ text: retryPrompt }, imagePart], attempt === 0 ? 4500 : 3000, attemptTimeoutMs);
+      const parsed = extractJson(text) ?? recoverVisualPassJson(text);
       const result = normalizeVisualPass(parsed);
       if (result.observations.length) return result;
       const keys = parsed && typeof parsed === "object" ? Object.keys(parsed as Record<string, unknown>) : [];
@@ -275,7 +323,8 @@ async function createVisualPass(model: VerifiedModel, capture: Capture, timeoutM
 
 async function createTextReview(model: VerifiedModel, visualPass: VisualPass, timeoutMs = 12000) {
   const prompt = `You are the SECOND stage of a UX audit. You are a TEXT-TO-TEXT UX research and business reviewer. The first model already inspected the screenshot and produced the visual observations below. You do NOT see the screenshot.\n\nPreserve observationId exactly. Do not change, merge, reorder, or reinterpret the visual location. Never invent UI elements, coordinates, measurements, analytics, or behaviour. For each observation create a client-ready finding with UX research context and business funnel analysis. Category-tag EVERY finding with exactly one allowed category using the visual evidence, not by spreading categories evenly. Titles must name the specific element and flaw; the description must explain the observed flaw AND its user consequence (never copy the title). The recommendation must directly redesign the observed element and name the section or component; avoid generic advice like “improve visual hierarchy”. Business analysis must be individually derived from this issue: write a distinct impact, causal mechanism, relevant KPI, funnel stage, and concrete suggestions. Do not reuse a template paragraph across findings. Repeat a KPI or funnel stage only when genuinely appropriate, while keeping each causal explanation specific to the issue. Calibrate severity independently: high only for a major blocker, misleading interaction, serious trust/accessibility issue, or clear primary-journey failure; medium for meaningful friction; low for polish/minor clarity issues. Vary severity only when evidence warrants it—never alternate high/low as a pattern. KPI and funnel stage must fit the actual issue; use different values where the evidence points to different outcomes.\n\nUX context must include a relevant law/principle, a plain-language definition, why it applies, and concise research context. Business analysis must identify funnel stage, directional impact, KPI at risk, mechanism, and practical suggestions that could improve that KPI. Do not create development tasks. Do not claim measured KPI changes.\n\nReturn JSON only: {"findings":[{"id":"finding-1","observationId":"obs-1","severity":"high|medium|low","category":"Information hierarchy","title":"short finding","description":"clear explanation","recommendation":"specific UX redesign action","uxPerspective":{"law":"Hick's Law","definition":"plain-language definition","assessment":"why it applies","researchContext":"brief research context"},"businessAnalysis":{"funnelStage":"Acquisition / consideration / activation / conversion / retention","impact":"directional impact","kpi":"specific KPI","mechanism":"how the design can influence it","suggestions":["specific action","specific action"]}}]}\n\nAllowed categories: ${CATEGORIES.join(", ")}.\n\nVISUAL OBSERVATIONS:\n${JSON.stringify(visualPass)}`;
-  const text = await modelGenerate(model, [{ text: prompt }], 4800, timeoutMs);
+  const maxReviewTokens = Math.min(3200, Math.max(1800, visualPass.observations.length * 450));
+  const text = await modelGenerate(model, [{ text: prompt }], maxReviewTokens, timeoutMs);
   const parsed = extractJson(text); const root = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
   return Array.isArray(root.findings) ? root.findings : [];
 }
@@ -302,9 +351,12 @@ function fallbackFinding(observation: VisualObservation, index: number): Finding
   return normalizeFinding({ id: `finding-${index + 1}`, severity: index < 2 ? "high" : "medium", category: "Information hierarchy", title: observation.issue, description: observation.issue, recommendation: "Reduce competing visual signals, strengthen the primary action, and use clearer hierarchy to make the intended next step easier to understand.", uxPerspective: { law: "Visual hierarchy and cognitive load", definition: "Users scan interfaces by relative prominence and grouping, so competing or unclear signals increase the effort needed to decide what matters.", assessment: observation.whyItMatters, researchContext: "The observation is consistent with established research on visual grouping, attention and cognitive load." }, businessAnalysis: { funnelStage: "Consideration / conversion", impact: "The visible friction can increase hesitation before the next intended action.", kpi: "Primary CTA click-through rate", mechanism: "When the intended next step is harder to understand, users can delay, miss or abandon the action.", suggestions: ["Strengthen the primary hierarchy.", "Remove or reduce competing signals around the key action."] } }, observation, index);
 }
 
-export async function createAuditFromScreenshot(buffer: Buffer, filename: string, onStage?: (stage: AuditStage) => void, verifiedModels: VerifiedModel[] = [], auditMode: "desktop" | "mobile" = "desktop"): Promise<AuditResult> {
+export async function createAuditFromScreenshot(buffer: Buffer, filename: string, onStage?: (stage: AuditStage) => void, verifiedModels: VerifiedModel[] = [], auditMode: "desktop" | "mobile" = "desktop", onPartialResult?: (result: AuditResult) => void): Promise<AuditResult> {
   if (buffer.byteLength > MAX_SCREENSHOT_BYTES) throw new Error("Screenshot is too large. Please upload an image smaller than 15 MB.");
   const metadata = await sharp(buffer).metadata(); const width = metadata.width ?? 0; const height = metadata.height ?? 0;
+  const screenshotMime = metadata.format === "png" ? "image/png" : metadata.format === "webp" ? "image/webp" : metadata.format === "gif" ? "image/gif" : "image/jpeg";
+  // Reuse the already validated screenshot bytes; re-encoding a full-page image after both model calls can push serverless requests past their time budget.
+  const screenshot = `data:${screenshotMime};base64,${buffer.toString("base64")}`;
   if (!width || !height) throw new Error("The uploaded file is not a valid image.");
   if (width < 320 || height < 200) throw new Error("Please upload a larger screenshot so the UX evidence can be reviewed reliably.");
   if (width > 20000 || height > 20000) throw new Error("Screenshot dimensions are too large. Please upload a smaller screenshot.");
@@ -321,14 +373,38 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   onStage?.({ id: "analyse", label: "OpenRouter screenshot analysis", detail: "OpenRouter Auto Router · low-cost tier · image input enabled · provider price ceiling applied. OpenRouter selects the vision-capable model.", status: "active" });
   let visualPass: VisualPass | null = null;let visualErrors:string[]=[];
   const visionCandidates=[visionModel,...allowedModels.filter(m=>m.model!==visionModel.model)];
-  for(let i=0;i<visionCandidates.length;i++){const candidate=visionCandidates[i];const timeoutMs=i===0?18000:i===1?10000:8000;try{visualPass=await createVisualPass(candidate,capture,timeoutMs,auditMode);break;}catch(e){visualErrors.push(candidate.model+": "+(e instanceof Error?e.message:"failed"));}}
+  for(let i=0;i<visionCandidates.length;i++){const candidate=visionCandidates[i];const timeoutMs=i===0?18000:i===1?8500:7000;try{visualPass=await createVisualPass(candidate,capture,timeoutMs,auditMode);break;}catch(e){visualErrors.push(candidate.model+": "+(e instanceof Error?e.message:"failed"));}}
   if(!visualPass)throw new Error("OpenRouter Auto Router could not analyze the screenshot. "+visualErrors.join(" | "));
   onStage?.({ id: "analyse", label: "Image → text", detail: `${visualPass.clientName} · ${visualPass.observations.length} visual regions identified on the full screenshot.`, status: "complete" });
+
+  // Send evidence-linked visual findings before the slower UX reasoning pass.
+  // If a serverless time limit interrupts later work, the user still gets a usable report.
+  const preliminaryFindings: Finding[] = [];
+  for (const observation of visualPass.observations) {
+    const index = preliminaryFindings.length;
+    preliminaryFindings.push(normalizeFinding(fallbackFinding(observation, index), observation, index, preliminaryFindings));
+  }
+  if (onPartialResult && preliminaryFindings.length) {
+    const partialResult: AuditResult = { pages: [{
+      clientName: visualPass.clientName,
+      url: "Uploaded screenshot",
+      title: capture.title,
+      screenshot,
+      screenshotWidth: width,
+      screenshotHeight: height,
+      findings: preliminaryFindings,
+      auditMode,
+      viewportWidth: auditMode === "mobile" ? 393 : 1440,
+      ...(auditMode === "mobile" ? { viewportHeight: 852 } : {}),
+    }] };
+    onPartialResult(partialResult);
+    console.info("[uxaudit] screenshot_partial_report_ready", JSON.stringify({ observations: preliminaryFindings.length }));
+  }
 
   onStage?.({ id: "quality", label: "OpenRouter UX reasoning", detail: "OpenRouter Auto Router · low-cost tier · text-only UX research and business analysis. OpenRouter selects the reasoning model.", status: "active" });
   let review: unknown[]=[];let reviewOk=false;let reviewErrors:string[]=[];
   const textCandidates=[textModel,...allowedModels.filter(m=>m.model!==textModel.model)];
-  for(let i=0;i<textCandidates.length;i++){const candidate=textCandidates[i];const timeoutMs=i===0?14000:i===1?10000:8000;try{review=await createTextReview(candidate,visualPass,timeoutMs);if(review.length){reviewOk=true;break;}reviewErrors.push(candidate.model+": empty findings");}catch(e){reviewErrors.push(candidate.model+": "+(e instanceof Error?e.message:"failed"));}}
+  for(let i=0;i<textCandidates.length;i++){const candidate=textCandidates[i];const timeoutMs=i===0?6000:i===1?5000:4500;try{review=await createTextReview(candidate,visualPass,timeoutMs);if(review.length){reviewOk=true;break;}reviewErrors.push(candidate.model+": empty findings");}catch(e){reviewErrors.push(candidate.model+": "+(e instanceof Error?e.message:"failed"));}}
   if(!reviewOk){console.warn("[uxaudit] text_review_degraded",JSON.stringify({errors:reviewErrors,observations:visualPass.observations.length}));onStage?.({id:"quality",label:"OpenRouter UX reasoning",detail:"OpenRouter did not return valid structured research findings; preserving screenshot evidence and using conservative evidence-linked fallback recommendations. "+reviewErrors.join(" | "),status:"complete"});review=[];}else{onStage?.({id:"quality",label:"OpenRouter UX reasoning",detail:"OpenRouter returned structured UX laws, research context and business-funnel hypotheses.",status:"complete"});}
 
   onStage?.({ id: "markers", label: "Place evidence markers", detail: "Linking each finding to its exact region on the original screenshot; no crops are created.", status: "active" });
@@ -346,7 +422,6 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   onStage?.({ id: "enrich", label: "Applying UX + business context", detail: "Finalising funnel impact, KPI hypotheses and redesign recommendations.", status: "active" });
   onStage?.({ id: "enrich", label: "Applying UX + business context", detail: "UX research context and business funnel analysis are ready.", status: "complete" });
   onStage?.({ id: "complete", label: "Finalise report", detail: "Building the client-ready report with one full screenshot and linked evidence markers.", status: "active" });
-  const screenshot = `data:image/jpeg;base64,${(await sharp(buffer).jpeg({ quality: 88, progressive: true }).toBuffer()).toString("base64")}`;
   const result: AuditResult = { pages: [{ clientName: visualPass.clientName, url: "Uploaded screenshot", title: capture.title, screenshot, screenshotWidth: width, screenshotHeight: height, findings, auditMode, viewportWidth: auditMode === "mobile" ? 393 : 1440, ...(auditMode === "mobile" ? { viewportHeight: 852 } : {}) }] };
   onStage?.({ id: "complete", label: "Finalise report", detail: "Audit ready.", status: "complete" });
   return result;
