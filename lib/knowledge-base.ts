@@ -103,12 +103,15 @@ export async function getAudit(auditId: string) {
 
 export async function retrieveRelevantAuditKnowledge(query: string, limit = 6): Promise<string> {
   try {
-    const rows = await supabaseRequest("audit_findings?select=finding,created_at,audits!audit_findings_audit_id_fkey(client_name,title,created_at)&order=created_at.desc&limit=120");
-    if (!Array.isArray(rows) || !rows.length) return "";
+    const [findingRows, documents] = await Promise.all([
+      supabaseRequest("audit_findings?select=finding,created_at,audits!audit_findings_audit_id_fkey(client_name,title,created_at)&order=created_at.desc&limit=120"),
+      supabaseRequest("ux_knowledge_documents?select=title,source_name,source_url,topic,content,keywords,reviewed_at&order=reviewed_at.desc&limit=100")
+    ]);
     const stop = new Set(["the","and","for","with","from","that","this","into","your","have","has","are","was","were","will","their","they","them","page","site","website","user","users","visible","issue","finding","because","could","should","would","about","when","where","what","how","not","can","may","more","less"]);
     const terms = (value: string) => [...new Set(value.toLowerCase().replace(/[^a-z0-9]+/g," ").split(" ").filter(w=>w.length>2&&!stop.has(w)))];
     const queryTerms = terms(query);
-    const ranked = rows.map((row:any) => {
+    const candidates:any[] = [];
+    for (const row of Array.isArray(findingRows)?findingRows:[]) {
       const finding = row.finding && typeof row.finding === "object" ? row.finding : {};
       const audit = row.audits && typeof row.audits === "object" ? row.audits : {};
       const text = [audit.client_name,audit.title,finding.category,finding.title,finding.description,finding.recommendation,...(finding.evidence||[]).map((e:any)=>[e.section,e.element,e.detail].join(" "))].filter(Boolean).join(" ");
@@ -116,13 +119,16 @@ export async function retrieveRelevantAuditKnowledge(query: string, limit = 6): 
       const overlap = queryTerms.filter(t=>tokens.has(t)).length;
       const sameClient = queryTerms.some(t=>String(audit.client_name||"").toLowerCase().includes(t)) ? 2 : 0;
       const severity = finding.severity === "high" ? 0.5 : 0;
-      return {row,finding,audit,score:overlap+sameClient+severity};
-    }).filter((item:any)=>item.score>0).sort((a:any,b:any)=>b.score-a.score).slice(0,Math.max(1,Math.min(limit,10)));
-    if (!ranked.length) return "";
-    return ranked.map((item:any,index:number)=> {
-      const f=item.finding,a=item.audit;
-      return `[KB ${index+1}; relevance ${item.score}; client ${a.client_name||"unknown"}; source audit ${a.title||"untitled"}; saved ${a.created_at||item.row.created_at||"date unavailable"}] ${f.severity||"unrated"} · ${f.category||"UX"} — ${f.title||"Finding"}. Evidence: ${(f.evidence||[]).map((e:any)=>e.detail).filter(Boolean).join("; ")||f.description||"not supplied"}. Recommendation: ${f.recommendation||"not supplied"}.`;
-    }).join("\\n");
+      if(overlap+sameClient+severity>0)candidates.push({kind:"prior finding",score:overlap+sameClient+severity,text:`[Prior finding; client ${audit.client_name||"unknown"}; audit ${audit.title||"untitled"}; saved ${audit.created_at||row.created_at||"date unavailable"}] ${finding.severity||"unrated"} · ${finding.category||"UX"} — ${finding.title||"Finding"}. Evidence: ${(finding.evidence||[]).map((e:any)=>e.detail).filter(Boolean).join("; ")||finding.description||"not supplied"}. Recommendation: ${finding.recommendation||"not supplied"}.`});
+    }
+    for (const doc of Array.isArray(documents)?documents:[]) {
+      const text = [doc.title,doc.source_name,doc.topic,doc.content,...(Array.isArray(doc.keywords)?doc.keywords:[])].filter(Boolean).join(" ");
+      const tokens = new Set(terms(text));
+      const overlap = queryTerms.filter(t=>tokens.has(t)).length;
+      if(overlap>0)candidates.push({kind:"standard",score:overlap+1,text:`[Reference: ${doc.title}; source: ${doc.source_name}; topic: ${doc.topic}; URL: ${doc.source_url}; reviewed: ${doc.reviewed_at}] ${doc.content}`});
+    }
+    const ranked = candidates.sort((a,b)=>b.score-a.score).slice(0,Math.max(1,Math.min(limit,10)));
+    return ranked.map((item:any)=>item.text).join("\\n");
   } catch (error) {
     console.warn("[uxaudit] knowledge_retrieval_skipped", error instanceof Error ? error.message : "Knowledge base unavailable");
     return "";
