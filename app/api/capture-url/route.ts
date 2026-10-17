@@ -52,33 +52,17 @@ export async function POST(req: Request) {
       }
     }
 
-    const token = process.env.BROWSERLESS_API_TOKEN;
-    if (!token) {
-      console.error("[uxaudit] browserless_config_missing");
-      return Response.json({ error: "Browserless screenshot service is not configured. Set BROWSERLESS_API_TOKEN in the production environment." }, { status: 503 });
-    }
 
     const auditMode: AuditMode = body?.auditMode === "mobile" ? "mobile" : "desktop";
     const mobile = auditMode === "mobile";
     const viewport = mobile ? { width: 393, height: 852 } : { width: 1440, height: 900 };
     const started = Date.now();
     console.info("[uxaudit] screenshot_capture_start", JSON.stringify({
-      provider: "browserless.io", host: url.hostname, auditMode, viewport, fullPage: false
+      provider: "thum.io", host: url.hostname, auditMode, viewport, fullPage: false
     }));
 
-    const response = await fetch("https://production-sfo.browserless.io/screenshot?token=" + encodeURIComponent(token), {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Accept": "image/jpeg" },
-      body: JSON.stringify({
-        url: url.href,
-        viewport: { ...viewport, deviceScaleFactor: 1, isMobile: mobile, hasTouch: mobile, isLandscape: false },
-        options: { type: "jpeg", quality: 88, fullPage: false },
-        gotoOptions: { waitUntil: "domcontentloaded", timeout: 55000 },
-        ...(mobile ? { userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1" } : {})
-      }),
-      signal: AbortSignal.timeout(58000),
-      cache: "no-store"
-    });
+    const captureUrl = "https://image.thum.io/get/width/" + viewport.width + "/crop/" + viewport.height + "/noanimate/" + url.href;
+    const response = await fetch(captureUrl, { method: "GET", headers: { "Accept": "image/*" }, signal: AbortSignal.timeout(30000), cache: "no-store" });
 
     if (!response.ok) {
       const detail = (await response.text().catch(() => "")).slice(0, 500);
@@ -86,7 +70,7 @@ export async function POST(req: Request) {
         host: url.hostname, status: response.status, detail, elapsedMs: Date.now() - started
       }));
       return Response.json({
-        error: "Browserless could not capture this page (HTTP " + response.status + "). " + (detail || "Check the Browserless token, quota, and target-site access."),
+        error: "thum.io could not capture this page (HTTP " + response.status + "). " + (detail || "Check the Browserless token, quota, and target-site access."),
         code: "BROWSERLESS_CAPTURE_FAILED"
       }, { status: 502, headers: { "Cache-Control": "no-store" } });
     }
@@ -94,7 +78,7 @@ export async function POST(req: Request) {
     const contentType = response.headers.get("content-type") || "";
     if (!contentType.startsWith("image/")) {
       const detail = (await response.text().catch(() => "")).slice(0, 300);
-      throw new Error("Browserless returned a non-image response (" + contentType + "). " + detail);
+      throw new Error("thum.io returned a non-image response (" + contentType + "). " + detail);
     }
     const raw = Buffer.from(await response.arrayBuffer());
     if (!raw.length || raw.length > 15 * 1024 * 1024) {
@@ -121,10 +105,10 @@ export async function POST(req: Request) {
       title, auditMode, viewportWidth: viewport.width, viewportHeight: viewport.height,
       viewport: { ...viewport, unit: "CSS px" },
       actualViewport: { innerWidth: viewport.width, innerHeight: viewport.height, devicePixelRatio: 1 },
-      captureMethod: "browserless.io", fullPage: false
+      captureMethod: "thum.io", fullPage: false
     };
     console.info("[uxaudit] screenshot_capture_ok", JSON.stringify({
-      provider: "browserless.io", host: url.hostname, elapsedMs: Date.now() - started,
+      provider: "thum.io", host: url.hostname, elapsedMs: Date.now() - started,
       auditMode, screenshot: { width: result.width, height: result.height }, fullPage: false
     }));
     return Response.json(result, { headers: { "Cache-Control": "no-store" } });
