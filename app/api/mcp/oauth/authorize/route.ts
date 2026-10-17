@@ -29,12 +29,12 @@ function htmlPage(issuer: string, input: AuthorizeInput, error = ""): Response {
     '<p class="muted"><strong>' + htmlEscape(input.clientName) + '</strong> is requesting access to your UX Audit workspace.</p>',
     '<div class="notice">AI audits and IA generation use your configured OpenRouter API key and may incur model charges. Only authorize this connection from your own ChatGPT account.</div>',
     error ? '<p class="notice">' + htmlEscape(error) + '</p>' : "",
-    '<form id="authorize-form" method="post" action="/api/mcp/oauth/authorize" accept-charset="UTF-8">' + hidden,
+    '<form id="authorize-form" method="post" action="' + htmlEscape(issuer + "/api/mcp/oauth/authorize") + '" accept-charset="UTF-8">' + hidden,
     '<div class="field"><label for="password">UX Audit MCP connection code</label><input id="password" name="password" type="password" required autocomplete="current-password" autofocus></div>',
     '<div class="checks"><input id="consent" name="consent" type="checkbox" value="yes" required><label for="consent">I approve access to discover public sites, run desktop/mobile screenshot audits, read saved audit findings, and generate proposed information architectures.</label></div>',
     '<button id="authorize-button" type="submit">Authorize ChatGPT</button></form>',
     '<p id="submit-status" class="small" role="status" aria-live="polite"></p>',
-    '<script>var f=document.getElementById("authorize-form");if(f){f.addEventListener("submit",function(){var b=document.getElementById("authorize-button");var s=document.getElementById("submit-status");if(b){b.disabled=true;b.textContent="Authorizing…";}if(s){s.textContent="Submitting authorization securely. You should return to ChatGPT shortly.";}});}</script>',
+    '<script>var f=document.getElementById("authorize-form");if(f){f.addEventListener("submit",function(){var b=document.getElementById("authorize-button");var s=document.getElementById("submit-status");if(b){b.textContent="Authorizing…";}if(s){s.textContent="Submitting authorization securely. You should return to ChatGPT shortly.";}window.setTimeout(function(){if(s&&document.visibilityState==="visible"){s.textContent="Still waiting for the server. If this page does not redirect, reload and try again.";if(b){b.textContent="Retry authorization";}}},8000);});}</script>',
     '<p class="small">The proposal does not change the live website. You can revoke the connection by rotating the MCP OAuth secret in Vercel and reconnecting. Keep this connection code private.</p></main></body></html>',
   ].join("");
   return new Response(html, { status: 200, headers: {
@@ -60,13 +60,21 @@ export async function POST(request: Request) {
   try {
     getMcpSecret();
     const form = await request.formData();
+    console.info("[uxaudit] mcp_oauth_authorize_post_received");
     const input = getInput(form);
-    if (!input || form.get("consent") !== "yes") return new Response("Invalid authorization request or consent was not provided.", { status: 400 });
-    if (input.resource !== issuer + "/api/mcp") return new Response("The OAuth resource does not match this MCP server.", { status: 400, headers: { "Cache-Control": "no-store" } });
+    if (!input || form.get("consent") !== "yes") {
+      console.warn("[uxaudit] mcp_oauth_authorize_invalid_form");
+      return new Response("Invalid authorization request or consent was not provided.", { status: 400 });
+    }
+    if (input.resource !== issuer + "/api/mcp") {
+      console.warn("[uxaudit] mcp_oauth_authorize_resource_mismatch");
+      return new Response("The OAuth resource does not match this MCP server.", { status: 400, headers: { "Cache-Control": "no-store" } });
+    }
     const expectedPassword = readMcpEnv("UXAUDIT_MCP_CONNECTION_CODE") || readMcpEnv("UXAUDIT_MCP_LOGIN_PASSWORD") || readMcpEnv("UXAUDIT_MCP_LOGIN_CODE");
     const suppliedPassword = String(form.get("password") || "");
     const actual = Buffer.from(suppliedPassword), expected = Buffer.from(expectedPassword);
     if (!expectedPassword || suppliedPassword.length > 500 || actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+      console.warn("[uxaudit] mcp_oauth_authorize_code_rejected", JSON.stringify({ expectedCodeConfigured: Boolean(expectedPassword), lengthsMatch: actual.length === expected.length, suppliedLengthWithinLimit: suppliedPassword.length <= 500 }));
       return htmlPage(issuer, input, "The connection code was not accepted. Please try again.");
     }
     const now = Math.floor(Date.now() / 1000);
@@ -78,7 +86,8 @@ export async function POST(request: Request) {
     const callback = new URL(input.redirectUri);
     callback.searchParams.set("code", code);
     if (input.state) callback.searchParams.set("state", input.state);
-    return Response.redirect(callback.toString(), 302);
+    console.info("[uxaudit] mcp_oauth_authorize_redirect", JSON.stringify({ callbackHost: callback.hostname }));
+    return Response.redirect(callback.toString(), 303);
   } catch (error) {
     console.error("[uxaudit] mcp_oauth_authorize_failed", JSON.stringify({ error: error instanceof Error ? error.message : "unknown" }));
     return new Response("UX Audit MCP OAuth could not complete authorization.", { status: 503, headers: { "Cache-Control": "no-store" } });
