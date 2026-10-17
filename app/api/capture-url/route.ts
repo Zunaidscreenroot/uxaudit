@@ -71,6 +71,7 @@ export async function POST(req: Request) {
       headers: { "Content-Type": "application/json", "Accept": "image/jpeg" },
       body: JSON.stringify({
         url: url.href,
+        timeout: 60000,
         viewport: { ...viewport, deviceScaleFactor: 1, isMobile: mobile, hasTouch: mobile, isLandscape: false },
         options: { type: "jpeg", quality: 88, fullPage: true },
         gotoOptions: { waitUntil: "domcontentloaded", timeout: 30000 },
