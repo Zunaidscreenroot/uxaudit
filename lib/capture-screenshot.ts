@@ -4,7 +4,7 @@ type CaptureOptions = { url: string; width: number; height: number };
 
 export async function captureWebsiteScreenshot({ url, width, height }: CaptureOptions) {
   const errors: string[] = [];
-  const thumUrl = "https://image.thum.io/get/width/" + width + "/viewportWidth/" + width + "/crop/" + height + "/maxAge/0/noanimate/" + url;
+  const thumUrl = "https://image.thum.io/get/fullpage/width/" + width + "/viewportWidth/" + width + "/maxAge/0/noanimate/" + url;
 
   // Try the hosted screenshot service first, but keep its wait bounded so a slow capture
   // does not consume the entire serverless request budget.
@@ -40,7 +40,7 @@ export async function captureWebsiteScreenshot({ url, width, height }: CaptureOp
         headers: { "Content-Type": "application/json", Accept: "image/*" },
         body: JSON.stringify({
           url,
-          options: { type: "jpeg", quality: 82, fullPage: false },
+          options: { type: "jpeg", quality: 82, fullPage: true },
           viewport: { width, height, deviceScaleFactor: 1 },
           gotoOptions: { waitUntil: "domcontentloaded", timeout: 18000 },
           bestAttempt: true
