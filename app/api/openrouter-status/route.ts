@@ -25,7 +25,7 @@ export async function GET() {
     if (!response.ok) {
       if (response.status === 401) {
         return jsonError(
-          "OpenRouter rejected OPENROUTER_API_KEY (HTTP 401). The configured key may be invalid, revoked, expired, or copied incorrectly. Replace it with a standard OpenRouter API key in Netlify environment variables for this deploy context, then redeploy. Do not use a Management API key for model inference."
+          "OpenRouter rejected OPENROUTER_API_KEY (HTTP 401). If the key was changed after this deployment was built, redeploy first so the function loads the updated environment value. If it still returns 401, replace it with a valid standard OpenRouter API key in the Netlify environment context used by this deployment. Do not use a Management API key for model inference."
         );
       }
       if (response.status === 403) {
