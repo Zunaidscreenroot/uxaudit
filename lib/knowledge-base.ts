@@ -100,3 +100,31 @@ export async function getAudit(auditId: string) {
   const findings = await supabaseRequest(`audit_findings?select=id,finding_index,finding,created_at&audit_id=eq.${encodeURIComponent(auditId)}&order=finding_index.asc`);
   return { ...audit, findings: Array.isArray(findings) ? findings : [] };
 }
+
+export async function retrieveRelevantAuditKnowledge(query: string, limit = 6): Promise<string> {
+  try {
+    const rows = await supabaseRequest("audit_findings?select=finding,created_at,audits!audit_findings_audit_id_fkey(client_name,title,created_at)&order=created_at.desc&limit=120");
+    if (!Array.isArray(rows) || !rows.length) return "";
+    const stop = new Set(["the","and","for","with","from","that","this","into","your","have","has","are","was","were","will","their","they","them","page","site","website","user","users","visible","issue","finding","because","could","should","would","about","when","where","what","how","not","can","may","more","less"]);
+    const terms = (value: string) => [...new Set(value.toLowerCase().replace(/[^a-z0-9]+/g," ").split(/\\s+/).filter(w=>w.length>2&&!stop.has(w)))];
+    const queryTerms = terms(query);
+    const ranked = rows.map((row:any) => {
+      const finding = row.finding && typeof row.finding === "object" ? row.finding : {};
+      const audit = row.audits && typeof row.audits === "object" ? row.audits : {};
+      const text = [audit.client_name,audit.title,finding.category,finding.title,finding.description,finding.recommendation,...(finding.evidence||[]).map((e:any)=>[e.section,e.element,e.detail].join(" "))].filter(Boolean).join(" ");
+      const tokens = new Set(terms(text));
+      const overlap = queryTerms.filter(t=>tokens.has(t)).length;
+      const sameClient = queryTerms.some(t=>String(audit.client_name||"").toLowerCase().includes(t)) ? 2 : 0;
+      const severity = finding.severity === "high" ? 0.5 : 0;
+      return {row,finding,audit,score:overlap+sameClient+severity};
+    }).filter((item:any)=>item.score>0).sort((a:any,b:any)=>b.score-a.score).slice(0,Math.max(1,Math.min(limit,10)));
+    if (!ranked.length) return "";
+    return ranked.map((item:any,index:number)=> {
+      const f=item.finding,a=item.audit;
+      return `[KB ${index+1}; relevance ${item.score}; client ${a.client_name||"unknown"}; source audit ${a.title||"untitled"}; saved ${a.created_at||item.row.created_at||"date unavailable"}] ${f.severity||"unrated"} · ${f.category||"UX"} — ${f.title||"Finding"}. Evidence: ${(f.evidence||[]).map((e:any)=>e.detail).filter(Boolean).join("; ")||f.description||"not supplied"}. Recommendation: ${f.recommendation||"not supplied"}.`;
+    }).join("\\n");
+  } catch (error) {
+    console.warn("[uxaudit] knowledge_retrieval_skipped", error instanceof Error ? error.message : "Knowledge base unavailable");
+    return "";
+  }
+}
