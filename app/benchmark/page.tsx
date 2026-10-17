@@ -6,7 +6,9 @@ type Report={name:string;url:string;findings:Finding[];error?:string;};
 const initial=[{name:"Competitor 1",url:""},{name:"Competitor 2",url:""},{name:"Competitor 3",url:""}];
 function normalizeUrl(raw:string){const s=raw.trim();if(!s)return "";const u=new URL(/^https?:\/\//i.test(s)?s:"https://"+s);if(!["http:","https:"].includes(u.protocol))throw new Error("Use a public HTTP or HTTPS website.");return u.origin;}
 export default function BenchmarkPage(){
- const [connection,setConnection]=useState<{connected:boolean;error?:string}|null>(null);\n useEffect(()=>{let cancelled=false;fetch("/api/openrouter-status",{cache:"no-store"}).then(r=>r.json()).then(d=>{if(!cancelled)setConnection(d)}).catch(()=>{if(!cancelled)setConnection({connected:false,error:"Could not check OpenRouter connection"})});return()=>{cancelled=true}},[]);\n const [clientName,setClientName]=useState("Ujjivan Small Finance Bank");
+ const [connection,setConnection]=useState<{connected:boolean;error?:string}|null>(null);
+ useEffect(()=>{let cancelled=false;fetch("/api/openrouter-status",{cache:"no-store"}).then(r=>r.json()).then(d=>{if(!cancelled)setConnection(d)}).catch(()=>{if(!cancelled)setConnection({connected:false,error:"Could not check OpenRouter connection"})});return()=>{cancelled=true}},[]);
+ const [clientName,setClientName]=useState("Ujjivan Small Finance Bank");
  const [clientUrl,setClientUrl]=useState("https://www.ujjivansfb.in/");
  const [competitors,setCompetitors]=useState(initial);
  const [busy,setBusy]=useState(false);
