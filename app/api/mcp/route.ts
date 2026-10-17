@@ -41,8 +41,21 @@ const toolDefinitions = [
     }, required: ["sessionId"], additionalProperties: false } },
 ];
 
-function jsonRpcResult(id: string | number | null | undefined, value: unknown, isError = false) {
-  return Response.json({ jsonrpc: "2.0", id: id ?? null, result: { content: [{ type: "text", text: JSON.stringify(value) }], structuredContent: value, ...(isError ? { isError: true } : {}) } }, { headers: { "Cache-Control": "no-store" } });
+// JSON-RPC method results (initialize, ping, tools/list) return the protocol object directly.
+function jsonRpcResult(id: string | number | null | undefined, value: unknown) {
+  return Response.json({ jsonrpc: "2.0", id: id ?? null, result: value }, { headers: { "Cache-Control": "no-store" } });
+}
+// Only tools/call returns an MCP CallToolResult with content blocks.
+function jsonRpcToolResult(id: string | number | null | undefined, value: unknown, isError = false) {
+  return Response.json({
+    jsonrpc: "2.0",
+    id: id ?? null,
+    result: {
+      content: [{ type: "text", text: JSON.stringify(value) }],
+      structuredContent: value && typeof value === "object" ? value : { value },
+      ...(isError ? { isError: true } : {}),
+    },
+  }, { headers: { "Cache-Control": "no-store" } });
 }
 function jsonRpcError(id: string | number | null | undefined, code: number, message: string) {
   return Response.json({ jsonrpc: "2.0", id: id ?? null, error: { code, message } }, { headers: { "Cache-Control": "no-store" } });
@@ -273,12 +286,12 @@ export async function POST(request: Request) {
   if (rpc.method === "tools/call") {
     const name = String(rpc.params?.name || "");
     const tool = toolDefinitions.find(candidate => candidate.name === name);
-    if (!tool) return jsonRpcResult(id, { error: "Unknown tool: " + name }, true);
-    if (!tokenHasScope(token, tool.requiredScope)) return jsonRpcResult(id, { error: "OAuth token is missing required scope " + tool.requiredScope + ". Reconnect with full UX Audit access." }, true);
+    if (!tool) return jsonRpcToolResult(id, { error: "Unknown tool: " + name }, true);
+    if (!tokenHasScope(token, tool.requiredScope)) return jsonRpcToolResult(id, { error: "OAuth token is missing required scope " + tool.requiredScope + ". Reconnect with full UX Audit access." }, true);
     try {
       const args = rpc.params?.arguments && typeof rpc.params.arguments === "object" ? rpc.params.arguments : {};
-      return jsonRpcResult(id, await runTool(name, args, request));
-    } catch (error) { return jsonRpcResult(id, { error: asTextError(error) }, true); }
+      return jsonRpcToolResult(id, await runTool(name, args, request));
+    } catch (error) { return jsonRpcToolResult(id, { error: asTextError(error) }, true); }
   }
   return jsonRpcError(id, -32601, "Method not found.");
 }
