@@ -61,7 +61,7 @@ export async function POST(req: Request) {
       provider: "thum.io", host: url.hostname, auditMode, viewport, fullPage: false
     }));
 
-    const captureUrl = "https://image.thum.io/get/width/" + viewport.width + "/crop/" + viewport.height + "/noanimate/" + url.href;
+    const captureUrl = "https://image.thum.io/get/width/" + viewport.width + "/viewportWidth/" + viewport.width + "/crop/" + viewport.height + "/maxAge/0/noanimate/" + url.href;
     const response = await fetch(captureUrl, { method: "GET", headers: { "Accept": "image/*" }, signal: AbortSignal.timeout(30000), cache: "no-store" });
 
     if (!response.ok) {
