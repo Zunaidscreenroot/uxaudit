@@ -1,35 +1,46 @@
 # UX Audit
 
-AI-assisted UX auditing platform for turning website experiences into prioritized, actionable findings.
+AI-assisted UX auditing platform for turning website experiences into prioritized, evidence-led findings.
 
-## Current capabilities
+## Capabilities
 
-- Next.js + TypeScript application
-- Website information-architecture discovery from public navigation and common sitemap files
-- Desktop and mobile website screenshot capture with server-side Chromium
+- Website information-architecture discovery from public navigation and sitemap files
+- Desktop and mobile screenshot capture with server-side Chromium
 - Evidence-led UX findings, severity, recommendations and screenshot markers
 - OpenRouter model connection and cost status
-- Knowledge-base persistence for saved audits
+- Saved IA sessions, findings, and improved IA proposals
+- Remote MCP server with OAuth authorization for ChatGPT-compatible clients
 
 ## Remote MCP connection
 
-The application exposes a stateless Streamable HTTP MCP endpoint at:
+Production MCP endpoint:
 
 `https://uxaudit-screenroot.vercel.app/api/mcp`
 
-Available tools:
+OAuth discovery endpoints (rewritten by Vercel/Next.js to registered API routes):
 
-- `get_connection_status` — check MCP and OpenRouter connectivity without running inference.
-- `discover_website` — discover a website's public pages and information architecture.
-- `audit_website_page` — capture and audit one public page using OpenRouter, then save the report.
+- `/.well-known/oauth-authorization-server`
+- `/.well-known/oauth-protected-resource`
 
-For a preview deployment, replace the host with that deployment's Vercel URL and append `/api/mcp`.
+Available MCP tools include:
 
-### Authentication
+- `uxaudit_get_connection_status` — verify server and OpenRouter connectivity without model inference
+- `uxaudit_discover_site` — discover public pages and information architecture
+- `uxaudit_run_page_audit` — run a desktop or mobile page audit; may incur model API costs
+- `uxaudit_get_session_report` and `uxaudit_get_findings` — retrieve saved session results
+- `uxaudit_generate_improved_ia` — generate a reviewable IA proposal
 
-Set `UXAUDIT_MCP_API_KEY` in the Vercel project environment to require the header `Authorization: Bearer <key>` on MCP requests. If this variable is unset, the MCP endpoint is public. Because page audits can incur model API costs, configure a key before exposing the endpoint to external clients.
+For a preview test, use that preview deployment's host and append `/api/mcp`.
 
-The endpoint also requires the existing `OPENROUTER_API_KEY` to perform AI audits. Audit persistence uses the same Supabase server credentials as the web application.
+## Required Vercel environment variables
+
+- `UXAUDIT_MCP_OAUTH_SECRET`: a secret value of at least 32 characters, available to the target deployment.
+- `UXAUDIT_MCP_LOGIN_PASSWORD`: the private password entered on the OAuth consent screen. For branch-isolated testing, scope it to the intended Preview git branch.
+- `OPENROUTER_API_KEY`: the server-side OpenRouter inference key.
+
+`UXAUDIT_MCP_ISSUER_URL` is optional. When unset, the server derives the issuer from the request origin. Do not set it to the production hostname on a preview deployment.
+
+The MCP endpoint requires a valid OAuth access token. OAuth uses authorization code flow with PKCE (S256), short-lived access tokens, refresh tokens, and scope checks. The login password is never returned through the MCP API.
 
 ## Local development
 
@@ -44,7 +55,7 @@ Open `http://localhost:3000`. The local MCP endpoint is `http://localhost:3000/a
 
 1. Improve multi-page crawl coverage and interaction-aware discovery
 2. Add accessibility and responsive checks
-3. Add heuristic analysis with screenshot evidence
-4. Persist projects and audit history in Supabase
-5. Improve AI prioritization and recommendations
+3. Expand interaction-aware audits with screenshot evidence
+4. Improve saved project history
+5. Refine AI prioritization and recommendations
 6. Add report export and shareable audit links
