@@ -63,7 +63,7 @@ export async function POST(req: Request) {
     const viewport = mobile ? { width: 393, height: 852 } : { width: 1440, height: 900 };
     const started = Date.now();
     console.info("[uxaudit] screenshot_capture_start", JSON.stringify({
-      provider: "browserless.io", host: url.hostname, auditMode, viewport, fullPage: true
+      provider: "browserless.io", host: url.hostname, auditMode, viewport, fullPage: false
     }));
 
     const response = await fetch("https://production-sfo.browserless.io/screenshot?token=" + encodeURIComponent(token), {
@@ -72,7 +72,7 @@ export async function POST(req: Request) {
       body: JSON.stringify({
         url: url.href,
         viewport: { ...viewport, deviceScaleFactor: 1, isMobile: mobile, hasTouch: mobile, isLandscape: false },
-        options: { type: "jpeg", quality: 88, fullPage: true },
+        options: { type: "jpeg", quality: 88, fullPage: false },
         gotoOptions: { waitUntil: "domcontentloaded", timeout: 55000 },
         ...(mobile ? { userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1" } : {})
       }),
@@ -121,11 +121,11 @@ export async function POST(req: Request) {
       title, auditMode, viewportWidth: viewport.width, viewportHeight: viewport.height,
       viewport: { ...viewport, unit: "CSS px" },
       actualViewport: { innerWidth: viewport.width, innerHeight: viewport.height, devicePixelRatio: 1 },
-      captureMethod: "browserless.io", fullPage: true
+      captureMethod: "browserless.io", fullPage: false
     };
     console.info("[uxaudit] screenshot_capture_ok", JSON.stringify({
       provider: "browserless.io", host: url.hostname, elapsedMs: Date.now() - started,
-      auditMode, screenshot: { width: result.width, height: result.height }, fullPage: true
+      auditMode, screenshot: { width: result.width, height: result.height }, fullPage: false
     }));
     return Response.json(result, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
