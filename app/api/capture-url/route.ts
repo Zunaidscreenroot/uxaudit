@@ -71,13 +71,12 @@ export async function POST(req: Request) {
       headers: { "Content-Type": "application/json", "Accept": "image/jpeg" },
       body: JSON.stringify({
         url: url.href,
-        timeout: 60000,
         viewport: { ...viewport, deviceScaleFactor: 1, isMobile: mobile, hasTouch: mobile, isLandscape: false },
         options: { type: "jpeg", quality: 88, fullPage: true },
-        gotoOptions: { waitUntil: "domcontentloaded", timeout: 30000 },
+        gotoOptions: { waitUntil: "domcontentloaded", timeout: 55000 },
         ...(mobile ? { userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1" } : {})
       }),
-      signal: AbortSignal.timeout(45000),
+      signal: AbortSignal.timeout(58000),
       cache: "no-store"
     });
 
