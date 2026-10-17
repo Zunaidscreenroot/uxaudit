@@ -39,7 +39,7 @@ function htmlPage(issuer: string, input: AuthorizeInput, error = ""): Response {
   ].join("");
   return new Response(html, { status: 200, headers: {
     "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store",
-    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self' https://chatgpt.com; base-uri 'none'; frame-ancestors 'none'",
   }});
 }
 export async function GET(request: Request) {
