@@ -1,14 +1,11 @@
 import { isIP } from "node:net";
 import { lookup } from "node:dns/promises";
-import chromium from "@sparticuz/chromium";
-import puppeteer from "puppeteer-core";
 import sharp from "sharp";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 type AuditMode = "desktop" | "mobile";
-type Viewport = { width: number; height: number };
 
 function privateHost(host: string) {
   const h = host.toLowerCase().replace(/^\[|\]$/g, "");
@@ -32,19 +29,12 @@ async function resolvesToPrivateAddress(host: string) {
   }
 }
 
-const MOBILE_USER_AGENT =
-  "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
-
 export async function POST(req: Request) {
-  let browser: Awaited<ReturnType<typeof puppeteer.launch>> | undefined;
   try {
     const body = await req.json();
     let url: URL;
-    try {
-      url = new URL(body?.url);
-    } catch {
-      return Response.json({ error: "A valid selected page URL is required." }, { status: 400 });
-    }
+    try { url = new URL(body?.url); }
+    catch { return Response.json({ error: "A valid selected page URL is required." }, { status: 400 }); }
 
     if (!["http:", "https:"].includes(url.protocol) || privateHost(url.hostname)) {
       return Response.json({ error: "Only public HTTP/HTTPS pages can be captured." }, { status: 400 });
@@ -53,119 +43,69 @@ export async function POST(req: Request) {
       return Response.json({ error: "The selected hostname did not resolve to a verified public address." }, { status: 400 });
     }
     if (body?.root) {
-      let root: URL;
-      try { root = new URL(body.root); }
-      catch { return Response.json({ error: "The discovered website root is invalid." }, { status: 400 }); }
-      if (root.origin !== url.origin) {
-        return Response.json({ error: "Selected URL must belong to the discovered site." }, { status: 400 });
+      try {
+        if (new URL(body.root).origin !== url.origin) {
+          return Response.json({ error: "Selected URL must belong to the discovered site." }, { status: 400 });
+        }
+      } catch {
+        return Response.json({ error: "The discovered website root is invalid." }, { status: 400 });
       }
+    }
+
+    const token = process.env.BROWSERLESS_API_TOKEN;
+    if (!token) {
+      console.error("[uxaudit] browserless_config_missing");
+      return Response.json({ error: "Browserless screenshot service is not configured. Set BROWSERLESS_API_TOKEN in the production environment." }, { status: 503 });
     }
 
     const auditMode: AuditMode = body?.auditMode === "mobile" ? "mobile" : "desktop";
-    const viewport: Viewport = auditMode === "mobile" ? { width: 393, height: 852 } : { width: 1440, height: 900 };
     const mobile = auditMode === "mobile";
+    const viewport = mobile ? { width: 393, height: 852 } : { width: 1440, height: 900 };
     const started = Date.now();
-    console.info("[uxaudit] browser_capture_start", JSON.stringify({
-      host: url.hostname, auditMode, viewport, engine: "chromium", fullPage: true
+    console.info("[uxaudit] screenshot_capture_start", JSON.stringify({
+      provider: "browserless.io", host: url.hostname, auditMode, viewport, fullPage: true
     }));
 
-    chromium.setGraphicsMode = false;
-    browser = await puppeteer.launch({
-      args: await puppeteer.defaultArgs({ args: chromium.args, headless: "shell" }),
-      executablePath: await chromium.executablePath(),
-      headless: "shell",
-      defaultViewport: {
-        ...viewport, deviceScaleFactor: 1, isMobile: mobile, hasTouch: mobile, isLandscape: false
-      }
+    const response = await fetch("https://production-sfo.browserless.io/screenshot?token=" + encodeURIComponent(token), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "image/jpeg" },
+      body: JSON.stringify({
+        url: url.href,
+        viewport: { ...viewport, deviceScaleFactor: 1, isMobile: mobile, hasTouch: mobile, isLandscape: false },
+        options: { type: "jpeg", quality: 88, fullPage: true, timeout: 35000 },
+        gotoOptions: { waitUntil: "domcontentloaded", timeout: 30000 },
+        ...(mobile ? { userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1" } : {})
+      }),
+      signal: AbortSignal.timeout(45000),
+      cache: "no-store"
     });
 
-    const page = await browser.newPage();
-    page.setDefaultNavigationTimeout(18000);
-    page.setDefaultTimeout(5000);
-    await page.setViewport({
-      ...viewport, deviceScaleFactor: 1, isMobile: mobile, hasTouch: mobile, isLandscape: false
-    });
-    if (mobile) await page.setUserAgent(MOBILE_USER_AGENT);
-    await page.setExtraHTTPHeaders({ "Accept-Language": "en-US,en;q=0.9" });
-
-    // Block obvious local/private targets so capture cannot reach localhost or metadata services.
-    await page.setRequestInterception(true);
-    page.on("request", (request) => {
-      try {
-        const requestedUrl = new URL(request.url());
-        if (["data:", "blob:", "about:"].includes(requestedUrl.protocol)) {
-          void request.continue().catch(() => undefined);
-          return;
-        }
-        if (!["http:", "https:"].includes(requestedUrl.protocol) || privateHost(requestedUrl.hostname)) {
-          void request.abort("blockedbyclient").catch(() => undefined);
-          return;
-        }
-        void request.continue().catch(() => undefined);
-      } catch {
-        void request.abort("blockedbyclient").catch(() => undefined);
-      }
-    });
-
-    const response = await page.goto(url.href, { waitUntil: "domcontentloaded" });
-    if (!response) throw new Error("The browser did not receive a response from the selected page.");
-
-    // A CDN/WAF denial page is not the website UI. Do not let the audit analyse it as UX evidence.
-    const responseStatus = response.status();
-    const initialBodyText = await page.evaluate(() => document.body?.innerText || "").catch(() => "");
-    const cloudfrontBlock = /403\s+ERROR|request could not be satisfied|generated by cloudfront|request blocked/i.test(initialBodyText);
-    if (responseStatus === 401 || responseStatus === 403 || cloudfrontBlock) {
-      const captureGuidance = auditMode === "mobile"
-        ? "capture the actual page at a mobile viewport around 393 × 852 CSS pixels"
-        : "capture the actual page as a full-page screenshot at about 1440 CSS pixels wide";
-      const message = cloudfrontBlock || responseStatus === 403
-        ? "The target site returned a CDN/security block or challenge during automated screenshot capture (HTTP " + responseStatus + "). This is not a UX finding. Open the page in your normal browser, " + captureGuidance + ", and upload it in the audit workspace. Do not upload the CDN error or challenge page."
-        : "The target site requires authentication (HTTP 401), so automated capture cannot access the page. Open the page in your normal browser session and upload a screenshot of the actual page.";
-      console.warn("[uxaudit] browser_capture_blocked", JSON.stringify({
-        host: url.hostname, auditMode, status: responseStatus, cloudfrontBlock
+    if (!response.ok) {
+      const detail = (await response.text().catch(() => "")).slice(0, 500);
+      console.error("[uxaudit] browserless_capture_failed", JSON.stringify({
+        host: url.hostname, status: response.status, detail, elapsedMs: Date.now() - started
       }));
       return Response.json({
-        error: message,
-        code: "TARGET_BLOCKED_AUTOMATED_CAPTURE",
-        requiresManualScreenshot: true,
-        httpStatus: responseStatus
+        error: "Browserless could not capture this page (HTTP " + response.status + "). " + (detail || "Check the Browserless token, quota, and target-site access."),
+        code: "BROWSERLESS_CAPTURE_FAILED"
       }, { status: 502, headers: { "Cache-Control": "no-store" } });
     }
 
-    await Promise.race([
-      page.waitForNetworkIdle({ idleTime: 600, timeout: 3500 }).catch(() => undefined),
-      new Promise((resolve) => setTimeout(resolve, 1800))
-    ]);
-    await page.evaluate(() => document.fonts?.ready).catch(() => undefined);
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.startsWith("image/")) {
+      const detail = (await response.text().catch(() => "")).slice(0, 300);
+      throw new Error("Browserless returned a non-image response (" + contentType + "). " + detail);
+    }
+    const raw = Buffer.from(await response.arrayBuffer());
+    if (!raw.length || raw.length > 15 * 1024 * 1024) {
+      throw new Error("The screenshot is empty or exceeds the 15 MB analysis limit.");
+    }
 
-    // Scroll once through the page to trigger lazy-loaded mobile sections and images.
-    await page.evaluate(async () => {
-      const initialHeight = Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0);
-      const step = Math.max(window.innerHeight, 600);
-      const maxHeight = Math.min(initialHeight, 18000);
-      for (let y = 0; y < maxHeight; y += step) {
-        window.scrollTo(0, y);
-        await new Promise((resolve) => setTimeout(resolve, 55));
-      }
-      window.scrollTo(0, 0);
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    });
-
-    const actualViewport = await page.evaluate(() => ({
-      innerWidth: window.innerWidth,
-      innerHeight: window.innerHeight,
-      devicePixelRatio: window.devicePixelRatio,
-      mobileMediaQuery: window.matchMedia("(max-width: 600px)").matches,
-      documentHeight: Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0)
-    }));
-    const fullPage = actualViewport.documentHeight <= 18000;
-    const rawScreenshot = Buffer.from(await page.screenshot({ type: "jpeg", quality: 88, fullPage }));
-    const metadata = await sharp(rawScreenshot).metadata();
-    if (!metadata.width || !metadata.height) throw new Error("Chromium returned an invalid screenshot.");
-
-    let image = sharp(rawScreenshot);
+    const metadata = await sharp(raw).metadata();
+    if (!metadata.width || !metadata.height) throw new Error("Browserless returned an invalid screenshot.");
     const boundedWidth = Math.min(metadata.width, viewport.width);
     const boundedHeight = Math.min(metadata.height, 18000);
+    let image = sharp(raw);
     if (boundedWidth !== metadata.width || boundedHeight !== metadata.height) {
       image = image.extract({ left: 0, top: 0, width: boundedWidth, height: boundedHeight });
     }
@@ -173,28 +113,28 @@ export async function POST(req: Request) {
     if (!bytes.length || bytes.length > 15 * 1024 * 1024) {
       throw new Error("The responsive screenshot is too large to analyse. Try a shorter page or a smaller capture.");
     }
-
     const finalMetadata = await sharp(bytes).metadata();
     const screenshot = "data:image/jpeg;base64," + bytes.toString("base64");
-    const title = await page.title().catch(() => "");
+    const title = url.pathname === "/" ? "Homepage" : (url.pathname.split("/").filter(Boolean).pop() || url.hostname).replace(/[-_]/g, " ");
     const result = {
       screenshot, width: finalMetadata.width, height: finalMetadata.height, url: url.href,
-      title: title || (url.pathname === "/" ? "Homepage" : url.pathname.split("/").filter(Boolean).pop()?.replace(/[-_]/g, " ") || url.hostname),
-      auditMode, viewportWidth: viewport.width, viewportHeight: viewport.height,
-      viewport: { ...viewport, unit: "CSS px" }, actualViewport,
-      captureMethod: "headless-chromium", fullPage
+      title, auditMode, viewportWidth: viewport.width, viewportHeight: viewport.height,
+      viewport: { ...viewport, unit: "CSS px" },
+      actualViewport: { innerWidth: viewport.width, innerHeight: viewport.height, devicePixelRatio: 1 },
+      captureMethod: "browserless.io", fullPage: true
     };
-    console.info("[uxaudit] browser_capture_ok", JSON.stringify({
-      host: url.hostname, elapsedMs: Date.now() - started, auditMode,
-      requestedViewport: viewport, actualViewport,
-      screenshot: { width: result.width, height: result.height }, fullPage
+    console.info("[uxaudit] screenshot_capture_ok", JSON.stringify({
+      provider: "browserless.io", host: url.hostname, elapsedMs: Date.now() - started,
+      auditMode, screenshot: { width: result.width, height: result.height }, fullPage: true
     }));
     return Response.json(result, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Browser screenshot capture failed.";
-    console.error("[uxaudit] browser_capture_failed", JSON.stringify({ error: message }));
-    return Response.json({ error: message }, { status: 502, headers: { "Cache-Control": "no-store" } });
-  } finally {
-    if (browser) await browser.close().catch(() => undefined);
+    const message = error instanceof Error ? error.message : "Unknown screenshot capture error.";
+    console.error("[uxaudit] screenshot_capture_error", JSON.stringify({ message: message.slice(0, 700) }));
+    const timeout = /timeout|timed out|abort/i.test(message);
+    return Response.json({
+      error: timeout ? "Screenshot capture timed out. The site may be slow or blocking automated browsers; retry or upload a screenshot of the actual page." : message,
+      code: timeout ? "CAPTURE_TIMEOUT" : "CAPTURE_FAILED"
+    }, { status: timeout ? 504 : 502, headers: { "Cache-Control": "no-store" } });
   }
 }
