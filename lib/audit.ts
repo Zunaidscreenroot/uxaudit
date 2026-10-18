@@ -322,7 +322,7 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   if(!visionModel||!textModel)throw new Error("At least one verified OpenRouter model is required; refresh model availability and retry.");
 
   onStage?.({ id: "capture", label: "Preparing screenshot", detail: auditMode === "mobile" ? `Using a mobile capture with a 393 × 852 CSS-pixel reference viewport; captured image size is ${width} × ${height}px.` : `Using the original ${width} × ${height}px desktop full-page screenshot; no visual crops will be generated.`, status: "complete" });
-  onStage?.({ id: "analyse", label: "OpenRouter screenshot analysis", detail: "OpenRouter Auto Router · low-cost tier · image input enabled · provider price ceiling applied. OpenRouter selects the vision-capable model.", status: "active" });
+  onStage?.({ id: "analyse", label: "OpenRouter screenshot analysis", detail: "Explicit paid vision model · image input enabled · verified non-zero pricing · provider price ceiling applied. Automatic routing and free models are disabled.", status: "active" });
   let visualPass: VisualPass | null = null;let visualErrors:string[]=[];
   const visionCandidates=[visionModel,...allowedModels.filter(m=>m.model!==visionModel.model)];
   for(let i=0;i<visionCandidates.length;i++){const candidate=visionCandidates[i];const timeoutMs=i===0?18000:i===1?10000:8000;try{visualPass=await createVisualPass(candidate,capture,timeoutMs,auditMode);break;}catch(e){visualErrors.push(candidate.model+": "+(e instanceof Error?e.message:"failed"));}}
@@ -349,7 +349,7 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   const knowledgeContext=await retrieveRelevantAuditKnowledge(knowledgeQuery,6);
   if(knowledgeContext)onStage?.({id:"knowledge",label:"Retrieve prior audit evidence",detail:"Retrieved approved guidance from the shared Knowledge Base and relevant examples from Past Findings; current findings still require screenshot evidence.",status:"complete"});
 
-  onStage?.({ id: "quality", label: "OpenRouter UX reasoning", detail: "OpenRouter Auto Router · low-cost tier · text-only UX research and business analysis. OpenRouter selects the reasoning model.", status: "active" });
+  onStage?.({ id: "quality", label: "OpenRouter UX reasoning", detail: "Explicit paid text model · verified non-zero pricing · provider price ceiling applied. Automatic routing and free models are disabled.", status: "active" });
   let review: unknown[]=[];let reviewOk=visualPass.observations.length===0;let reviewErrors:string[]=[];
   const textCandidates=[textModel,...allowedModels.filter(m=>m.model!==textModel.model)];
   if (visualPass.observations.length > 0) for(let i=0;i<textCandidates.length;i++){const candidate=textCandidates[i];const timeoutMs=i===0?14000:i===1?10000:8000;try{review=await createTextReview(candidate,visualPass,timeoutMs,knowledgeContext);if(review.length){reviewOk=true;break;}reviewErrors.push(candidate.model+": empty findings");}catch(e){reviewErrors.push(candidate.model+": "+(e instanceof Error?e.message:"failed"));}}
