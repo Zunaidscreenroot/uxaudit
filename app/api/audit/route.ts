@@ -13,9 +13,19 @@ export async function POST(request: Request) {
     if (file.size > 15 * 1024 * 1024) return Response.json({ error: "Screenshot is too large. Please upload an image smaller than 15 MB." }, { status: 400 });
 
     const verifiedRaw=formData.get("verifiedModels");
-    let verifiedModels: Array<{provider:"OpenRouter"|"Gemini";model:string;tier:"free"|"paid"}> = [];
-    try { verifiedModels=JSON.parse(typeof verifiedRaw==="string"?verifiedRaw:"[]"); } catch { verifiedModels=[]; }
-    if(!Array.isArray(verifiedModels)||!verifiedModels.length) return Response.json({error:"No verified models were supplied. Refresh the landing page to check model availability."},{status:503});
+    let parsedModels: unknown = [];
+    try { parsedModels=JSON.parse(typeof verifiedRaw==="string"?verifiedRaw:"[]"); } catch { parsedModels=[]; }
+    const verifiedModels: Array<{provider:"OpenRouter";model:string;tier:"paid"}> = Array.isArray(parsedModels)
+      ? parsedModels.filter((model): model is {provider:"OpenRouter";model:string;tier:"paid"} =>
+          Boolean(model) && typeof model === "object" &&
+          (model as Record<string,unknown>).provider === "OpenRouter" &&
+          (model as Record<string,unknown>).tier === "paid" &&
+          typeof (model as Record<string,unknown>).model === "string" &&
+          !(model as {model:string}).model.endsWith(":free") &&
+          (model as {model:string}).model !== "openrouter/auto"
+        ).slice(0, 3)
+      : [];
+    if(!verifiedModels.length) return Response.json({error:"No verified paid image-capable OpenRouter model was supplied. Refresh model verification; free and auto-routed models are disabled for audits."},{status:503});
     const buffer = Buffer.from(await file.arrayBuffer());
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
