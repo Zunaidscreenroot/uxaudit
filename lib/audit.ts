@@ -343,8 +343,31 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   }
   visualPass = { ...visualPass, observations: distinctObservations };
   const captureEvidence=[visualPass.pageSummary,...visualPass.observations.map(o=>o.issue+" "+o.element+" "+o.whyItMatters)].join(" ").toLowerCase();
-  const blockedCapturePatterns=[/err_tunnel_connection_failed/,/err_connection_(?:failed|timed_out|refused)/,/dns_probe_finished_nxdomain/,/this site can.t be reached/,/403 forbidden/,/access denied/,/verify you are human/,/checking your browser/,/cloudflare ray id/,/robot check/];
-  if(blockedCapturePatterns.some(pattern=>pattern.test(captureEvidence)))throw new Error("Screenshot capture appears to show a browser, proxy, CDN, or access-block page rather than the intended website. No UX findings were generated. Open the site in your normal browser and upload/paste a screenshot of the actual page.");
+  // A returned image is not sufficient proof that the intended page was captured.
+  // Refuse common browser/CDN/challenge interstitials rather than persisting false UX findings.
+  const blockedCapturePatterns=[
+    /err_tunnel_connection_failed/,
+    /err_connection_(?:failed|timed_out|refused)/,
+    /dns_probe_finished_nxdomain/,
+    /this site can.t be reached/,
+    /403 forbidden/,
+    /access denied/,
+    /verify you are human/,
+    /checking your browser/,
+    /cloudflare ray id/,
+    /robot check/,
+    /security verification/,
+    /performing security verification/,
+    /browser verification/,
+    /one more step/,
+    /complete the action below/,
+    /enable javascript and cookies to continue/,
+    /security service to protect itself from online attacks/
+  ];
+  const challengeSignals=blockedCapturePatterns.filter(pattern=>pattern.test(captureEvidence)).length;
+  if(challengeSignals>=2||blockedCapturePatterns.slice(0,10).some(pattern=>pattern.test(captureEvidence))){
+    throw new Error("Capture quality gate: screenshot appears to show a browser, proxy, CDN, bot-check, or security-verification interstitial instead of the intended website. This run was rejected and must not be used in a competitor comparison. Retry or provide a screenshot of the actual page.");
+  }
   onStage?.({ id: "analyse", label: "Image → text", detail: `${visualPass.clientName} · ${visualPass.observations.length} visual regions identified on the full screenshot.`, status: "complete" });
 
   const knowledgeQuery=[auditMode === "mobile" ? "mobile audit mobile viewport" : "desktop audit desktop viewport",visualPass.clientName,visualPass.pageSummary,...visualPass.observations.map(o=>[o.section,o.element,o.issue,o.whyItMatters].join(" "))].join(" ");
