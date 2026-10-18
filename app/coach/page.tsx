@@ -14,6 +14,9 @@ type Lesson = {
   approved_at?: string | null;
   usage_count?: number;
   last_used_at?: string | null;
+  feedback_kind?: string;
+  source_audit_id?: string | null;
+  source_finding_title?: string | null;
 };
 const COACHING_PROMPT = "I’m coaching UX Audit. Convert my Hindi/Hinglish feedback into one concise, reusable UX rule. Preserve my original feedback, write the rule in clear English, explain why it matters, set the correct scope and keywords, and save it as a draft. Only activate it when I explicitly approve it for future audits.";
 
@@ -97,7 +100,7 @@ export default function CoachPage() {
             {loading && <div className="coach-empty">Loading approved lessons…</div>}
             {!loading && error && <div className="coach-error"><strong>Could not load learning rules.</strong><span>{error}</span><small>Check Supabase configuration and confirm the Coach &amp; Learn table migration is available in this deployment.</small></div>}
             {!loading && !error && !lessons.length && <div className="coach-empty"><strong>No approved lessons yet.</strong><span>That is expected for a new learning loop. Use ChatGPT voice or text to save your first coaching lesson, review it, and approve it before it affects audits.</span></div>}
-            {!loading && !error && lessons.length > 0 && <div className="coach-rule-grid">{lessons.map((lesson) => <article className="coach-rule-card" key={lesson.id}><div className="coach-rule-top"><span className="coach-approved"><i/>Approved</span><span className="coach-rule-scope">{lesson.scope || "all audits"}</span></div><h3>{lesson.title}</h3><p>{lesson.rule}</p>{lesson.rationale && <div className="coach-rationale"><strong>Why it matters</strong><span>{lesson.rationale}</span></div>}{Array.isArray(lesson.keywords) && lesson.keywords.length > 0 && <div className="coach-tags">{lesson.keywords.slice(0, 8).map((keyword) => <span key={keyword}>{keyword}</span>)}</div>}<div className="coach-rule-meta"><span>Approved {dateLabel(lesson.approved_at)}</span><span>{lesson.usage_count || 0} uses</span></div></article>)}</div>}
+            {!loading && !error && lessons.length > 0 && <div className="coach-rule-grid">{lessons.map((lesson) => <article className="coach-rule-card" key={lesson.id}><div className="coach-rule-top"><span className="coach-approved"><i/>Approved</span><span className="coach-rule-scope">{lesson.scope || "all audits"}</span></div><h3>{lesson.title}</h3><p>{lesson.rule}</p>{lesson.rationale && <div className="coach-rationale"><strong>Why it matters</strong><span>{lesson.rationale}</span></div>}{lesson.source_finding_title && <div className="coach-rationale"><strong>Coaching context</strong><span>Correction from: {lesson.source_finding_title} · {(lesson.feedback_kind || "general").replace(/_/g, " ")}</span></div>}{Array.isArray(lesson.keywords) && lesson.keywords.length > 0 && <div className="coach-tags">{lesson.keywords.slice(0, 8).map((keyword) => <span key={keyword}>{keyword}</span>)}</div>}<div className="coach-rule-meta"><span>Approved {dateLabel(lesson.approved_at)}</span><span>{lesson.usage_count || 0} uses</span></div></article>)}</div>}
           </section>
         </div>
         <footer className="or-footer"><span>UX Audit <span>·</span> ChatGPT coaches. UX Audit executes.</span><div><a href="/knowledge-base">Knowledge base</a><a href="/benchmark">Benchmark</a></div></footer>
