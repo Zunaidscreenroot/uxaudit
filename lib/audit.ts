@@ -213,7 +213,7 @@ function normalizeFinding(raw: unknown, observation: VisualObservation, index: n
   const descriptionValue = textValue(item.description, "");
   const description = !descriptionValue || normalizeIssueText(descriptionValue) === normalizeIssueText(title) || isRepeated(descriptionValue, prior, (finding) => finding.description) || /^(this issue|this finding|poor ux|visual design|high density|the design is poor)\b/i.test(descriptionValue) ? evidenceSpecificDescription(observation) : capWords(descriptionValue, 700);
   const recommendationValue = textValue(item.recommendation, "");
-  const recommendation = !recommendationValue || isRepeated(recommendationValue, prior, (finding) => finding.recommendation) || /^(improve the design|make it better|enhance usability|improve visual hierarchy|simplify the interface)[.! ]*$/i.test(recommendationValue) ? evidenceSpecificRecommendation(observation, category) : capWords(recommendationValue, 850);
+  const recommendation = !recommendationValue || isRepeated(recommendationValue, prior, (finding) => finding.recommendation) || /^(improve the design|make it better|enhance usability|improve visual hierarchy|simplify the interface)[.! ]*$/i.test(recommendationValue) || /\b(use a specific heading, group supporting information nearby|reduce competing messages|improve visual hierarchy|make the design more consistent)\b/i.test(recommendationValue) ? evidenceSpecificRecommendation(observation, category) : capWords(recommendationValue, 850);
   const businessDefaults = evidenceSpecificBusinessAnalysis(observation, category);
   function businessField(key: "funnelStage" | "impact" | "kpi" | "mechanism" | "suggestions"): any {
     const value = business[key];
@@ -262,7 +262,7 @@ async function createVisualPass(model: VerifiedModel, capture: Capture, timeoutM
       const text = await modelGenerate(model, [{ text: retryPrompt }, imagePart], attempt === 0 ? 4500 : 3500, timeoutMs);
       const parsed = extractJson(text);
       const result = normalizeVisualPass(parsed);
-      if (result.observations.length) return result;
+      return result;
       const keys = parsed && typeof parsed === "object" ? Object.keys(parsed as Record<string, unknown>) : [];
       lastProblem = "No usable observations; returned JSON keys: " + (keys.join(", ") || "none");
       console.warn("[uxaudit] visual_schema_mismatch", JSON.stringify({ attempt: attempt + 1, keys, responsePreview: text.slice(0, 500) }));
@@ -300,7 +300,8 @@ function isGenericOrRepeatedFinding(finding: Finding, prior: Finding[]) {
 }
 
 function fallbackFinding(observation: VisualObservation, index: number): Finding {
-  return normalizeFinding({ id: `finding-${index + 1}`, severity: /\b(blocks access|cannot submit|dead link|misleading|critical|unreadable|prevents completion|broken form|error message)\b/i.test(observation.issue) ? "high" : "low", category: "Information hierarchy", title: observation.issue, description: observation.issue, recommendation: evidenceSpecificRecommendation(observation, "Information hierarchy"), uxPerspective: { law: "Visual hierarchy and cognitive load", definition: "Users scan interfaces by relative prominence and grouping, so competing or unclear signals increase the effort needed to decide what matters.", assessment: observation.whyItMatters, researchContext: "The observation is consistent with established research on visual grouping, attention and cognitive load." }, businessAnalysis: { funnelStage: "Consideration / conversion", impact: "The visible friction can increase hesitation before the next intended action.", kpi: "Primary CTA click-through rate", mechanism: "When the intended next step is harder to understand, users can delay, miss or abandon the action.", suggestions: ["Strengthen the primary hierarchy.", "Remove or reduce competing signals around the key action."] } }, observation, index);
+  const category = inferredCategory(observation);
+  return normalizeFinding({ id: `finding-${index + 1}`, severity: /\b(blocks access|cannot submit|dead link|misleading|critical|unreadable|prevents completion|broken form|error message)\b/i.test(observation.issue) ? "high" : "low", category, title: observation.issue, description: observation.issue, recommendation: evidenceSpecificRecommendation(observation, category), uxPerspective: { law: "Visual hierarchy and cognitive load", definition: "Users scan interfaces by relative prominence and grouping, so competing or unclear signals increase the effort needed to decide what matters.", assessment: observation.whyItMatters, researchContext: "The observation is consistent with established research on visual grouping, attention and cognitive load." }, businessAnalysis: { funnelStage: "Consideration / conversion", impact: "The visible friction can increase hesitation before the next intended action.", kpi: "Primary CTA click-through rate", mechanism: "When the intended next step is harder to understand, users can delay, miss or abandon the action.", suggestions: ["Strengthen the primary hierarchy.", "Remove or reduce competing signals around the key action."] } }, observation, index);
 }
 
 export async function createAuditFromScreenshot(buffer: Buffer, filename: string, onStage?: (stage: AuditStage) => void, verifiedModels: VerifiedModel[] = [], auditMode: "desktop" | "mobile" = "desktop"): Promise<AuditResult> {
@@ -324,6 +325,19 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   const visionCandidates=[visionModel,...allowedModels.filter(m=>m.model!==visionModel.model)];
   for(let i=0;i<visionCandidates.length;i++){const candidate=visionCandidates[i];const timeoutMs=i===0?18000:i===1?10000:8000;try{visualPass=await createVisualPass(candidate,capture,timeoutMs,auditMode);break;}catch(e){visualErrors.push(candidate.model+": "+(e instanceof Error?e.message:"failed"));}}
   if(!visualPass)throw new Error("OpenRouter Auto Router could not analyze the screenshot. "+visualErrors.join(" | "));
+  // Deduplicate near-identical model observations before review and marker generation.
+  const distinctObservations: VisualObservation[] = [];
+  const tokenSet = (value: string) => new Set(normalizeIssueText(value).split(" ").filter((token) => token.length > 2));
+  const similarity = (a: string, b: string) => { const aa = tokenSet(a); const bb = tokenSet(b); if (!aa.size || !bb.size) return 0; let overlap = 0; aa.forEach((token) => { if (bb.has(token)) overlap += 1; }); return overlap / (aa.size + bb.size - overlap); };
+  for (const observation of visualPass.observations) {
+    const duplicate = distinctObservations.some((prior) => {
+      const sameElement = normalizeIssueText(prior.element) === normalizeIssueText(observation.element);
+      const sameIssue = normalizeIssueText(prior.issue) === normalizeIssueText(observation.issue);
+      return (sameElement && (sameIssue || similarity(prior.issue, observation.issue) >= 0.55)) || similarity(prior.element + " " + prior.issue, observation.element + " " + observation.issue) >= 0.78;
+    });
+    if (!duplicate) distinctObservations.push(observation);
+  }
+  visualPass = { ...visualPass, observations: distinctObservations };
   const captureEvidence=[visualPass.pageSummary,...visualPass.observations.map(o=>o.issue+" "+o.element+" "+o.whyItMatters)].join(" ").toLowerCase();
   const blockedCapturePatterns=[/err_tunnel_connection_failed/,/err_connection_(?:failed|timed_out|refused)/,/dns_probe_finished_nxdomain/,/this site can.t be reached/,/403 forbidden/,/access denied/,/verify you are human/,/checking your browser/,/cloudflare ray id/,/robot check/];
   if(blockedCapturePatterns.some(pattern=>pattern.test(captureEvidence)))throw new Error("Screenshot capture appears to show a browser, proxy, CDN, or access-block page rather than the intended website. No UX findings were generated. Open the site in your normal browser and upload/paste a screenshot of the actual page.");
@@ -334,9 +348,9 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   if(knowledgeContext)onStage?.({id:"knowledge",label:"Retrieve prior audit evidence",detail:"Retrieved relevant saved findings from the Supabase knowledge base to calibrate recommendations; current findings still require screenshot evidence.",status:"complete"});
 
   onStage?.({ id: "quality", label: "OpenRouter UX reasoning", detail: "OpenRouter Auto Router · low-cost tier · text-only UX research and business analysis. OpenRouter selects the reasoning model.", status: "active" });
-  let review: unknown[]=[];let reviewOk=false;let reviewErrors:string[]=[];
+  let review: unknown[]=[];let reviewOk=visualPass.observations.length===0;let reviewErrors:string[]=[];
   const textCandidates=[textModel,...allowedModels.filter(m=>m.model!==textModel.model)];
-  for(let i=0;i<textCandidates.length;i++){const candidate=textCandidates[i];const timeoutMs=i===0?14000:i===1?10000:8000;try{review=await createTextReview(candidate,visualPass,timeoutMs,knowledgeContext);if(review.length){reviewOk=true;break;}reviewErrors.push(candidate.model+": empty findings");}catch(e){reviewErrors.push(candidate.model+": "+(e instanceof Error?e.message:"failed"));}}
+  if (visualPass.observations.length > 0) for(let i=0;i<textCandidates.length;i++){const candidate=textCandidates[i];const timeoutMs=i===0?14000:i===1?10000:8000;try{review=await createTextReview(candidate,visualPass,timeoutMs,knowledgeContext);if(review.length){reviewOk=true;break;}reviewErrors.push(candidate.model+": empty findings");}catch(e){reviewErrors.push(candidate.model+": "+(e instanceof Error?e.message:"failed"));}}
   if(!reviewOk){console.warn("[uxaudit] text_review_degraded",JSON.stringify({errors:reviewErrors,observations:visualPass.observations.length}));onStage?.({id:"quality",label:"OpenRouter UX reasoning",detail:"OpenRouter did not return valid structured research findings; preserving screenshot evidence and using conservative evidence-linked fallback recommendations. "+reviewErrors.join(" | "),status:"complete"});review=[];}else{onStage?.({id:"quality",label:"OpenRouter UX reasoning",detail:"OpenRouter returned structured UX laws, research context and business-funnel hypotheses.",status:"complete"});}
 
   onStage?.({ id: "markers", label: "Place evidence markers", detail: "Linking each finding to its exact region on the original screenshot; no crops are created.", status: "active" });
