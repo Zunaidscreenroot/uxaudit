@@ -1,5 +1,6 @@
 import { retrieveRelevantAuditKnowledge } from "@/lib/knowledge-base";
-import sharp from "sharp";
+import { PhotonImage, SamplingFilter, resize } from "@cf-wasm/photon/workerd";
+import { getImageInfo, type SupportedImageMime } from "@/lib/image-info";
 
 export type Severity = "high" | "medium" | "low";
 export type MarkerPoint = { x: number; y: number };
@@ -11,7 +12,7 @@ export type AuditPage = { id?: string; clientName: string; url: string; title: s
 export type AuditResult = { pages: AuditPage[] };
 export type AuditStage = { id: string; label: string; detail: string; status: "active" | "complete" };
 
-type Capture = { buffer: Buffer; width: number; height: number; analysisBuffer: Buffer; title: string };
+type Capture = { buffer: Buffer; width: number; height: number; analysisBuffer: Buffer; mimeType: SupportedImageMime; title: string };
 type VisualObservation = { id: string; section: string; element: string; issue: string; whyItMatters: string; marker: MarkerPoint };
 type VisualPass = { clientName: string; pageSummary: string; observations: VisualObservation[] };
 
@@ -254,7 +255,7 @@ async function createVisualPass(model: VerifiedModel, capture: Capture, timeoutM
   const viewportHint = aspect < 0.75 ? "portrait or full-page narrow capture (verify actual visible UI; do not assume mobile solely from aspect ratio)" : aspect < 1.15 ? "square-ish or tablet-like capture (verify actual visible UI)" : "wide capture (likely desktop, but verify actual visible UI)";
   const modeInstruction = auditMode === "mobile" ? "MOBILE WEBSITE AUDIT. The intended CSS viewport is 393 × 852 pixels. Prioritize mobile-specific evidence: compact navigation and menus, touch target size and spacing, thumb reach, text legibility at phone width, horizontal overflow, responsive stacking, sticky elements consuming viewport space, form usability, CTA competition, mobile layout breaks and conversion friction. Analyse only what is visibly present in the captured image; do not invent controls or claim unsupported measurements." : "DESKTOP WEBSITE AUDIT. Prioritize desktop navigation, wide-screen hierarchy, multi-column layout, density, hover/keyboard affordances when visible, CTA hierarchy and desktop conversion friction. Analyse only visible evidence.";
   const prompt = `You are the IMAGE-TO-TEXT stage of a UX audit. ${modeInstruction} Analyze the supplied screenshot itself, not an imagined website. Original dimensions are ${capture.width}x${capture.height}px; aspect-ratio hint: ${viewportHint}. Determine DEVICE / VIEWPORT from visible evidence first: narrow single-column layout, mobile hamburger/menu, stacked cards, mobile-sized controls, desktop multi-column layout, wide navigation, sidebars, or desktop utility bars. In JSON include "deviceType" as "mobile", "desktop", "tablet", or "uncertain" and explain the visible cue in pageSummary. Never label a full-page screenshot mobile just because it is tall; never label it desktop just because it contains lots of content.\n\nFIRST identify the CLIENT / BRAND NAME visible in the screenshot. Look specifically for explicit company or product text, logo/wordmark text, domain text, browser/site identity, distinctive brand naming, or a clearly visible legal/company name. Use the strongest explicit evidence. If the screenshot is Tata Capital, return exactly "Tata Capital". Do not infer a client from generic colours, layout style, or industry alone. If no reliable name is visible, return "Unknown client".\n\nThe final report will display the ENTIRE original screenshot once, with numbered colored dots overlaid on the exact regions you identify. There is NO CROPPING in this product. Do not return bounding boxes, crop widths, crop heights, or image snippets.\n\nFind 2–6 strong, DISTINCT UX observations. Each observation must refer to a different specific visible UI region and a different concrete issue grounded only in pixels actually visible in this screenshot. Do not repeat the same issue under synonyms, do not repeat generic labels such as "high density" for multiple unrelated sections, and do not reuse a title/issue/element for multiple observations. If the screenshot does not support distinct, meaningful issues, return fewer—including zero—rather than inventing or duplicating. Describe intentional design choices neutrally unless a concrete user problem is visible. Titles must name the actual element and problem, not just a generic category. If the screenshot is narrow/tall, reason about the actual responsive mobile layout shown; never assume desktop. Prefer concrete issues involving hierarchy, labels, grouping, density, CTA competition, form clarity, content scanning, navigation, trust, or conversion friction.\n\nFor EVERY observation return ONE MARKER POINT at the visual centre of the specific UI region that demonstrates the issue. Coordinates must be normalized from 0 to 1 using the ORIGINAL supplied image dimensions: x=0 is the left edge, x=1 the right edge, y=0 is the top edge, y=1 the bottom edge. The dot should land ON the relevant text, control, card, image, navigation item, or other visible evidence—not in empty space. Use the exact visible location, not a section estimate or page-percentage guess. Never place two observations at the same point. Keep observations ordered from top to bottom of the screenshot.\n\nThe marker is the permanent spatial link between the visual observation and the later text review. Do not change or reinterpret the marker after choosing it.\n\nReturn JSON only: {"clientName":"Tata Capital","deviceType":"mobile|desktop|tablet|uncertain","pageSummary":"one factual sentence including visible device/layout cues","observations":[{"id":"obs-1","section":"exact visible section","element":"exact visible element","issue":"factual visible issue","whyItMatters":"user-visible consequence","marker":{"x":0.50,"y":0.20}}]}`;
-  const imagePart = { inline_data: { mime_type: "image/jpeg", data: capture.analysisBuffer.toString("base64") } };
+  const imagePart = { inline_data: { mime_type: capture.mimeType, data: capture.analysisBuffer.toString("base64") } };
   let lastProblem = "The image-to-text model returned no usable visual observations.";
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const retryPrompt = attempt === 0 ? prompt : `Inspect the attached screenshot and return ONLY valid JSON with this exact shape: {"clientName":"visible brand or Unknown client","pageSummary":"one sentence describing visible layout","observations":[{"id":"obs-1","section":"visible region","element":"visible control or content","issue":"specific UX issue visibly supported by screenshot","whyItMatters":"user impact","marker":{"x":0.5,"y":0.2}}]}. Return 0 to 5 observations only when supported by visible evidence; an empty observations array is valid when no meaningful issue is visible. Coordinates must be numbers from 0 to 1. Do not return markdown or any other schema.`;
@@ -306,12 +307,53 @@ function fallbackFinding(observation: VisualObservation, index: number): Finding
 
 export async function createAuditFromScreenshot(buffer: Buffer, filename: string, onStage?: (stage: AuditStage) => void, verifiedModels: VerifiedModel[] = [], auditMode: "desktop" | "mobile" = "desktop"): Promise<AuditResult> {
   if (buffer.byteLength > MAX_SCREENSHOT_BYTES) throw new Error("Screenshot is too large. Please upload an image smaller than 15 MB.");
-  const metadata = await sharp(buffer).metadata(); const width = metadata.width ?? 0; const height = metadata.height ?? 0;
-  if (!width || !height) throw new Error("The uploaded file is not a valid image.");
+  const imageInfo = getImageInfo(buffer);
+  if (!imageInfo) throw new Error("The uploaded file is not a supported or valid image.");
+  const { width, height, mimeType } = imageInfo;
   if (width < 320 || height < 200) throw new Error("Please upload a larger screenshot so the UX evidence can be reviewed reliably.");
   if (width > 20000 || height > 20000) throw new Error("Screenshot dimensions are too large. Please upload a smaller screenshot.");
-  const analysisBuffer = await sharp(buffer).resize({ width: Math.min(1280, width), height: Math.min(5000, height), fit: "inside", withoutEnlargement: true }).jpeg({ quality: 72, progressive: true }).toBuffer();
-  const capture: Capture = { buffer, width, height, analysisBuffer, title: filename.replace(/\.[^.]+$/, "") || "Uploaded screenshot" };
+
+  // Resize/compress only modest images with WASM, which runs on Workers. Very tall
+  // full-page screenshots are passed through to avoid exceeding Workers' memory cap.
+  let analysisBuffer = buffer;
+  let analysisMimeType: SupportedImageMime = mimeType;
+  let screenshotBytes = buffer;
+  let screenshotMimeType: SupportedImageMime = mimeType;
+  if (width * height <= 6_000_000) {
+    let inputImage: PhotonImage | null = null;
+    let resizedImage: PhotonImage | null = null;
+    try {
+      inputImage = PhotonImage.new_from_byteslice(buffer);
+      const sourceWidth = inputImage.get_width();
+      const sourceHeight = inputImage.get_height();
+      const scale = Math.min(1280 / sourceWidth, 5000 / sourceHeight, 1);
+      if (scale < 1) {
+        resizedImage = resize(
+          inputImage,
+          Math.max(1, Math.round(sourceWidth * scale)),
+          Math.max(1, Math.round(sourceHeight * scale)),
+          SamplingFilter.Lanczos3
+        );
+      }
+      const analysisImage = resizedImage ?? inputImage;
+      analysisBuffer = Buffer.from(analysisImage.get_bytes_jpeg(72));
+      analysisMimeType = "image/jpeg";
+      screenshotBytes = Buffer.from(inputImage.get_bytes_jpeg(88));
+      screenshotMimeType = "image/jpeg";
+    } catch (error) {
+      console.warn("[uxaudit] image_processing_fallback", JSON.stringify({
+        error: error instanceof Error ? error.message : "WASM image processing failed"
+      }));
+      analysisBuffer = buffer;
+      analysisMimeType = mimeType;
+      screenshotBytes = buffer;
+      screenshotMimeType = mimeType;
+    } finally {
+      if (resizedImage) resizedImage.free();
+      if (inputImage) inputImage.free();
+    }
+  }
+
   const allowedModels=verifiedModels.filter(m=>m&&m.provider==="OpenRouter"&&typeof m.model==="string"&&m.model.length>0);
   // The connection layer owns model selection: the first verified model is the primary; later entries are ordered fallbacks.
   const primaryModel=allowedModels[0];
@@ -368,7 +410,7 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   onStage?.({ id: "enrich", label: "Applying UX + business context", detail: "Finalising funnel impact, KPI hypotheses and redesign recommendations.", status: "active" });
   onStage?.({ id: "enrich", label: "Applying UX + business context", detail: "UX research context and business funnel analysis are ready.", status: "complete" });
   onStage?.({ id: "complete", label: "Finalise report", detail: "Building the client-ready report with one full screenshot and linked evidence markers.", status: "active" });
-  const screenshot = `data:image/jpeg;base64,${(await sharp(buffer).jpeg({ quality: 88, progressive: true }).toBuffer()).toString("base64")}`;
+  const screenshot = `data:${screenshotMimeType};base64,${screenshotBytes.toString("base64")}`;
   const result: AuditResult = { pages: [{ clientName: visualPass.clientName, url: "Uploaded screenshot", title: capture.title, screenshot, screenshotWidth: width, screenshotHeight: height, findings, auditMode, viewportWidth: auditMode === "mobile" ? 393 : 1440, ...(auditMode === "mobile" ? { viewportHeight: 852 } : {}) }] };
   onStage?.({ id: "complete", label: "Finalise report", detail: "Audit ready.", status: "complete" });
   return result;
