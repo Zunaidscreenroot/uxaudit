@@ -41,6 +41,7 @@ export default function ProductShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() || "/";
   const [connection, setConnection] = useState<Connection | null>(null);
   const [checking, setChecking] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const title = useMemo(() => titles[pathname] || "UX Audit workspace", [pathname]);
 
   const refreshConnection = useCallback(async () => {
