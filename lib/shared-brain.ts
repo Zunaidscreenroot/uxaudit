@@ -3,7 +3,7 @@ export type SharedBrainScope =
   | "DMI_HFC" | "UJJIVAN_SFB" | "INDIA_BFCI_SHARED";
 
 function config() {
-  const url = (process.env.UX_DIRECT_BRAIN_API_URL || "https://uxdirect.netlify.app/api/brain").trim();
+  const url = (process.env.UX_SHARED_BRAIN_URL || process.env.UX_DIRECT_BRAIN_API_URL || "https://uxdirect.netlify.app/api/brain").trim();
   const key = process.env.UX_DIRECT_BRAIN_API_KEY?.trim();
   if (!key || key.length < 32) return null;
   return { url: url.replace(/\/$/, ""), key };
@@ -14,6 +14,18 @@ export function inferSharedBrainScope(query: string): SharedBrainScope {
   if (/\b(dmi|dmi hfc|dmi finance)\b/i.test(query)) return "DMI_HFC";
   if (/\b(ujjivan|ujjivan sfb)\b/i.test(query)) return "UJJIVAN_SFB";
   if (/\b(bfsi|bank|banking|finance|financial services|insurance|nbfc|lender|loan|credit|upi|deposit|wealth|indian)\b/i.test(query)) return "INDIA_BFCI_SHARED";
+  return "UX_AUDIT";
+}
+
+export function resolveCoachingBrainScope(scopeText: string, ruleText = "", rawFeedback = ""): SharedBrainScope {
+  const value = (scopeText + " " + ruleText + " " + rawFeedback).toLowerCase();
+  if (/\\b(express computers|express-computers)\\b/i.test(value)) return "EXPRESS_COMPUTERS";
+  if (/\\b(dmi|dmi hfc|dmi finance|dmi housing finance)\\b/i.test(value)) return "DMI_HFC";
+  if (/\\b(ujjivan|ujjivan sfb|ujjivan small finance)\\b/i.test(value)) return "UJJIVAN_SFB";
+  if (/\\b(bfsi|indian bank|india banking|banking|banks?|nbfc|lender|insurance|loans?|credit|upi|deposit|financial services|small finance bank|sfb)\\b/i.test(value)) return "INDIA_BFCI_SHARED";
+  if (/\\b(all products|all tools|all agents|global|cross.product|shared brain|all audits|every audit)\\b/i.test(value)) return "UX_SHARED_BRAIN";
+  if (/\\b(ux direct|wirefram|design system|figma plugin|design execution)\\b/i.test(value)) return "UX_DIRECT";
+  if (/\\b(ux audit|audit only|auditing|audit finding|false positive|severity calibration|screenshot evidence)\\b/i.test(value)) return "UX_AUDIT";
   return "UX_AUDIT";
 }
 
