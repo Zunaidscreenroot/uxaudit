@@ -22,7 +22,8 @@
       }
     ],
     "vars": {
-      "APP_ENV": "preview"
+      "APP_ENV": "preview",
+      "DAILY_BUDGET_INR": "100"
     }
   },
   "preview_urls": true,
