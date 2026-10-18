@@ -6,7 +6,7 @@ let cachedScan: {expiresAt:number;payload:any}|null = null;
 type Provider = "OpenRouter" | "Gemini";
 type ModelDef = { provider: Provider; model: string; tier: "free" | "paid"; promptPrice?:number; completionPrice?:number; imageCapable?:boolean; popularityRank?:number };
 const STATIC_FALLBACK: ModelDef[] = [
- {provider:"OpenRouter",model:"nvidia/nemotron-3.5-super-vl:free",tier:"free",promptPrice:0,completionPrice:0,imageCapable:true},
+ {provider:"OpenRouter",model:"deepseek/deepseek-v4-flash-vision-exp",tier:"paid",imageCapable:true},
  {provider:"OpenRouter",model:"deepseek/deepseek-v4-flash-vision-exp",tier:"paid",imageCapable:true},
 ];
 
@@ -25,7 +25,7 @@ async function testModel(item: ModelDef) {
    if (!key) return {...item,ok:false,latencyMs:0,error:"OpenRouter API key missing"};
    response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method:"POST",headers:{Authorization:`Bearer ${key}`,"Content-Type":"application/json","HTTP-Referer":"https://uxauditscreenroot.vercel.app","X-Title":"UX Audit Availability Check"},
-    body:JSON.stringify({model:item.model,messages:[{role:"user",content:"Reply OK"}],max_tokens:2,temperature:0,provider:{allow_fallbacks:false}}),
+    body:JSON.stringify({model:item.model,messages:[{role:"user",content:"Reply OK"}],max_tokens:2,temperature:0,provider:{allow_fallbacks:false,max_price:{prompt:0.5,completion:2}}}),
     signal:AbortSignal.timeout(7000),cache:"no-store"
    });
    payload = await response.json().catch(()=>({}));
@@ -81,8 +81,10 @@ export async function POST() {
  if(cachedScan&&cachedScan.expiresAt>Date.now())return Response.json({...cachedScan.payload,cacheHit:true},{headers:{"Cache-Control":"no-store"}});
  try {
   const models=await getPopularModels();
-  const auditCandidates=models.filter((m:any)=>m.imageCapable && !((m as any).audioOnly));
-  const results=await mapLimit(auditCandidates,5,testModel);
+  const auditCandidates=models.filter((m:any)=>m.imageCapable && m.tier==="paid" && !((m as any).audioOnly))
+    .sort((a:any,b:any)=>((a.promptPrice??0)+(a.completionPrice??0))-((b.promptPrice??0)+(b.completionPrice??0)) || (a.popularityRank??999)-(b.popularityRank??999))
+    .slice(0,8);
+  const results=await mapLimit(auditCandidates,3,testModel);
   const working=results.filter((result:any)=>result.ok).map((result:any)=>({...result,...auditCandidates.find(m=>m.model===result.model)}));
   const failed=results.filter((result:any)=>!result.ok);
   // The audit analyzes screenshots, so the selected model must accept image input.
@@ -92,7 +94,7 @@ export async function POST() {
   const selected=selectedModels[0]??null;
   const verificationActivity=results.map((r:any)=>({model:r.model,ok:Boolean(r.ok),tokens:Number(r.totalTokens??0),costUsd:Number(r.estimatedCostUsd??0),latencyMs:Number(r.latencyMs??0)}));
   const verificationRunCostUsd=verificationActivity.reduce((sum:number,a:any)=>sum+a.costUsd,0);const verificationRunTokens=verificationActivity.reduce((sum:number,a:any)=>sum+a.tokens,0);
-  const payload={checkedAt:new Date().toISOString(),modelCount:models.length,auditCandidateCount:auditCandidates.length,working,failed,selected,selectedModels,verificationActivity,verificationRunCostUsd,verificationRunTokens,selectionReason:selected?"Cheapest verified image-capable model by listed input + output token pricing; latency breaks ties.": "No verified image-capable model was found among the top 50 models. Audit is disabled rather than using an unverified model.",cacheHit:false,cacheTtlMinutes:30,note:"Takes the first 50 models returned in OpenRouter catalogue order, excludes models without image input, and tests only image-capable candidates using tiny text-only requests. Up to three cheapest verified image-capable models are retained as primary/fallback candidates. Pricing is catalogue pricing; a small charge may apply to paid tests."};
+  const payload={checkedAt:new Date().toISOString(),modelCount:models.length,auditCandidateCount:auditCandidates.length,working,failed,selected,selectedModels,verificationActivity,verificationRunCostUsd,verificationRunTokens,selectionReason:selected?"Cheapest verified image-capable model by listed input + output token pricing; latency breaks ties.": "No verified image-capable model was found among the top 50 models. Audit is disabled rather than using an unverified model.",cacheHit:false,cacheTtlMinutes:30,note:"Takes the first 50 catalogue models, then tests at most 8 cheapest paid image-capable candidates using tiny text-only checks with no provider fallback and a price ceiling. Free models and auto-routing are excluded. Up to three verified paid models are retained as primary/fallback candidates. Pricing is catalogue pricing; a small charge may apply to paid verification checks."};
   cachedScan={expiresAt:Date.now()+CACHE_TTL_MS,payload};
   return Response.json(payload,{headers:{"Cache-Control":"no-store"}});
  }catch(error){return Response.json({error:error instanceof Error?error.message:"Model availability scan failed."},{status:503,headers:{"Cache-Control":"no-store"}})}
