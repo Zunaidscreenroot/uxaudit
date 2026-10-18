@@ -32,7 +32,9 @@ export function resolveCoachingBrainScope(scopeText: string, ruleText = "", rawF
   if (/\b(express computers|express-computers)\b/i.test(value)) return "EXPRESS_COMPUTERS";
   if (/\b(dmi|dmi hfc|dmi finance|dmi housing finance)\b/i.test(value)) return "DMI_HFC";
   if (/\b(ujjivan|ujjivan sfb|ujjivan small finance)\b/i.test(value)) return "UJJIVAN_SFB";
-  if (/\b(bfsi|indian bank|india banking|banking|banks?|nbfc|lender|insurance|loans?|credit|upi|deposit|financial services|small finance bank|sfb)\b/i.test(coachingText)) return "INDIA_BFCI_SHARED";
+  if (/\b(bfsi|indian bank|india banking|indian bfsi|india bfsi|rbi rule|rbi requirement|upi|ifsc|nbfc|sfb|small finance bank)\b/i.test(coachingText)) return "INDIA_BFCI_SHARED";
+  const explicitNonIndia = /\b(united states|us|usa|uk|united kingdom|singapore|australia|canada|international market|non.indian)\b|u\.s\./i.test(coachingText);
+  if (!explicitNonIndia && /\b(banking|banks?|lender|insurance|loans?|credit|deposit|financial services)\b/i.test(coachingText)) return "INDIA_BFCI_SHARED";
   if (/\b(ux direct|wirefram|design system|figma plugin|design execution)\b/i.test(coachingText)) return "UX_DIRECT";
   if (/\b(ux audit|audit only|auditing|audit finding|false positive|severity calibration|screenshot evidence)\b/i.test(coachingText)) return "UX_AUDIT";
   return "UX_AUDIT";
