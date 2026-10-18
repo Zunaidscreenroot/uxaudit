@@ -1,3 +1,5 @@
+import { getRuntimeEnv } from "@/lib/neon-db";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -9,9 +11,9 @@ function jsonError(error: string, status = 503) {
 }
 
 export async function GET() {
-  const key = process.env.OPENROUTER_API_KEY?.trim();
+  const key = getRuntimeEnv().OPENROUTER_API_KEY?.trim();
   if (!key) {
-    return jsonError("OPENROUTER_API_KEY is not configured on the server.");
+    return jsonError("OPENROUTER_API_KEY is not configured as a Cloudflare Worker secret for this environment.");
   }
 
   try {
@@ -25,12 +27,12 @@ export async function GET() {
     if (!response.ok) {
       if (response.status === 401) {
         return jsonError(
-          "OpenRouter rejected OPENROUTER_API_KEY (HTTP 401). The configured key may be invalid, revoked, expired, or copied incorrectly. Replace it with a standard OpenRouter API key in Netlify environment variables for this deploy context, then redeploy. Do not use a Management API key for model inference."
+          "OpenRouter rejected OPENROUTER_API_KEY (HTTP 401). The configured key may be invalid, revoked, expired, or copied incorrectly. Configure a valid standard OpenRouter API key as a secret in the Cloudflare Preview environment, then redeploy. Do not use a Management API key for model inference."
         );
       }
       if (response.status === 403) {
         return jsonError(
-          "OpenRouter denied the configured API key (HTTP 403). Check the key and account/workspace access, then redeploy."
+          "OpenRouter denied the configured API key (HTTP 403). Check the key and account/workspace access in Cloudflare Preview secrets, then redeploy."
         );
       }
       if (response.status === 429) {
