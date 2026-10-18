@@ -57,11 +57,20 @@ export default function ProductShell({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => { void refreshConnection(); }, [refreshConnection]);
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileNavOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [mobileNavOpen]);
+  useEffect(() => { setMobileNavOpen(false); }, [pathname]);
 
   return (
     <div className="uxd-shell">
       <aside className="uxd-sidebar" aria-label="Product navigation">
-        <a href="/" className="uxd-brand" aria-label="UX Audit home">
+        <a href="/" className="uxd-brand" aria-label="UX Audit home" onClick={() => setMobileNavOpen(false)}>
           <span className="uxd-brand-mark">u</span>
           <span className="uxd-brand-copy">ux<span>audit</span><small>UX INTELLIGENCE</small></span>
         </a>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { PageHeading } from "../ui";
 
 type Lesson = {
   id: string;
@@ -76,7 +77,7 @@ export default function CoachPage() {
       <section className="or-main">
         <header className="or-topbar"><div className="or-breadcrumb"><a href="/" style={{ color: "inherit", textDecoration: "none" }}>Workspace</a><span>/</span><strong>Coach &amp; Learn</strong></div><div className="or-top-actions"><span className="coach-connection"><i/>ChatGPT coaching via MCP</span><span className="or-user-avatar">Z</span></div></header>
         <div className="or-content coach-content">
-          <div className="or-welcome-row"><div><div className="or-overline">CONTINUOUS IMPROVEMENT</div><h1>Coach the auditor. Improve every run.</h1><p>Turn your corrections into reusable rules. ChatGPT helps interpret your feedback; UX Audit stores the lesson and applies approved guidance to future audits.</p></div><a className="or-text-link" href="/site-map">Open audit workspace <span>↗</span></a></div>
+          <PageHeading eyebrow="CONTINUOUS IMPROVEMENT" title="Coach the auditor. Improve every run." description="Turn your corrections into reusable rules. ChatGPT helps interpret your feedback; UX Audit stores the lesson and applies approved guidance to future audits." actions={<a className="or-text-link" href="/site-map">Open audit workspace <span>↗</span></a>} />
 
           <section className="coach-principle">
             <div className="coach-principle-mark">✦</div>
