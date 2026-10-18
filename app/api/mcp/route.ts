@@ -33,7 +33,7 @@ const toolDefinitions = [
     description: "Get concise findings from a saved IA session: severity, category, issue, recommendation, UX research and business analysis. Omits screenshot payloads.",
     inputSchema: { type: "object", properties: { sessionId: { type: "string", description: "UUID returned by UX Audit." }, pageUrl: { type: "string", description: "Optional URL filter." } }, required: ["sessionId"], additionalProperties: false } },
   { name: "uxaudit_save_coaching_lesson", title: "Save a coaching lesson", requiredScope: "audit:coach", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-    description: "Turn user feedback, including Hindi/Hinglish voice transcripts, into one concise reusable UX Audit rule. Preserve the raw feedback. Save as a draft by default; activate only when the user explicitly approves it for future audits. Only approved rules are retrieved during later audits.",
+    description: "Turn user feedback, including Hindi/Hinglish voice transcripts, into one concise reusable UX Audit rule. Classify the correction, preserve the raw feedback, and attach audit/finding context when available. If an earlier approved rule is explicitly reported as ineffective or wrong, list and archive that rule before approving its replacement. Save as a draft by default; activate only when the user explicitly approves it. Only approved rules and short optional examples are retrieved during later audits.",
     inputSchema: { type: "object", properties: {
       rawFeedback: { type: "string", maxLength: 8000, description: "The original user feedback, preserving their wording and language." },
       title: { type: "string", maxLength: 180, description: "Short English title for the reusable lesson." },
@@ -44,7 +44,7 @@ const toolDefinitions = [
       examples: { type: "array", items: { type: "string" }, maxItems: 8 },
       sourceLanguage: { type: "string", maxLength: 40, description: "Language of the original feedback, e.g. Hindi, Hinglish, English." },
       feedbackKind: { type: "string", enum: ["general", "false_positive", "missed_issue", "severity_calibration", "recommendation_quality", "duplicate_finding", "benchmarking", "scope", "visual_evidence", "accessibility", "other"], description: "Classify what the correction addresses." },
-      sourceAuditId: { type: "string", description: "Optional UUID of the saved audit where the correction was observed." },
+      sourceAuditId: { type: "string", description: "Optional UUID from the auditId field returned by UX Audit. Do not pass an MCP sessionId here." },
       sourceFindingTitle: { type: "string", maxLength: 240, description: "Optional title of the finding being corrected." },
       activate: { type: "boolean", description: "Set true only when the user explicitly approves immediate activation. Otherwise leave unset or false to save a draft." }
     }, required: ["rawFeedback", "title", "rule"], additionalProperties: false } },
