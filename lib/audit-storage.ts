@@ -1,55 +1,83 @@
-import { Buffer } from "node:buffer";
-import { getRuntimeEnv, type R2BucketLike } from "@/lib/neon-db";
+import { getRuntimeEnv, getSql, type R2BucketLike } from "@/lib/neon-db";
 
-const ASSET_PREFIX = "uxaudit/audits/";
+const ASSET_PREFIX = "ux-audit/screenshots/";
+const BUCKET_NAME = "ux-direct-assets";
+const DATA_URI_PATTERN = /^data:(image\/(?:jpeg|jpg|png|webp));base64,([A-Za-z0-9+/=\r\n]+)$/i;
 
 function getBucket(): R2BucketLike | undefined {
   return getRuntimeEnv().UX_SHARED_ASSETS;
 }
 
+async function sha256(value: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", value);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 /**
- * Stores supported screenshot data URIs in the shared R2 bucket and returns
- * a compact database reference. Local development falls back to the data URI.
+ * Store screenshot data using the existing shared asset registry convention:
+ * r2://ux-direct-assets/ux-audit/screenshots/<sha256>.datauri
  */
-export async function storeAuditScreenshot(screenshot: string, auditId: string): Promise<string> {
+export async function storeAuditScreenshot(screenshot: string): Promise<string> {
   const bucket = getBucket();
   if (!bucket) return screenshot;
 
-  const match = /^data:(image\/(?:jpeg|jpg|png|webp));base64,([A-Za-z0-9+/=\r\n]+)$/i.exec(screenshot);
+  const match = DATA_URI_PATTERN.exec(screenshot);
   if (!match) return screenshot;
 
-  const mimeType = match[1].toLowerCase() === "image/jpg" ? "image/jpeg" : match[1].toLowerCase();
-  const bytes = Buffer.from(match[2].replace(/\s/g, ""), "base64");
-  if (!bytes.length || bytes.length > 15 * 1024 * 1024) {
+  const normalizedMime = match[1].toLowerCase() === "image/jpg" ? "image/jpeg" : match[1].toLowerCase();
+  const utf8 = new TextEncoder().encode(screenshot);
+  const imageBytes = Uint8Array.from(atob(match[2].replace(/\s/g, "")), (char) => char.charCodeAt(0));
+  if (!imageBytes.length || imageBytes.length > 15 * 1024 * 1024) {
     throw new Error("Screenshot is empty or exceeds the 15 MB storage limit.");
   }
 
-  const key = ASSET_PREFIX + auditId + "/screenshot";
-  await bucket.put(key, bytes, {
-    httpMetadata: {
-      contentType: mimeType,
-      cacheControl: "private, max-age=300",
-    },
-    customMetadata: {
-      app: "uxaudit",
-      assetType: "audit-screenshot",
-      auditId,
-    },
-  });
-  return "r2://" + key;
+  const contentHash = await sha256(utf8);
+  const objectKey = ASSET_PREFIX + contentHash + ".datauri";
+  const assetKey = "r2://" + BUCKET_NAME + "/" + objectKey;
+
+  if (!(await bucket.get(objectKey))) {
+    await bucket.put(objectKey, screenshot, {
+      httpMetadata: {
+        contentType: "text/plain; charset=utf-8",
+        cacheControl: "private, max-age=300",
+      },
+      customMetadata: {
+        app: "ux-audit",
+        assetType: "screenshot-data-uri",
+        contentHash,
+        imageMimeType: normalizedMime,
+      },
+    });
+  }
+
+  const sql = getSql();
+  await sql`
+    INSERT INTO ux_storage_assets (
+      asset_key, bucket_name, object_key, content_hash, content_type,
+      content_encoding, size_bytes, reference_count, source_scope
+    )
+    VALUES (
+      ${assetKey}, ${BUCKET_NAME}, ${objectKey}, ${contentHash},
+      'text/plain; charset=utf-8', 'data-uri', ${utf8.byteLength}, 2, 'ux-audit'
+    )
+    ON CONFLICT (content_hash) DO UPDATE
+    SET reference_count = ux_storage_assets.reference_count + 2
+  `;
+
+  return assetKey;
 }
 
 export function resolveAuditScreenshot(value: unknown): unknown {
   if (typeof value !== "string" || !value.startsWith("r2://")) return value;
-  const key = value.slice("r2://".length);
-  if (!key.startsWith(ASSET_PREFIX)) return null;
+  const prefix = "r2://" + BUCKET_NAME + "/";
+  if (!value.startsWith(prefix)) return null;
+  const key = value.slice(prefix.length);
+  if (!/^ux-audit\/screenshots\/[a-f0-9]{32,64}\.datauri$/i.test(key)) return null;
   return "/api/audit-asset?key=" + encodeURIComponent(key);
 }
 
 export async function getAuditScreenshotObject(key: string) {
-  if (!key.startsWith(ASSET_PREFIX) || !/^uxaudit\/audits\/[0-9a-f-]{36}\/screenshot$/i.test(key)) {
-    return null;
-  }
+  if (!/^ux-audit\/screenshots\/[a-f0-9]{32,64}\.datauri$/i.test(key)) return null;
   const bucket = getBucket();
   if (!bucket) throw new Error("The shared R2 assets binding is not configured on this Worker.");
   return bucket.get(key);
