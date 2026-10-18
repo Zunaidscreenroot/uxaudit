@@ -1,3 +1,4 @@
+import { getRuntimeEnv } from "@/lib/neon-db";
 export const runtime="nodejs";
 export const maxDuration=60;
 function canon(raw:string){try{const u=new URL(raw);u.hash="";u.pathname=u.pathname.replace(/\/+$/,"")||"/";return u.origin+(u.pathname==="/"? "":u.pathname)+u.search;}catch{return "";}}
@@ -48,7 +49,7 @@ export async function POST(req:Request){try{
  const warnings=(Array.isArray(body.iaWarnings)?body.iaWarnings:[]).slice(0,20).map((w:any,i:number)=>({id:txt(w.id,"warning-"+i,100),title:txt(w.title,"IA warning",160),detail:txt(w.detail,"",500),urls:(Array.isArray(w.urls)?w.urls:[]).filter((u:any)=>typeof u==="string").map(canon).filter((u:string)=>pageMap.has(u)).slice(0,40)}));
  const target=typeof body.targetUrl==="string"?canon(body.targetUrl):"",sourceId=txt(body.focusFindingId,"",120),issueTitle=txt(body.focusIssueTitle,"",160);
  const focusFinding=findings.find((f:any)=>f.url===target&&f.sourceId===sourceId),focusWarning=warnings.find((w:any)=>w.title===issueTitle);
- const key=process.env.OPENROUTER_API_KEY;if(!key)return Response.json({error:"OPENROUTER_API_KEY is not configured; the IA proposal cannot be generated."},{status:503});
+ const key=getRuntimeEnv().OPENROUTER_API_KEY?.trim();if(!key)return Response.json({error:"OPENROUTER_API_KEY is not configured; the IA proposal cannot be generated."},{status:503});
  const source={websiteTitle,root,pages:pages.map(p=>({url:p.url,title:p.title,currentCategory:p.category,currentDepth:p.depth})),findings,iaWarnings:warnings,focus:focusFinding?{type:"finding",...focusFinding}:focusWarning?{type:"IA warning",...focusWarning}:target?{type:"page",url:target}:{type:"whole site"}};
  const prompt=[
  "Act as a senior information architect and UX lead. Return valid JSON only with this shape: {\"summary\":\"...\",\"principles\":[\"...\"],\"tree\":{\"label\":\"website name\",\"url\":\"EXACT ROOT URL\",\"rationale\":\"...\",\"findingIds\":[],\"children\":[{\"label\":\"group or page\",\"url\":null,\"rationale\":\"...\",\"findingIds\":[],\"children\":[]}]},\"fixes\":[{\"findingId\":\"exact supplied id\",\"url\":\"exact URL\",\"status\":\"addressed|partially_addressed|outside_ia_scope\",\"resolution\":\"...\",\"rationale\":\"...\",\"affectedUrls\":[\"exact URL\"]}],\"warningFixes\":[{\"warningId\":\"exact warning id\",\"status\":\"addressed|partially_addressed|outside_ia_scope\",\"resolution\":\"...\",\"rationale\":\"...\",\"affectedUrls\":[\"exact URL\"]}],\"globalChanges\":[{\"title\":\"...\",\"change\":\"...\",\"reason\":\"...\"}]}",
