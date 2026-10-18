@@ -22,7 +22,7 @@ export async function GET(req: Request) {
 
     const ids = (url.searchParams.get("ids") || "").split(",").filter(validId).slice(0, 10);
     if (!ids.length) return Response.json({ sessions: [] });
-    const placeholders = ids.map((_, index) => `${index + 1}::uuid`).join(",");
+    const placeholders = ids.map((_, index) => `$${index + 1}::uuid`).join(",");
     const rows = await queryDb(
       `SELECT id, root, title, stage, audited_pages, updated_at, expires_at
        FROM public.ia_sessions
