@@ -135,7 +135,7 @@ export async function listCoachingLessons(status: string = "all", limit = 50) {
 export async function listApprovedCoachLearnings(limit = 100) {
   const safeLimit = Math.max(1, Math.min(100, Number.isFinite(limit) ? Math.floor(limit) : 100));
   const result = await supabaseRequest(
-    `ux_coach_learnings?select=id,title,rule,rationale,scope,keywords,status,created_at,updated_at,approved_at,usage_count,last_used_at&status=eq.approved&order=updated_at.desc&limit=${safeLimit}`,
+    `ux_coach_learnings?select=id,title,rule,rationale,scope,keywords,feedback_kind,source_audit_id,source_finding_title,status,created_at,updated_at,approved_at,usage_count,last_used_at&status=eq.approved&order=updated_at.desc&limit=${safeLimit}`,
   );
   return Array.isArray(result) ? result : [];
 }
