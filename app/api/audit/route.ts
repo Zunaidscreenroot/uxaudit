@@ -1,5 +1,5 @@
 import { createAuditFromScreenshot, type AuditStage } from "@/lib/audit";
-import { saveAudit } from "@/lib/knowledge-base";
+import { saveAudit } from "@/lib/past-findings";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
