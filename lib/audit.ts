@@ -39,16 +39,58 @@ function extractJson(text: string): unknown | null {
   return null;
 }
 
-type VerifiedModel = {provider:"OpenRouter"|"Gemini";model:string;tier:"free"|"paid"};
-async function modelGenerate(model: VerifiedModel, parts: Array<Record<string, unknown>>, maxOutputTokens = 6000, timeoutMs = 12000) {
- if(model.provider!=="OpenRouter")throw new Error("Only verified OpenRouter models are enabled for UX Audit.");
+type VerifiedModel = {provider:"OpenRouter";model:string;tier:"paid"};
+type OpenRouterPrice = { prompt: number; completion: number };
+let paidModelCatalogCache: { expiresAt: number; entries: Map<string, OpenRouterPrice> } | null = null;
+let paidModelCatalogPending: Promise<Map<string, OpenRouterPrice>> | null = null;
+
+async function getPaidModelCatalog(): Promise<Map<string, OpenRouterPrice>> {
+ if (paidModelCatalogCache && paidModelCatalogCache.expiresAt > Date.now()) return paidModelCatalogCache.entries;
+ if (paidModelCatalogPending) return paidModelCatalogPending;
+ paidModelCatalogPending = (async () => {
+  const key = process.env.OPENROUTER_API_KEY;
+  if (!key) throw new Error("Configure OPENROUTER_API_KEY before running an audit.");
+  const response = await fetch("https://openrouter.ai/api/v1/models", {
+   headers: { Authorization: "Bearer " + key },
+   signal: AbortSignal.timeout(7000),
+   cache: "no-store",
+  });
+  const payload = await response.json().catch(() => ({})) as { data?: Array<{ id?: unknown; pricing?: { prompt?: unknown; completion?: unknown } }> };
+  if (!response.ok || !Array.isArray(payload.data)) throw new Error("Could not verify paid-model pricing from OpenRouter.");
+  const entries = new Map<string, OpenRouterPrice>();
+  for (const item of payload.data) {
+   if (typeof item.id !== "string") continue;
+   entries.set(item.id, {
+    prompt: Number(item.pricing?.prompt ?? 0),
+    completion: Number(item.pricing?.completion ?? 0),
+   });
+  }
+  paidModelCatalogCache = { expiresAt: Date.now() + 15 * 60 * 1000, entries };
+  return entries;
+ })();
+ try { return await paidModelCatalogPending; }
+ finally { paidModelCatalogPending = null; }
+}
+
+async function assertVerifiedPaidModel(model: VerifiedModel) {
+ if (model.provider !== "OpenRouter" || model.tier !== "paid" || model.model.endsWith(":free") || model.model === "openrouter/auto") {
+  throw new Error("UX Audit requires an explicit, verified paid OpenRouter model. Automatic routing and free models are disabled.");
+ }
+ const catalogue = await getPaidModelCatalog();
+ const price = catalogue.get(model.model);
+ if (!price) throw new Error("Selected audit model is not present in the current OpenRouter catalogue: " + model.model);
+ if (!(price.prompt > 0 || price.completion > 0)) throw new Error("Selected audit model has zero-priced inference and is not allowed for paid audit workloads.");
+}
+
+async function modelGenerate(model: VerifiedModel, parts: Array<Record<string, unknown>>, maxOutputTokens = 4500, timeoutMs = 12000) {
+ await assertVerifiedPaidModel(model);
  const key=process.env.OPENROUTER_API_KEY;if(!key)throw new Error("Configure OPENROUTER_API_KEY before running an audit.");
  const content:any[]=[];for(const part of parts){if(typeof part.text==="string")content.push({type:"text",text:part.text});else if(part.inline_data&&typeof part.inline_data==="object"){const im=part.inline_data as {mime_type?:string;data?:string};if(im.data)content.push({type:"image_url",image_url:{url:"data:"+(im.mime_type||"image/jpeg")+";base64,"+im.data}});}}
  let lastError="OpenRouter model request failed.";const started=Date.now();
  try{
   const stage=parts.some(p=>typeof p.text==="string"&&/IMAGE-TO-TEXT stage/.test(String(p.text)))?"visual":"text";
   console.info("[uxaudit] model_request_start",JSON.stringify({model:model.model,stage,timeoutMs,maxOutputTokens}));
-  const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:"Bearer "+key,"Content-Type":"application/json","HTTP-Referer":"https://uxauditscreenroot.vercel.app","X-Title":"UX Audit","X-OpenRouter-Metadata":"enabled"},body:JSON.stringify({model:model.model,messages:[{role:"user",content}],max_tokens:maxOutputTokens,temperature:0.1,reasoning:{effort:"low",exclude:true},response_format:{type:"json_object"},plugins:[{id:"auto-router",cost_tier:"low"}],provider:{allow_fallbacks:true,max_price:{prompt:0.5,completion:2}}}),signal:AbortSignal.timeout(timeoutMs),cache:"no-store"});
+  const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:"Bearer "+key,"Content-Type":"application/json","HTTP-Referer":"https://uxauditscreenroot.vercel.app","X-Title":"UX Audit","X-OpenRouter-Metadata":"enabled"},body:JSON.stringify({model:model.model,messages:[{role:"user",content}],max_tokens:maxOutputTokens,temperature:0.1,reasoning:{effort:"low",exclude:true},response_format:{type:"json_object"},provider:{allow_fallbacks:false,max_price:{prompt:0.5,completion:2}}}),signal:AbortSignal.timeout(timeoutMs),cache:"no-store"});
   const rawBody=await response.text();let payload:any={};try{payload=rawBody?JSON.parse(rawBody):{};}catch{throw new Error("OpenRouter returned invalid JSON (HTTP "+response.status+"): "+rawBody.slice(0,180));}
   if(response.ok){
    const message=payload?.choices?.[0]?.message;const raw=message?.content;
@@ -259,7 +301,7 @@ async function createVisualPass(model: VerifiedModel, capture: Capture, timeoutM
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const retryPrompt = attempt === 0 ? prompt : `Inspect the attached screenshot and return ONLY valid JSON with this exact shape: {"clientName":"visible brand or Unknown client","pageSummary":"one sentence describing visible layout","observations":[{"id":"obs-1","section":"visible region","element":"visible control or content","issue":"specific UX issue visibly supported by screenshot","whyItMatters":"user impact","marker":{"x":0.5,"y":0.2}}]}. Return 0 to 5 observations only when supported by visible evidence; an empty observations array is valid when no meaningful issue is visible. Coordinates must be numbers from 0 to 1. Do not return markdown or any other schema.`;
     try {
-      const text = await modelGenerate(model, [{ text: retryPrompt }, imagePart], attempt === 0 ? 4500 : 3500, timeoutMs);
+      const text = await modelGenerate(model, [{ text: retryPrompt }, imagePart], attempt === 0 ? 3500 : 2400, timeoutMs);
       const parsed = extractJson(text);
       const result = normalizeVisualPass(parsed);
       return result;
@@ -276,7 +318,7 @@ async function createVisualPass(model: VerifiedModel, capture: Capture, timeoutM
 
 async function createTextReview(model: VerifiedModel, visualPass: VisualPass, timeoutMs = 12000, knowledgeContext = "") {
   const prompt = `You are the SECOND stage of a UX audit. You are a TEXT-TO-TEXT UX research and business reviewer. The first model already inspected the screenshot and produced the visual observations below. You do NOT see the screenshot.\n\nPreserve observationId exactly. Do not change, merge, reorder, or reinterpret the visual location. Never invent UI elements, coordinates, measurements, analytics, or behaviour. For each observation create a client-ready finding with UX research context and business funnel analysis. Category-tag EVERY finding with exactly one allowed category using the visual evidence, not by spreading categories evenly. Titles must name the specific element and flaw; the description must explain the observed flaw AND its user consequence (never copy the title). The recommendation must directly redesign the observed element and name the section or component; avoid generic advice like “improve visual hierarchy”. Business analysis must be individually derived from this issue: write a distinct impact, causal mechanism, relevant KPI, funnel stage, and concrete suggestions. Do not reuse a template paragraph across findings. Repeat a KPI or funnel stage only when genuinely appropriate, while keeping each causal explanation specific to the issue. Calibrate severity independently: high only for a major blocker, misleading interaction, serious trust/accessibility issue, or clear primary-journey failure; medium for meaningful friction; low for polish/minor clarity issues. Vary severity only when evidence warrants it—never alternate high/low as a pattern. KPI and funnel stage must fit the actual issue; use different values where the evidence points to different outcomes.\n\nUX context must include a relevant law/principle, a plain-language definition, why it applies, and concise research context. Business analysis must identify funnel stage, directional impact, KPI at risk, mechanism, and practical suggestions that could improve that KPI. Do not create development tasks. Do not claim measured KPI changes.\n\nReturn JSON only: {"findings":[{"id":"finding-1","observationId":"obs-1","severity":"high|medium|low","category":"Information hierarchy","title":"short finding","description":"clear explanation","recommendation":"specific UX redesign action","uxPerspective":{"law":"Hick's Law","definition":"plain-language definition","assessment":"why it applies","researchContext":"brief research context"},"businessAnalysis":{"funnelStage":"Acquisition / consideration / activation / conversion / retention","impact":"directional impact","kpi":"specific KPI","mechanism":"how the design can influence it","suggestions":["specific action","specific action"]}}]}\n\nAllowed categories: ${CATEGORIES.join(", ")}.\n\nVISUAL OBSERVATIONS:\n${JSON.stringify(visualPass)}\n\nINTERNAL UX AUDIT KNOWLEDGE (approved coaching rules are operating standards within their stated scope; historical findings and reference documents are examples only):\n${knowledgeContext || "No relevant saved audit findings were retrieved. Rely on screenshot evidence and established UX principles."}\nApply approved coaching rules only when their declared scope matches this audit. Current screenshot evidence must support every finding. Never copy historical findings blindly, and do not claim a problem unless visible evidence supports it. Do not cite internal examples as external research or invent sources.`;
-  const text = await modelGenerate(model, [{ text: prompt }], 4800, timeoutMs);
+  const text = await modelGenerate(model, [{ text: prompt }], 3600, timeoutMs);
   const parsed = extractJson(text); const root = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
   return Array.isArray(root.findings) ? root.findings : [];
 }
