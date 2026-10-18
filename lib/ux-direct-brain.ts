@@ -107,5 +107,6 @@ export async function reviewSharedBrainFeedback(input: { feedbackId: string; act
     feedbackId: input.feedbackId,
     decision: input.action,
     reviewNote: input.reviewNote || "",
+    sourceProduct: "ux-audit",
   });
 }
