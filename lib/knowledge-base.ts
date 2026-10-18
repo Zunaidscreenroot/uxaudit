@@ -1,4 +1,5 @@
 import type { AuditPage, AuditResult } from "@/lib/audit";
+import type { SharedBrainScope } from "@/lib/shared-brain";
 
 function config() {
   const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -101,7 +102,7 @@ export async function getAudit(auditId: string) {
   return { ...audit, findings: Array.isArray(findings) ? findings : [] };
 }
 
-export async function retrieveRelevantAuditKnowledge(query: string, limit = 6): Promise<string> {
+export async function retrieveRelevantAuditKnowledge(query: string, limit = 6, scopeOverride?: SharedBrainScope): Promise<string> {
   const { retrieveSharedBrainContext, inferSharedBrainScope } = await import("@/lib/shared-brain");
   const stop = new Set(["the","and","for","with","from","that","this","into","your","have","has","are","was","were","will","their","they","them","page","site","website","user","users","visible","issue","finding","because","could","should","would","about","when","where","what","how","not","can","may","more","less"]);
   const terms = (value: string) => [...new Set(value.toLowerCase().replace(/[^a-z0-9]+/g," ").split(" ").filter(w=>w.length>2&&!stop.has(w)))].slice(0,40);
@@ -132,7 +133,7 @@ export async function retrieveRelevantAuditKnowledge(query: string, limit = 6): 
   }
 
   const shared = await retrieveSharedBrainContext(query, {
-    scopeKey: inferSharedBrainScope(query),
+    scopeKey: scopeOverride || inferSharedBrainScope(query),
     limit: Math.max(1, Math.min(limit, 8)),
     maxContextChars: 2800,
     includeKnowledge: true,
@@ -144,7 +145,7 @@ export async function retrieveRelevantAuditKnowledge(query: string, limit = 6): 
     localContext ? "UX AUDIT CLIENT HISTORY / LOCAL REFERENCES (examples only; do not copy findings or infer that they apply to this page):\n" + localContext : "",
   ].filter(Boolean);
   if (shared.available) console.info("[uxaudit] shared_brain_retrieval_ok", JSON.stringify({
-    scopeKey: inferSharedBrainScope(query), retrievalMode: shared.retrievalMode,
+    scopeKey: scopeOverride || inferSharedBrainScope(query), retrievalMode: shared.retrievalMode,
     memoryCount: shared.memoryCount, knowledgeCount: shared.knowledgeCount,
     contextCharacters: shared.contextCharacters, localExamples: ranked.length,
   }));
