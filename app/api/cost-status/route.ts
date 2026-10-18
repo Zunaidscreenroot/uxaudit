@@ -1,3 +1,5 @@
+import { getRuntimeEnv } from "@/lib/neon-db";
+
 export const runtime = "nodejs";
 export const maxDuration = 15;
 
@@ -10,9 +12,10 @@ async function getJson(url:string,key:string) {
  return {response,payload};
 }
 export async function GET() {
- const apiKey=process.env.OPENROUTER_API_KEY;
- const managementKey=process.env.OPENROUTER_MANAGEMENT_KEY;
- const budgetRaw=Number(process.env.DAILY_BUDGET_INR??"100");
+ const runtimeEnv = getRuntimeEnv();
+ const apiKey = runtimeEnv.OPENROUTER_API_KEY?.trim();
+ const managementKey = runtimeEnv.OPENROUTER_MANAGEMENT_KEY?.trim();
+ const budgetRaw = Number(runtimeEnv.DAILY_BUDGET_INR ?? "100");
  const dailyBudgetInr=Number.isFinite(budgetRaw)&&budgetRaw>0?budgetRaw:100;
  let provider:any={connected:false,keyConfigured:Boolean(apiKey),managementKeyConfigured:Boolean(managementKey),usageUsd:null,usageDailyUsd:null,limitUsd:null,remainingUsd:null,freeTier:null,creditsUsd:null,creditsUsedUsd:null,activity:[],activityError:null,creditsError:null,error:null};
  if(apiKey) {
