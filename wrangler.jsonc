@@ -14,7 +14,17 @@
   "observability": {
     "enabled": true
   },
-  "previews": {},
+  "previews": {
+    "r2_buckets": [
+      {
+        "binding": "UX_SHARED_ASSETS",
+        "bucket_name": "ux-direct-assets"
+      }
+    ],
+    "vars": {
+      "APP_ENV": "preview"
+    }
+  },
   "preview_urls": true,
   "r2_buckets": [
     {
