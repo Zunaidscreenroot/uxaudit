@@ -132,8 +132,14 @@ export async function retrieveRelevantAuditKnowledge(query: string, limit = 6, s
     if(overlap>0)candidates.push({score:overlap+1,text:"[UX AUDIT REFERENCE; title: "+doc.title+"; source: "+(doc.source_name||"unspecified")+"; topic: "+(doc.topic||"unspecified")+"; URL: "+(doc.source_url||"not supplied")+"; reviewed: "+(doc.reviewed_at||"date unavailable")+"; validate scope and currency] "+String(doc.content||"").slice(0,700)});
   }
 
+  const inferredScope = inferSharedBrainScope(query);
+  // Audit rules are capability memory; a matching BFSI/client namespace is queried alongside it.
+  // The shared-search service de-duplicates the combined results and embeds the query only once.
+  const effectiveScope = scopeOverride || "UX_AUDIT";
+  const relatedScopes = inferredScope !== effectiveScope ? [inferredScope] : [];
   const shared = await retrieveSharedBrainContext(query, {
-    scopeKey: scopeOverride || inferSharedBrainScope(query),
+    scopeKey: effectiveScope,
+    relatedScopes,
     limit: Math.max(1, Math.min(limit, 8)),
     maxContextChars: 2800,
     includeKnowledge: true,
@@ -145,7 +151,7 @@ export async function retrieveRelevantAuditKnowledge(query: string, limit = 6, s
     localContext ? "UX AUDIT CLIENT HISTORY / LOCAL REFERENCES (examples only; do not copy findings or infer that they apply to this page):\n" + localContext : "",
   ].filter(Boolean);
   if (shared.available) console.info("[uxaudit] shared_brain_retrieval_ok", JSON.stringify({
-    scopeKey: scopeOverride || inferSharedBrainScope(query), retrievalMode: shared.retrievalMode,
+    scopeKey: effectiveScope, relatedScopes, retrievalMode: shared.retrievalMode,
     memoryCount: shared.memoryCount, knowledgeCount: shared.knowledgeCount,
     contextCharacters: shared.contextCharacters, localExamples: ranked.length,
   }));
