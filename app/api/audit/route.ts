@@ -1,5 +1,6 @@
 import { createAuditFromScreenshot, type AuditStage } from "@/lib/audit";
 import { saveAudit } from "@/lib/knowledge-base";
+import { inferSharedBrainScope } from "@/lib/shared-brain";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -24,7 +25,8 @@ export async function POST(request: Request) {
         const stage = (value: AuditStage) => send({ type: "stage", stage: value });
         try {
           send({ type: "start" });
-          const result = await createAuditFromScreenshot(buffer, file.name || "uploaded-screenshot", stage, verifiedModels);
+          const scopeHints = [String(formData.get("projectName") || ""), String(formData.get("url") || ""), file.name || ""].join(" ");
+          const result = await createAuditFromScreenshot(buffer, file.name || "uploaded-screenshot", stage, verifiedModels, "desktop", inferSharedBrainScope(scopeHints));
           const auditId = await saveAudit(result, file.name || "uploaded-screenshot");
           result.pages = result.pages.map((page) => ({ ...page, id: auditId, createdAt: new Date().toISOString() }));
           send({ type: "result", result });

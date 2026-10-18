@@ -1,4 +1,5 @@
 import { retrieveRelevantAuditKnowledge } from "@/lib/knowledge-base";
+import type { SharedBrainScope } from "@/lib/shared-brain";
 import sharp from "sharp";
 
 export type Severity = "high" | "medium" | "low";
@@ -304,7 +305,7 @@ function fallbackFinding(observation: VisualObservation, index: number): Finding
   return normalizeFinding({ id: `finding-${index + 1}`, severity: /\b(blocks access|cannot submit|dead link|misleading|critical|unreadable|prevents completion|broken form|error message)\b/i.test(observation.issue) ? "high" : "low", category, title: observation.issue, description: observation.issue, recommendation: evidenceSpecificRecommendation(observation, category), uxPerspective: { law: "Visual hierarchy and cognitive load", definition: "Users scan interfaces by relative prominence and grouping, so competing or unclear signals increase the effort needed to decide what matters.", assessment: observation.whyItMatters, researchContext: "The observation is consistent with established research on visual grouping, attention and cognitive load." }, businessAnalysis: { funnelStage: "Consideration / conversion", impact: "The visible friction can increase hesitation before the next intended action.", kpi: "Primary CTA click-through rate", mechanism: "When the intended next step is harder to understand, users can delay, miss or abandon the action.", suggestions: ["Strengthen the primary hierarchy.", "Remove or reduce competing signals around the key action."] } }, observation, index);
 }
 
-export async function createAuditFromScreenshot(buffer: Buffer, filename: string, onStage?: (stage: AuditStage) => void, verifiedModels: VerifiedModel[] = [], auditMode: "desktop" | "mobile" = "desktop"): Promise<AuditResult> {
+export async function createAuditFromScreenshot(buffer: Buffer, filename: string, onStage?: (stage: AuditStage) => void, verifiedModels: VerifiedModel[] = [], auditMode: "desktop" | "mobile" = "desktop", brainScope?: SharedBrainScope): Promise<AuditResult> {
   if (buffer.byteLength > MAX_SCREENSHOT_BYTES) throw new Error("Screenshot is too large. Please upload an image smaller than 15 MB.");
   const metadata = await sharp(buffer).metadata(); const width = metadata.width ?? 0; const height = metadata.height ?? 0;
   if (!width || !height) throw new Error("The uploaded file is not a valid image.");
@@ -344,7 +345,7 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   onStage?.({ id: "analyse", label: "Image → text", detail: `${visualPass.clientName} · ${visualPass.observations.length} visual regions identified on the full screenshot.`, status: "complete" });
 
   const knowledgeQuery=[auditMode === "mobile" ? "mobile audit mobile viewport" : "desktop audit desktop viewport",visualPass.clientName,visualPass.pageSummary,...visualPass.observations.map(o=>[o.section,o.element,o.issue,o.whyItMatters].join(" "))].join(" ");
-  const knowledgeContext=await retrieveRelevantAuditKnowledge(knowledgeQuery,6);
+  const knowledgeContext=await retrieveRelevantAuditKnowledge(knowledgeQuery,6,brainScope);
   if(knowledgeContext)onStage?.({id:"knowledge",label:"Retrieve prior audit evidence",detail:"Retrieved relevant saved findings from the Supabase knowledge base to calibrate recommendations; current findings still require screenshot evidence.",status:"complete"});
 
   onStage?.({ id: "quality", label: "OpenRouter UX reasoning", detail: "OpenRouter Auto Router · low-cost tier · text-only UX research and business analysis. OpenRouter selects the reasoning model.", status: "active" });
