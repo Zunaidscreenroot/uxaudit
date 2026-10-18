@@ -259,3 +259,130 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible{
 .or-app[data-embedded="true"] .or-content .or-start-options>a:hover {
   background:var(--ds-panel-2)!important;
 }
+
+
+/* UX Direct / IA Studio system applied only when the audit app is embedded. */
+html.uxaudit-embedded, html.uxaudit-embedded body {
+  background:#0a0d13!important;
+  color:#f4f7fc!important;
+  color-scheme:dark;
+}
+html.uxaudit-embedded {
+  --sr-black:#0a0d13!important;
+  --sr-ink:#f4f7fc!important;
+  --sr-yellow:#86f0d0!important;
+  --sr-paper:#0a0d13!important;
+  --sr-line:#222c3b!important;
+  --sr-muted:#8b99ae!important;
+  --sr-soft:#10151f!important;
+}
+html.uxaudit-embedded .hero h1,
+html.uxaudit-embedded .reportHeader h2,
+html.uxaudit-embedded .sectionHeader h3,
+html.uxaudit-embedded .siteMapTop h2,
+html.uxaudit-embedded .findingTitleRow h3,
+html.uxaudit-embedded .panelHeader h3,
+html.uxaudit-embedded .progressTop h2 {
+  color:#f4f7fc!important;
+}
+html.uxaudit-embedded .siteMapPanel,
+html.uxaudit-embedded .progressCard,
+html.uxaudit-embedded .card,
+html.uxaudit-embedded .findingCard,
+html.uxaudit-embedded .businessCard,
+html.uxaudit-embedded .insightBlock,
+html.uxaudit-embedded .siteMapStats span,
+html.uxaudit-embedded .siteMapPage,
+html.uxaudit-embedded .uploadInfo,
+html.uxaudit-embedded .uploadPreview,
+html.uxaudit-embedded .reportTabs,
+html.uxaudit-embedded .siteMapToolbar button,
+html.uxaudit-embedded .architecture>div:not(.archArrow),
+html.uxaudit-embedded .emptyState {
+  background:#10151f!important;
+  color:#f4f7fc!important;
+  border-color:#222c3b!important;
+  box-shadow:none!important;
+}
+html.uxaudit-embedded .uploadButton,
+html.uxaudit-embedded .connectionLink,
+html.uxaudit-embedded .siteDiscoverForm input,
+html.uxaudit-embedded .siteMapToolbar button,
+html.uxaudit-embedded .pill {
+  background:#10151f!important;
+  color:#f4f7fc!important;
+  border-color:#344154!important;
+}
+html.uxaudit-embedded input,
+html.uxaudit-embedded textarea,
+html.uxaudit-embedded select {
+  background:#0c111a!important;
+  color:#f4f7fc!important;
+  border-color:#344154!important;
+}
+html.uxaudit-embedded input::placeholder,
+html.uxaudit-embedded textarea::placeholder {
+  color:#8b99ae!important;
+}
+html.uxaudit-embedded input:focus-visible,
+html.uxaudit-embedded textarea:focus-visible,
+html.uxaudit-embedded select:focus-visible,
+html.uxaudit-embedded button:focus-visible,
+html.uxaudit-embedded a:focus-visible {
+  outline:2px solid #a38bff!important;
+  outline-offset:3px;
+}
+html.uxaudit-embedded .auditButton,
+html.uxaudit-embedded .eyebrow,
+html.uxaudit-embedded .pipelineStep.current .pipelineIcon,
+html.uxaudit-embedded .pipelineStep.done .pipelineIcon,
+html.uxaudit-embedded .reportTabs button.active,
+html.uxaudit-embedded .siteMapToolbar button:hover,
+html.uxaudit-embedded .selectedPagesFooter button,
+html.uxaudit-embedded .iaBtn,
+html.uxaudit-embedded .iaTab.on,
+html.uxaudit-embedded .iaViewportChoice.active {
+  background:#86f0d0!important;
+  color:#0a1716!important;
+  border-color:#86f0d0!important;
+}
+html.uxaudit-embedded .iaReview,
+html.uxaudit-embedded .findingEvidence,
+html.uxaudit-embedded .recommendation,
+html.uxaudit-embedded .businessMini,
+html.uxaudit-embedded .summaryHero,
+html.uxaudit-embedded .iaWarning,
+html.uxaudit-embedded .iaIssue,
+html.uxaudit-embedded .iaTooltip {
+  background:#151c28!important;
+  color:#e0e8f5!important;
+  border-color:#344154!important;
+}
+html.uxaudit-embedded .iaReview h3,
+html.uxaudit-embedded .businessStage,
+html.uxaudit-embedded .recommendation strong {
+  color:#86f0d0!important;
+}
+html.uxaudit-embedded .businessStage {
+  background:#17302d!important;
+  border:1px solid #2c5449!important;
+}
+html.uxaudit-embedded .siteMapGroup,
+html.uxaudit-embedded .siteMapToolbar,
+html.uxaudit-embedded .businessMini,
+html.uxaudit-embedded .findingDetails,
+html.uxaudit-embedded .findingCardMain {
+  border-color:#222c3b!important;
+}
+html.uxaudit-embedded .siteMapPage:hover,
+html.uxaudit-embedded .siteMapToolbar button:hover,
+html.uxaudit-embedded .markerLegend button.active {
+  background:#151c28!important;
+  border-color:#a38bff!important;
+  color:#f4f7fc!important;
+}
+html.uxaudit-embedded .severity.high {background:#291920!important;color:#ffb3c1!important}
+html.uxaudit-embedded .severity.medium {background:#282315!important;color:#f4d58d!important}
+html.uxaudit-embedded .severity.low {background:#142720!important;color:#9de8cb!important}
+html.uxaudit-embedded .reportTabs button {color:#aab7c9!important}
+html.uxaudit-embedded .reportTabs button.active {color:#0a1716!important}
