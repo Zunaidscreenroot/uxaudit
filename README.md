@@ -29,6 +29,8 @@ Available MCP tools include:
 - `uxaudit_run_page_audit` — run a desktop or mobile page audit; may incur model API costs
 - `uxaudit_get_session_report` and `uxaudit_get_findings` — retrieve saved session results
 - `uxaudit_generate_improved_ia` — generate a reviewable IA proposal
+- `uxaudit_save_coaching_lesson` — preserve owner feedback (including Hindi/Hinglish) as a scoped draft or explicitly approved rule
+- `uxaudit_list_coaching_lessons` and `uxaudit_review_coaching_lesson` — review stored lessons and approve/reject/archive them
 
 For a preview test, use that preview deployment's host and append `/api/mcp`.
 

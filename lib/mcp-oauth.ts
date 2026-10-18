@@ -1,6 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 export type McpClaims = Record<string, unknown> & { typ: "client" | "code" | "access" | "refresh"; exp?: number };
-export const MCP_SCOPES = ["audit:read", "audit:run", "ia:generate", "offline_access"] as const;
+export const MCP_SCOPES = ["audit:read", "audit:run", "ia:generate", "audit:coach", "offline_access"] as const;
 export function readMcpEnv(key: string): string {
   const runtime = (globalThis as typeof globalThis & { Netlify?: { env?: { get?: (name: string) => string | undefined } } }).Netlify;
   return runtime?.env?.get?.(key) || process.env[key] || "";
