@@ -7,7 +7,7 @@ function getInput(values: URLSearchParams | FormData): AuthorizeInput | null {
   const clientId = val("client_id");
   const client = verifyMcpPayload(clientId.startsWith("uxmcp_") ? clientId.slice(6) : "", "client");
   const redirectUri = val("redirect_uri"), state = val("state");
-  const scope = val("scope") || "audit:read audit:run ia:generate offline_access";
+  const scope = val("scope") || "audit:read audit:run ia:generate audit:coach offline_access";
   const challenge = val("code_challenge"), method = val("code_challenge_method"), resource = val("resource");
   const redirects = Array.isArray(client?.redirect_uris) ? client.redirect_uris.filter((x): x is string => typeof x === "string") : [];
   const requested = scope.split(/\s+/).filter(Boolean);
@@ -31,7 +31,7 @@ function htmlPage(issuer: string, input: AuthorizeInput, error = ""): Response {
     error ? '<p class="notice">' + htmlEscape(error) + '</p>' : "",
     '<form id="authorize-form" method="post" action="' + htmlEscape(issuer + "/api/mcp/oauth/authorize") + '" accept-charset="UTF-8">' + hidden,
     '<div class="field"><label for="password">UX Audit MCP connection code</label><input id="password" name="password" type="password" required autocomplete="current-password" autofocus></div>',
-    '<div class="checks"><input id="consent" name="consent" type="checkbox" value="yes" required><label for="consent">I approve access to discover public sites, run desktop/mobile screenshot audits, read saved audit findings, and generate proposed information architectures.</label></div>',
+    '<div class="checks"><input id="consent" name="consent" type="checkbox" value="yes" required><label for="consent">I approve access to discover public sites, run desktop/mobile screenshot audits, read saved findings, generate proposed information architectures, and store/review UX coaching lessons that may guide future audits.</label></div>',
     '<button id="authorize-button" type="submit">Authorize ChatGPT</button></form>',
     '<p id="submit-status" class="small" role="status" aria-live="polite"></p>',
     '<script>var f=document.getElementById("authorize-form");if(f){f.addEventListener("submit",function(){var b=document.getElementById("authorize-button");var s=document.getElementById("submit-status");if(b){b.textContent="Authorizing…";}if(s){s.textContent="Submitting authorization securely. You should return to ChatGPT shortly.";}window.setTimeout(function(){if(s&&document.visibilityState==="visible"){s.textContent="Still waiting for the server. If this page does not redirect, reload and try again.";if(b){b.textContent="Retry authorization";}}},8000);});}</script>',
