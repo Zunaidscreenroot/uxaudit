@@ -317,6 +317,7 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   const analysisBuffer = buffer;
   const screenshotBytes = buffer;
   const screenshotMimeType: SupportedImageMime = mimeType;
+  const capture: Capture = { buffer, width, height, analysisBuffer, mimeType, title: filename.replace(/\.[^.]+$/, "") || "Uploaded screenshot" };
 
   const allowedModels=verifiedModels.filter(m=>m&&m.provider==="OpenRouter"&&typeof m.model==="string"&&m.model.length>0);
   // The connection layer owns model selection: the first verified model is the primary; later entries are ordered fallbacks.
