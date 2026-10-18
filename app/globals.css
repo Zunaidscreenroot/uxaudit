@@ -48,3 +48,48 @@ body{background:var(--or-bg);color:var(--or-ink)}
 
 /* OpenRouter-inspired dark workspace with lime accent, shared across routes */
 :root{--sr-black:#0b0d0b;--sr-ink:#e9eee7;--sr-yellow:#c7f36b;--sr-paper:#101310;--sr-line:#2a3029;--sr-muted:#9aa497;--sr-soft:#171b17}body{background:#101310!important;color:#e9eee7!important}.nav,.connectionLink,.uploadButton,.uploadInfo,.uploadPreview,.progressCard,.architecture>div:not(.archArrow),.reportTabs,.card,.siteMapPanel,.siteMapToolbar button,.siteMapStats span,.siteMapPage,.iaNode,.iaPanel,.iaCanvas,.findingCard,.insightBlock,.businessMini,.emptyState{background:#171b17!important;color:#e9eee7!important;border-color:#2d352b!important}.nav{background:rgba(16,19,16,.96)!important}.brandByline,.navMeta,.lede,.uploadHint,.progressTop p,.architecture p,.sourceLabel,.panelHeader p,.findingDescription,.findingEvidence span:not(.evidenceDot),.businessMini p,.insightBlock p,.siteMapPageName small,.siteMapTop p,.iaMuted{color:#a3ada0!important}.auditButton,.reportTabs button.active,.pipelineStep.done .pipelineIcon,.eyebrow,.pipelineStep.current .pipelineIcon,.businessStage{background:#c7f36b!important;color:#101310!important}.uploadButton,.connectionLink,.siteDiscoverForm input,.siteMapToolbar button,.pill{background:#171b17!important;color:#e9eee7!important;border-color:#374033!important}.screenshotViewport{background:#20251f!important}.findingEvidence,.recommendation,.insightBlock,.iaReview{background:#1d241a!important;border-color:#37462b!important;color:#e9eee7!important}.findingTitleRow h3,.panelHeader h3,.siteMapTop h2,.siteMapGroup h3,.siteMapPageName strong,.progressTop h2,.sectionHeader h3,.findingListHeader h3,.reportHeader h2,.hero h1{color:#f1f5ed!important}.iaCanvas{overflow:auto!important;max-width:100%;min-height:420px}.iaTreeBranch{flex:0 0 auto}.iaNestedChildren{overflow:visible}.siteMapPanel,.iaCanvas{scrollbar-color:#596650 #171b17}
+
+
+/* FIX: theme the actual current route classes, including embedded IA styles */
+:root{color-scheme:dark!important;--sr-black:#0b0d0b!important;--sr-ink:#e9eee7!important;--sr-yellow:#c7f36b!important;--sr-paper:#101310!important;--sr-line:#2a3029!important;--sr-muted:#a3ada0!important;--sr-soft:#171b17!important}
+html,body{background:#101310!important;color:#e9eee7!important}
+.or-app,.or-main{background:#101310!important;color:#e9eee7!important}
+.or-sidebar,.or-topbar{background:#0b0d0b!important;color:#e9eee7!important;border-color:#2a3029!important}
+.or-brand,.or-breadcrumb,.or-breadcrumb strong,.or-side-link,.or-workspace,.or-workspace strong,.or-top-actions{color:#e9eee7!important}
+.or-brand-mark,.or-step-icon,.or-option-icon,.or-workflow-symbol,.or-muted-chip{background:#c7f36b!important;color:#101310!important}
+.or-side-label,.or-side-link kbd,.or-workspace small,.or-overline,.or-welcome-row p,.or-start-card p,.or-url-form small,.or-start-options small,.or-section-heading p,.or-workflow-card p,.or-footer,.or-footer a,.or-bottom-note p{color:#a3ada0!important}
+.or-side-link.active,.or-side-link:hover{background:#1a2118!important;color:#c7f36b!important}
+.or-start-card,.or-workflow-card,.or-bottom-note{background:#171b17!important;color:#e9eee7!important;border-color:#30382d!important;box-shadow:none!important}
+.or-start-card h2,.or-workflow-card h3,.or-section-heading h2,.or-welcome-row h1,.or-start-options strong{color:#f1f5ed!important}
+.or-url-control,.or-url-control input,.bm-form-grid input,.bm-competitor input{background:#101310!important;color:#e9eee7!important;border-color:#394235!important}
+.or-url-control input::placeholder,.bm-form-grid input::placeholder,.bm-competitor input::placeholder{color:#84907f!important}
+.or-url-control button,.or-text-link,.or-workflow-card a,.or-start-options b,.bm-run-button{background:#c7f36b!important;color:#101310!important;border-color:#c7f36b!important}
+.or-connection{background:#171b17!important;color:#d7e2d0!important;border-color:#30382d!important}
+.or-user-avatar,.or-avatar{background:#c7f36b!important;color:#101310!important}
+.or-footer{border-color:#2a3029!important}
+.bm-competitor,.bm-report,.bm-report-card,.bm-competitor-heading,.bm-form-grid label,.bm-competitor label{color:#e9eee7!important}
+.bm-competitor{background:#171b17!important;border-color:#30382d!important}
+.bm-form-grid input,.bm-competitor input{color-scheme:dark!important}
+.iaShell,.iaRemediationPage{background:#101310!important;color:#e9eee7!important}
+.iaNav,.iaRemediationHeader,.iaPanel,.iaFocusPanel,.iaRemediationLoading,.iaRemediationError,.iaViewportPicker{background:#171b17!important;color:#e9eee7!important;border-color:#30382d!important;box-shadow:none!important}
+.iaBrand,.iaRemediationBrand,.iaNavLinks a,.iaPanel h2,.iaPanel h3,.iaPanel strong,.iaHero h1,.iaViewportIntro h3{color:#f1f5ed!important}
+.iaEyebrow,.iaMuted,.iaHero p,.iaPanel p,.iaLegend,.iaNavLinks,.iaRemediationPage p,.iaViewportIntro p{color:#a3ada0!important}
+.iaForm input,.iaPanel input,.iaViewportChoice,.iaPageOption,.iaTab,.iaStat,.iaStep,.iaCanvas{background:#101310!important;color:#e9eee7!important;border-color:#30382d!important}
+.iaBtn,.iaStep.on,.iaTab.on,.iaViewportChoice.active{background:#c7f36b!important;color:#101310!important;border-color:#c7f36b!important}
+.iaNode{background:#1b2119!important;color:#e9eee7!important;border-color:#46523f!important}
+.iaNode strong,.iaNode small{color:#e9eee7!important}
+.iaNode small{opacity:.8}
+.iaNode:hover,.iaNode.selected{border-color:#c7f36b!important;outline-color:#c7f36b!important}
+.iaNode.issue{background:#292818!important;border-color:#c7f36b!important}
+.iaConnector,.iaChildren:before,.iaChild:before{background:#596650!important}
+.iaIssue,.iaTooltip,.iaReview{background:#20251a!important;color:#e9eee7!important;border-color:#4a573b!important}
+.iaIssue p,.iaTooltip p{color:#b8c3b1!important}
+.iaPageOption:has(input:checked){background:#1b2416!important;border-color:#c7f36b!important}
+.iaPageOption small,.iaPageOption strong{color:#e9eee7!important}
+.iaViewportChoice:hover,.iaTab:hover{border-color:#c7f36b!important}
+.iaStat strong,.iaStep.on{color:#101310!important}
+.iaCanvas{overflow:auto!important;scrollbar-color:#596650 #101310!important}
+.iaRemediationPage input,.iaRemediationPage textarea,.iaRemediationPage select{background:#101310!important;color:#e9eee7!important;border-color:#394235!important}
+.iaRemediationPage button{border-color:#394235!important}
+input,textarea,select{accent-color:#c7f36b}
+a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid #c7f36b!important;outline-offset:2px}
