@@ -22,13 +22,19 @@ export function inferSharedBrainScope(query: string): SharedBrainScope {
 
 export function resolveCoachingBrainScope(scopeText: string, ruleText = "", rawFeedback = ""): SharedBrainScope {
   const value = (scopeText + " " + ruleText + " " + rawFeedback).toLowerCase();
+  const coachingText = (ruleText + " " + rawFeedback).toLowerCase();
+  // Explicit cross-product intent beats incidental domain words in the example.
+  if (/\b(all products|all tools|all agents|global rule|cross.product|shared brain|all product teams|across ux direct and ux audit|all products and plugins)\b/i.test(coachingText)) return "UX_SHARED_BRAIN";
+  // Apply client-only scope only when the correction is explicitly restricted to that client.
+  if (/\b(only|specific to|limited to|exclusive to)\s+(the\s+)?dmi\b|\bdmi\b.*\b(only|specific to this client)\b/i.test(coachingText)) return "DMI_HFC";
+  if (/\b(only|specific to|limited to|exclusive to)\s+(the\s+)?ujjivan\b|\bujjivan\b.*\b(only|specific to this client)\b/i.test(coachingText)) return "UJJIVAN_SFB";
+  if (/\b(indian bfsi|india bfsi|indian banking|india banking|rbi rule|rbi requirement|for indian banks|for nbfc|indian lenders|indian financial services|for small finance banks)\b/i.test(coachingText)) return "INDIA_BFCI_SHARED";
   if (/\b(express computers|express-computers)\b/i.test(value)) return "EXPRESS_COMPUTERS";
   if (/\b(dmi|dmi hfc|dmi finance|dmi housing finance)\b/i.test(value)) return "DMI_HFC";
   if (/\b(ujjivan|ujjivan sfb|ujjivan small finance)\b/i.test(value)) return "UJJIVAN_SFB";
-  if (/\b(bfsi|indian bank|india banking|banking|banks?|nbfc|lender|insurance|loans?|credit|upi|deposit|financial services|small finance bank|sfb)\b/i.test(value)) return "INDIA_BFCI_SHARED";
-  if (/\b(all products|all tools|all agents|global|cross.product|shared brain|all audits|every audit)\b/i.test(value)) return "UX_SHARED_BRAIN";
-  if (/\b(ux direct|wirefram|design system|figma plugin|design execution)\b/i.test(value)) return "UX_DIRECT";
-  if (/\b(ux audit|audit only|auditing|audit finding|false positive|severity calibration|screenshot evidence)\b/i.test(value)) return "UX_AUDIT";
+  if (/\b(bfsi|indian bank|india banking|banking|banks?|nbfc|lender|insurance|loans?|credit|upi|deposit|financial services|small finance bank|sfb)\b/i.test(coachingText)) return "INDIA_BFCI_SHARED";
+  if (/\b(ux direct|wirefram|design system|figma plugin|design execution)\b/i.test(coachingText)) return "UX_DIRECT";
+  if (/\b(ux audit|audit only|auditing|audit finding|false positive|severity calibration|screenshot evidence)\b/i.test(coachingText)) return "UX_AUDIT";
   return "UX_AUDIT";
 }
 
