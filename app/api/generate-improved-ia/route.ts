@@ -1,3 +1,4 @@
+import { assertPaidOpenRouterModel } from "@/lib/openrouter-paid";
 export const runtime="nodejs";
 export const maxDuration=60;
 function canon(raw:string){try{const u=new URL(raw);u.hash="";u.pathname=u.pathname.replace(/\/+$/,"")||"/";return u.origin+(u.pathname==="/"? "":u.pathname)+u.search;}catch{return "";}}
@@ -49,6 +50,11 @@ export async function POST(req:Request){try{
  const target=typeof body.targetUrl==="string"?canon(body.targetUrl):"",sourceId=txt(body.focusFindingId,"",120),issueTitle=txt(body.focusIssueTitle,"",160);
  const focusFinding=findings.find((f:any)=>f.url===target&&f.sourceId===sourceId),focusWarning=warnings.find((w:any)=>w.title===issueTitle);
  const key=process.env.OPENROUTER_API_KEY;if(!key)return Response.json({error:"OPENROUTER_API_KEY is not configured; the IA proposal cannot be generated."},{status:503});
+ const selectedTextModel=process.env.UX_AUDIT_TEXT_MODEL?.trim()||"deepseek/deepseek-v4-flash-0731";
+ try { await assertPaidOpenRouterModel(selectedTextModel); } catch (error) {
+  const message=error instanceof Error?error.message:"The configured IA model is not verified as paid.";
+  return Response.json({error:message},{status:503});
+ }
  const source={websiteTitle,root,pages:pages.map(p=>({url:p.url,title:p.title,currentCategory:p.category,currentDepth:p.depth})),findings,iaWarnings:warnings,focus:focusFinding?{type:"finding",...focusFinding}:focusWarning?{type:"IA warning",...focusWarning}:target?{type:"page",url:target}:{type:"whole site"}};
  const prompt=[
  "Act as a senior information architect and UX lead. Return valid JSON only with this shape: {\"summary\":\"...\",\"principles\":[\"...\"],\"tree\":{\"label\":\"website name\",\"url\":\"EXACT ROOT URL\",\"rationale\":\"...\",\"findingIds\":[],\"children\":[{\"label\":\"group or page\",\"url\":null,\"rationale\":\"...\",\"findingIds\":[],\"children\":[]}]},\"fixes\":[{\"findingId\":\"exact supplied id\",\"url\":\"exact URL\",\"status\":\"addressed|partially_addressed|outside_ia_scope\",\"resolution\":\"...\",\"rationale\":\"...\",\"affectedUrls\":[\"exact URL\"]}],\"warningFixes\":[{\"warningId\":\"exact warning id\",\"status\":\"addressed|partially_addressed|outside_ia_scope\",\"resolution\":\"...\",\"rationale\":\"...\",\"affectedUrls\":[\"exact URL\"]}],\"globalChanges\":[{\"title\":\"...\",\"change\":\"...\",\"reason\":\"...\"}]}",
@@ -62,7 +68,7 @@ export async function POST(req:Request){try{
  let lastModelIssue="The model did not return valid JSON.";
  for(let attempt=0;attempt<2&&!parsed;attempt++){
   const requestPrompt=attempt===0?prompt:prompt+"\n\nREPAIR: Your previous response was not valid JSON. Return one compact, syntactically valid JSON object only. No Markdown, no comments, no trailing commas, no extra prose. Keep every required top-level key. Keep each resolution/rationale to one concise sentence and preserve every supplied URL.";
-  const requestBody:any={model:process.env.UX_AUDIT_TEXT_MODEL?.trim()||"deepseek/deepseek-v4-flash-0731",messages:[{role:"user",content:requestPrompt}],max_tokens:attempt===0?5000:2800,temperature:0.1,reasoning:{effort:"low"},provider:{allow_fallbacks:false,max_price:{prompt:0.5,completion:2}}};
+  const requestBody:any={model:selectedTextModel,messages:[{role:"user",content:requestPrompt}],max_tokens:attempt===0?5000:2800,temperature:0.1,reasoning:{effort:"low"},provider:{allow_fallbacks:false,max_price:{prompt:0.5,completion:2}}};
   if(attempt===0)requestBody.response_format={type:"json_object"};
   try{
    const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:"Bearer "+key,"Content-Type":"application/json","HTTP-Referer":"https://uxaudit.vercel.app","X-Title":"UX Audit improved IA proposal"},body:JSON.stringify(requestBody),signal:AbortSignal.timeout(22000),cache:"no-store"});
