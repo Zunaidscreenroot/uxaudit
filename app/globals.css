@@ -233,3 +233,29 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible{
 @media(max-width:650px) {
   .or-app[data-embedded="true"] .or-content {padding:22px 14px 28px}
 }
+
+/* Full audit page also hides the independent product chrome when framed by UX Direct. */
+.or-app[data-embedded="true"] .or-url-form label,
+.or-app[data-embedded="true"] .or-content label {
+  color:var(--ds-muted)!important;
+}
+.or-app[data-embedded="true"] .or-content .or-start-card-top h2 {
+  font-size:18px;
+  letter-spacing:-.3px;
+}
+.or-app[data-embedded="true"] .or-content .or-start-card-top p {
+  line-height:1.7;
+}
+.or-app[data-embedded="true"] .or-content .or-url-control {
+  background:var(--ds-bg)!important;
+  border-color:#344154!important;
+}
+.or-app[data-embedded="true"] .or-content .or-url-control input {
+  background:transparent!important;
+}
+.or-app[data-embedded="true"] .or-content .or-start-options>a {
+  border-color:var(--ds-line)!important;
+}
+.or-app[data-embedded="true"] .or-content .or-start-options>a:hover {
+  background:var(--ds-panel-2)!important;
+}
