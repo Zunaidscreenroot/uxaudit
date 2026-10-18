@@ -1,0 +1,46 @@
+name: Refresh Cloudflare migration lockfile
+
+on:
+  push:
+    branches:
+      - cloudflare-workers-migration
+    paths:
+      - package.json
+
+permissions:
+  contents: write
+
+jobs:
+  lockfile-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out migration branch
+        uses: actions/checkout@v4
+        with:
+          ref: cloudflare-workers-migration
+          token: ${'{'}{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Regenerate package lockfile
+        run: npm install --package-lock-only --ignore-scripts
+
+      - name: Commit lockfile
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet -- package-lock.json; then
+            git add package-lock.json
+            git commit -m "Fix Cloudflare migration dependency lockfile"
+            git push origin HEAD:cloudflare-workers-migration
+          fi
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Build Cloudflare Worker bundle
+        run: npm run build:cloudflare
