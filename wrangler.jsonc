@@ -3,7 +3,9 @@
   "name": "uxaudit",
   "main": ".open-next/worker.js",
   "compatibility_date": "2026-10-18",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
   "workers_dev": false,
   "assets": {
     "directory": ".open-next/assets",
@@ -13,5 +15,11 @@
     "enabled": true
   },
   "previews": {},
-  "preview_urls": true
+  "preview_urls": true,
+  "r2_buckets": [
+    {
+      "binding": "UX_SHARED_ASSETS",
+      "bucket_name": "ux-direct-assets"
+    }
+  ]
 }
