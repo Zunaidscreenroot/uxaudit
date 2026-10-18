@@ -18,7 +18,7 @@ type Lesson = {
   source_audit_id?: string | null;
   source_finding_title?: string | null;
 };
-const COACHING_PROMPT = "I’m coaching UX Audit. Convert my Hindi/Hinglish feedback into one concise, reusable UX rule. Preserve my original feedback, write the rule in clear English, explain why it matters, set the correct scope and keywords, and save it as a draft. Only activate it when I explicitly approve it for future audits.";
+const COACHING_PROMPT = "I’m coaching UX Audit. Convert my Hindi/Hinglish feedback into one concise, reusable UX rule. Preserve my original feedback, classify the correction (false positive, missed issue, severity, duplicate, recommendation, evidence, benchmarking, or other), write the rule in clear English, explain why it matters, set its scope and keywords, and keep any useful before/after example. If this refers to a specific saved audit, include the auditId and finding title. Save as a draft. Activate it only after I explicitly approve it for future audits.";
 
 function dateLabel(value?: string | null) {
   if (!value) return "Not used yet";
