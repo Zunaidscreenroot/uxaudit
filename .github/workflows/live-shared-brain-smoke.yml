@@ -1,0 +1,59 @@
+name: UX Audit live integration smoke test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "lib/shared-brain-client.ts"
+      - "lib/coach-learning.ts"
+      - "lib/knowledge-base.ts"
+      - "app/api/coach-learning/route.ts"
+      - "app/api/knowledge-base/route.ts"
+      - ".github/workflows/live-shared-brain-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  live-smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Wait for Cloudflare deployment and test live reads
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_URL="https://uxaudit.zunaid-cb7.workers.dev"
+          attempt=1
+          max_attempts=30
+
+          while [ "$attempt" -le "$max_attempts" ]; do
+            echo "Live integration check, attempt $attempt/$max_attempts"
+
+            clients="$(mktemp)"
+            lessons="$(mktemp)"
+            clients_code="$(curl -sS --max-time 12 -o "$clients" -w '%{http_code}' "$BASE_URL/api/knowledge-base" || true)"
+            lessons_code="$(curl -sS --max-time 12 -o "$lessons" -w '%{http_code}' "$BASE_URL/api/coach-learning?limit=5" || true)"
+
+            if [ "$clients_code" = "200" ] && [ "$lessons_code" = "200" ]               && node -e 'const fs=require("fs"); const x=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(!Array.isArray(x.clients)) process.exit(1)' "$clients"               && node -e 'const fs=require("fs"); const x=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(!Array.isArray(x.lessons)) process.exit(1)' "$lessons"; then
+              echo "PASS: Neon-backed Past Findings index is readable."
+              echo "PASS: shared-brain-backed approved coaching list is readable."
+              rm -f "$clients" "$lessons"
+              exit 0
+            fi
+
+            echo "Not ready: Past Findings HTTP $clients_code; shared coaching HTTP $lessons_code"
+            if [ "$attempt" -eq "$max_attempts" ]; then
+              echo "::error::Live integration smoke test failed after $max_attempts attempts."
+              echo "Past Findings response (first 1,000 chars):"
+              head -c 1000 "$clients" || true
+              echo
+              echo "Shared coaching response (first 1,000 chars):"
+              head -c 1000 "$lessons" || true
+              rm -f "$clients" "$lessons"
+              exit 1
+            fi
+            rm -f "$clients" "$lessons"
+            attempt=$((attempt + 1))
+            sleep 10
+          done
