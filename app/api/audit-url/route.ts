@@ -1,5 +1,4 @@
 import { isIP } from "node:net";
-import { resolve4, resolve6 } from "node:dns/promises";
 import { createAuditFromScreenshot } from "@/lib/audit";
 import { captureWebsiteScreenshot } from "@/lib/capture-screenshot";
 import { saveAudit } from "@/lib/knowledge-base";
@@ -36,10 +35,27 @@ async function resolvesToPrivateAddress(host: string) {
   const normalized = host.replace(/^\[|\]$/g, "");
   if (isIP(normalized)) return privateHost(normalized);
   try {
-    // Workers does not implement dns.lookup(); resolve4/resolve6 use Cloudflare DNS over HTTPS.
-    const results = await Promise.allSettled([resolve4(normalized), resolve6(normalized)]);
-    const addresses = results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
-    return !addresses.length || addresses.some((address) => privateHost(address));
+    // Workers do not expose Node's DNS resolver consistently. Use DNS-over-HTTPS
+    // and fail closed if either lookup is unusable or no public address is returned.
+    const queries = await Promise.all(["A", "AAAA"].map(async (type) => {
+      const response = await fetch(
+        "https://cloudflare-dns.com/dns-query?name=" + encodeURIComponent(normalized) + "&type=" + type,
+        {
+          headers: { accept: "application/dns-json" },
+          signal: AbortSignal.timeout(3000),
+          cache: "no-store",
+        },
+      );
+      if (!response.ok) throw new Error("DNS resolution failed.");
+      const payload = await response.json() as { Status?: number; Answer?: Array<{ type?: number; data?: string }> };
+      if (payload.Status !== 0 && payload.Status !== 3) throw new Error("DNS resolution failed.");
+      return (payload.Answer || [])
+        .filter((answer) => answer.type === 1 || answer.type === 28)
+        .map((answer) => answer.data)
+        .filter((value): value is string => typeof value === "string" && value.length > 0);
+    }));
+    const addresses = queries.flat();
+    return addresses.length === 0 || addresses.some((address) => privateHost(address));
   } catch {
     return true;
   }
