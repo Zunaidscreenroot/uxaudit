@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { getMcpIssuer, verifyMcpPayload } from "../../../lib/mcp-oauth";
-import { listCoachingLessons, reviewCoachingLesson, saveCoachingLesson } from "@/lib/coach-learning";
+import { listKnowledgeMemory, reviewKnowledgeMemory, saveKnowledgeMemory } from "@/lib/knowledge-memory";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,8 +32,8 @@ const toolDefinitions = [
   { name: "uxaudit_get_findings", title: "Get UX findings", requiredScope: "audit:read", annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     description: "Get concise findings from a saved IA session: severity, category, issue, recommendation, UX research and business analysis. Omits screenshot payloads.",
     inputSchema: { type: "object", properties: { sessionId: { type: "string", description: "UUID returned by UX Audit." }, pageUrl: { type: "string", description: "Optional URL filter." } }, required: ["sessionId"], additionalProperties: false } },
-  { name: "uxaudit_save_coaching_lesson", title: "Save a coaching lesson", requiredScope: "audit:coach", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-    description: "Turn user feedback, including Hindi/Hinglish voice transcripts, into one concise reusable UX Audit rule. Classify the correction, preserve the raw feedback, and attach audit/finding context when available. If an earlier approved rule is explicitly reported as ineffective or wrong, list and archive that rule before approving its replacement. Save as a draft by default; activate only when the user explicitly approves it. Only approved rules and short optional examples are retrieved during later audits.",
+  { name: "uxaudit_save_coaching_lesson", title: "Save compact Knowledge Base memory", requiredScope: "audit:coach", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    description: "Convert feedback into a compact, versioned JSON model-memory record. Preserve the original feedback separately for provenance and local-model training; only approved compact records affect future audits. Save as a draft by default and activate only after explicit approval. This stores retrieval memory; it does not update model weights.",
     inputSchema: { type: "object", properties: {
       rawFeedback: { type: "string", maxLength: 8000, description: "The original user feedback, preserving their wording and language." },
       title: { type: "string", maxLength: 180, description: "Short English title for the reusable lesson." },
@@ -48,14 +48,14 @@ const toolDefinitions = [
       sourceFindingTitle: { type: "string", maxLength: 240, description: "Optional title of the finding being corrected." },
       activate: { type: "boolean", description: "Set true only when the user explicitly approves immediate activation. Otherwise leave unset or false to save a draft." }
     }, required: ["rawFeedback", "title", "rule"], additionalProperties: false } },
-  { name: "uxaudit_list_coaching_lessons", title: "List coaching lessons", requiredScope: "audit:coach", annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-    description: "Review stored UX Audit coaching lessons and their status. Draft lessons do not affect audits; only approved lessons are active.",
+  { name: "uxaudit_list_coaching_lessons", title: "List Knowledge Base memories", requiredScope: "audit:coach", annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    description: "Retrieve compact Knowledge Base model-memory records and their approval status. Draft records do not affect audits; only approved JSON payloads are active.",
     inputSchema: { type: "object", properties: {
       status: { type: "string", enum: ["all", "draft", "approved", "rejected", "archived"] },
       limit: { type: "integer", minimum: 1, maximum: 100 }
     }, additionalProperties: false } },
-  { name: "uxaudit_review_coaching_lesson", title: "Approve or archive a coaching lesson", requiredScope: "audit:coach", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-    description: "Approve a draft lesson so it can guide future audits, reject it, or archive an approved rule. This changes the stored learning status but does not update model weights.",
+  { name: "uxaudit_review_coaching_lesson", title: "Review Knowledge Base memory", requiredScope: "audit:coach", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    description: "Approve a draft memory record so it can guide future audits, reject it, or archive an approved record. This changes retrieval memory status, not model weights.",
     inputSchema: { type: "object", properties: {
       lessonId: { type: "string", description: "UUID returned by UX Audit when the lesson was saved." },
       action: { type: "string", enum: ["approve", "reject", "archive"] },
@@ -182,7 +182,7 @@ async function runTool(name: string, args: any, request: Request) {
 
 
   if (name === "uxaudit_save_coaching_lesson") {
-    const saved = await saveCoachingLesson({
+    const saved = await saveKnowledgeMemory({
       rawFeedback: args.rawFeedback, title: args.title, rule: args.rule,
       rationale: args.rationale, scope: args.scope, keywords: args.keywords,
       examples: args.examples, sourceLanguage: args.sourceLanguage,
@@ -191,44 +191,54 @@ async function runTool(name: string, args: any, request: Request) {
       sourceType: "chatgpt_mcp", activate: args.activate,
     });
     return {
-      id: saved.id, title: saved.title, rule: saved.rule, scope: saved.scope,
-      status: saved.status, activeForFutureAudits: saved.status === "approved",
+      id: saved.id,
+      modelMemory: saved.model_payload,
+      status: saved.status,
+      activeForFutureAudits: saved.status === "approved",
       message: saved.status === "approved"
-        ? "Coaching lesson approved and available to relevant future audits."
-        : "Coaching lesson saved as a draft. Approve it before it influences future audits.",
+        ? "Compact Knowledge Base memory approved and available to relevant future audits."
+        : "Compact Knowledge Base memory saved as a draft. Approve it before it influences future audits.",
     };
   }
 
   if (name === "uxaudit_list_coaching_lessons") {
-    const lessons = await listCoachingLessons(
+    const memories = await listKnowledgeMemory(
       typeof args.status === "string" ? args.status : "all",
       typeof args.limit === "number" ? args.limit : 30,
     );
     return {
-      count: lessons.length,
-      lessons: lessons.map((lesson) => ({
-        id: lesson.id, title: lesson.title, rule: lesson.rule, rationale: lesson.rationale,
-        scope: lesson.scope, keywords: lesson.keywords, sourceLanguage: lesson.source_language,
-        status: lesson.status, rawFeedback: String(lesson.raw_feedback || "").slice(0, 1200),
-        feedbackKind: lesson.feedback_kind, sourceAuditId: lesson.source_audit_id,
-        sourceFindingTitle: lesson.source_finding_title,
-        reviewNote: lesson.review_note, createdAt: lesson.created_at, updatedAt: lesson.updated_at,
-        approvedAt: lesson.approved_at, usageCount: lesson.usage_count, lastUsedAt: lesson.last_used_at,
+      count: memories.length,
+      memories: memories.map((memory) => ({
+        id: memory.id,
+        modelMemory: memory.model_payload,
+        status: memory.status,
+        sourceFeedback: String(memory.raw_feedback || "").slice(0, 1200),
+        sourceType: memory.source_type,
+        sourceAuditId: memory.source_audit_id,
+        sourceFindingTitle: memory.source_finding_title,
+        reviewNote: memory.review_note,
+        createdAt: memory.created_at,
+        updatedAt: memory.updated_at,
+        approvedAt: memory.approved_at,
+        usageCount: memory.usage_count,
+        lastUsedAt: memory.last_used_at,
       })),
     };
   }
 
   if (name === "uxaudit_review_coaching_lesson") {
-    const updated = await reviewCoachingLesson(args.lessonId, args.action, args.reviewNote);
+    const updated = await reviewKnowledgeMemory(args.lessonId, args.action, args.reviewNote);
     return {
-      id: updated.id, title: updated.title, rule: updated.rule, scope: updated.scope,
-      status: updated.status, approvedAt: updated.approved_at,
+      id: updated.id,
+      modelMemory: updated.model_payload,
+      status: updated.status,
+      approvedAt: updated.approved_at,
       activeForFutureAudits: updated.status === "approved",
       message: updated.status === "approved"
-        ? "Lesson approved. It can now be retrieved by relevant future audits."
+        ? "Knowledge Base memory approved. It can now be retrieved by relevant future audits."
         : updated.status === "rejected"
-          ? "Lesson rejected. It will not influence audits."
-          : "Lesson archived. It will no longer influence audits.",
+          ? "Knowledge Base memory rejected. It will not influence audits."
+          : "Knowledge Base memory archived. It will no longer influence audits.",
     };
   }
 
