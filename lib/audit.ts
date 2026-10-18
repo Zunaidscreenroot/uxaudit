@@ -16,8 +16,8 @@ type Capture = { buffer: Buffer; width: number; height: number; analysisBuffer: 
 type VisualObservation = { id: string; section: string; element: string; issue: string; whyItMatters: string; marker: MarkerPoint };
 type VisualPass = { clientName: string; pageSummary: string; observations: VisualObservation[] };
 
-const DEFAULT_VISION_MODEL = "gemini-3.1-flash-lite";
-const DEFAULT_TEXT_MODEL = "gemini-3.1-flash-lite";
+const DEFAULT_VISION_MODEL = "deepseek/deepseek-v4.1-flash-1017";
+const DEFAULT_TEXT_MODEL = "deepseek/deepseek-v4.1-flash-1017";
 const GEMINI_TIMEOUT_MS = 30000;
 const MAX_SCREENSHOT_BYTES = 15 * 1024 * 1024;
 const CATEGORIES = ["Navigation", "Information hierarchy", "Usability & interaction", "Content & tone", "Visual design", "Responsiveness", "Web performance"] as const;
@@ -50,7 +50,7 @@ async function modelGenerate(model: VerifiedModel, parts: Array<Record<string, u
  try{
   const stage=parts.some(p=>typeof p.text==="string"&&/IMAGE-TO-TEXT stage/.test(String(p.text)))?"visual":"text";
   console.info("[uxaudit] model_request_start",JSON.stringify({model:model.model,stage,timeoutMs,maxOutputTokens}));
-  const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:"Bearer "+key,"Content-Type":"application/json","HTTP-Referer":"https://uxauditscreenroot.vercel.app","X-Title":"UX Audit","X-OpenRouter-Metadata":"enabled"},body:JSON.stringify({model:model.model,messages:[{role:"user",content}],max_tokens:maxOutputTokens,temperature:0.1,reasoning:{effort:"low",exclude:true},response_format:{type:"json_object"},provider:{allow_fallbacks:false,max_price:{prompt:0.5,completion:2}}}),signal:AbortSignal.timeout(timeoutMs),cache:"no-store"});
+  const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:"Bearer "+key,"Content-Type":"application/json","HTTP-Referer":"https://uxauditscreenroot.vercel.app","X-Title":"UX Audit","X-OpenRouter-Metadata":"enabled"},body:JSON.stringify({model:model.model,messages:[{role:"user",content}],max_tokens:maxOutputTokens,temperature:0.1,reasoning:{effort:"minimal",exclude:true},response_format:{type:"json_object"},provider:{allow_fallbacks:true,sort:"latency",max_price:{prompt:0.5,completion:2}}}),signal:AbortSignal.timeout(timeoutMs),cache:"no-store"});
   const rawBody=await response.text();let payload:any={};try{payload=rawBody?JSON.parse(rawBody):{};}catch{throw new Error("OpenRouter returned invalid JSON (HTTP "+response.status+"): "+rawBody.slice(0,180));}
   if(response.ok){
    const message=payload?.choices?.[0]?.message;const raw=message?.content;
@@ -278,7 +278,7 @@ async function createVisualPass(model: VerifiedModel, capture: Capture, timeoutM
 
 async function createTextReview(model: VerifiedModel, visualPass: VisualPass, timeoutMs = 12000, knowledgeContext = "") {
   const prompt = `You are the SECOND stage of a UX audit. You are a TEXT-TO-TEXT UX research and business reviewer. The first model already inspected the screenshot and produced the visual observations below. You do NOT see the screenshot.\n\nPreserve observationId exactly. Do not change, merge, reorder, or reinterpret the visual location. Never invent UI elements, coordinates, measurements, analytics, or behaviour. For each observation create a client-ready finding with UX research context and business funnel analysis. Category-tag EVERY finding with exactly one allowed category using the visual evidence, not by spreading categories evenly. Titles must name the specific element and flaw; the description must explain the observed flaw AND its user consequence (never copy the title). The recommendation must directly redesign the observed element and name the section or component; avoid generic advice like “improve visual hierarchy”. Business analysis must be individually derived from this issue: write a distinct impact, causal mechanism, relevant KPI, funnel stage, and concrete suggestions. Do not reuse a template paragraph across findings. Repeat a KPI or funnel stage only when genuinely appropriate, while keeping each causal explanation specific to the issue. Calibrate severity independently: high only for a major blocker, misleading interaction, serious trust/accessibility issue, or clear primary-journey failure; medium for meaningful friction; low for polish/minor clarity issues. Vary severity only when evidence warrants it—never alternate high/low as a pattern. KPI and funnel stage must fit the actual issue; use different values where the evidence points to different outcomes.\n\nUX context must include a relevant law/principle, a plain-language definition, why it applies, and concise research context. Business analysis must identify funnel stage, directional impact, KPI at risk, mechanism, and practical suggestions that could improve that KPI. Do not create development tasks. Do not claim measured KPI changes.\n\nReturn JSON only: {"findings":[{"id":"finding-1","observationId":"obs-1","severity":"high|medium|low","category":"Information hierarchy","title":"short finding","description":"clear explanation","recommendation":"specific UX redesign action","uxPerspective":{"law":"Hick's Law","definition":"plain-language definition","assessment":"why it applies","researchContext":"brief research context"},"businessAnalysis":{"funnelStage":"Acquisition / consideration / activation / conversion / retention","impact":"directional impact","kpi":"specific KPI","mechanism":"how the design can influence it","suggestions":["specific action","specific action"]}}]}\n\nAllowed categories: ${CATEGORIES.join(", ")}.\n\nVISUAL OBSERVATIONS:\n${JSON.stringify(visualPass)}\n\nINTERNAL UX AUDIT KNOWLEDGE (approved coaching rules are operating standards within their stated scope; historical findings and reference documents are examples only):\n${knowledgeContext || "No relevant saved audit findings were retrieved. Rely on screenshot evidence and established UX principles."}\nApply approved coaching rules only when their declared scope matches this audit. Current screenshot evidence must support every finding. Never copy historical findings blindly, and do not claim a problem unless visible evidence supports it. Do not cite internal examples as external research or invent sources.`;
-  const text = await modelGenerate(model, [{ text: prompt }], 2800, timeoutMs);
+  const text = await modelGenerate(model, [{ text: prompt }], 2200, timeoutMs);
   const parsed = extractJson(text); const root = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
   return Array.isArray(root.findings) ? root.findings : [];
 }
@@ -317,16 +317,17 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   const capture: Capture = { buffer, width, height, analysisBuffer, mimeType: metadata.mimeType, title: filename.replace(/\.[^.]+$/, "") || "Uploaded screenshot" };
   const allowedModels=verifiedModels.filter(m=>m&&m.provider==="OpenRouter"&&m.tier==="paid"&&typeof m.model==="string"&&m.model.length>0&&!m.model.endsWith(":free")&&m.model!=="openrouter/auto").slice(0,2);
   // The connection layer owns model selection: the first verified model is the primary; later entries are ordered fallbacks.
-  const primaryModel=allowedModels[0];
-  const visionModel=primaryModel;
-  const textModel=primaryModel;
+  const fastModelId = process.env.UX_AUDIT_VISION_MODEL?.trim() || DEFAULT_VISION_MODEL;
+  const textModelId = process.env.UX_AUDIT_TEXT_MODEL?.trim() || DEFAULT_TEXT_MODEL;
+  const visionModel: VerifiedModel = { provider: "OpenRouter", model: fastModelId, tier: "paid" };
+  const textModel: VerifiedModel = { provider: "OpenRouter", model: textModelId, tier: "paid" };
   if(!visionModel||!textModel)throw new Error("At least one verified OpenRouter model is required; refresh model availability and retry.");
 
   onStage?.({ id: "capture", label: "Preparing screenshot", detail: auditMode === "mobile" ? `Using a mobile capture with a 393 × 852 CSS-pixel reference viewport; captured image size is ${width} × ${height}px.` : `Using the original ${width} × ${height}px desktop full-page screenshot; no visual crops will be generated.`, status: "complete" });
   onStage?.({ id: "analyse", label: "OpenRouter screenshot analysis", detail: "Explicit paid vision model · image input enabled · verified non-zero pricing · provider price ceiling applied. Automatic routing and free models are disabled.", status: "active" });
   let visualPass: VisualPass | null = null;let visualErrors:string[]=[];
   const visionCandidates=[visionModel,...allowedModels.filter(m=>m.model!==visionModel.model)];
-  for(let i=0;i<visionCandidates.length;i++){const candidate=visionCandidates[i];const timeoutMs=i===0?18000:i===1?10000:8000;try{visualPass=await createVisualPass(candidate,capture,timeoutMs,auditMode);break;}catch(e){visualErrors.push(candidate.model+": "+(e instanceof Error?e.message:"failed"));}}
+  for(let i=0;i<visionCandidates.length;i++){const candidate=visionCandidates[i];const timeoutMs=i===0?9000:i===1?6500:5000;try{visualPass=await createVisualPass(candidate,capture,timeoutMs,auditMode);break;}catch(e){visualErrors.push(candidate.model+": "+(e instanceof Error?e.message:"failed"));}}
   if(!visualPass)throw new Error("OpenRouter Auto Router could not analyze the screenshot. "+visualErrors.join(" | "));
   // Deduplicate near-identical model observations before review and marker generation.
   const distinctObservations: VisualObservation[] = [];
@@ -353,7 +354,7 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   onStage?.({ id: "quality", label: "OpenRouter UX reasoning", detail: "Explicit paid text model · verified non-zero pricing · provider price ceiling applied. Automatic routing and free models are disabled.", status: "active" });
   let review: unknown[]=[];let reviewOk=visualPass.observations.length===0;let reviewErrors:string[]=[];
   const textCandidates=[textModel,...allowedModels.filter(m=>m.model!==textModel.model)];
-  if (visualPass.observations.length > 0) for(let i=0;i<textCandidates.length;i++){const candidate=textCandidates[i];const timeoutMs=i===0?14000:i===1?10000:8000;try{review=await createTextReview(candidate,visualPass,timeoutMs,knowledgeContext);if(review.length){reviewOk=true;break;}reviewErrors.push(candidate.model+": empty findings");}catch(e){reviewErrors.push(candidate.model+": "+(e instanceof Error?e.message:"failed"));}}
+  if (visualPass.observations.length > 0) for(let i=0;i<textCandidates.length;i++){const candidate=textCandidates[i];const timeoutMs=i===0?8500:i===1?6000:5000;try{review=await createTextReview(candidate,visualPass,timeoutMs,knowledgeContext);if(review.length){reviewOk=true;break;}reviewErrors.push(candidate.model+": empty findings");}catch(e){reviewErrors.push(candidate.model+": "+(e instanceof Error?e.message:"failed"));}}
   if(!reviewOk){console.warn("[uxaudit] text_review_degraded",JSON.stringify({errors:reviewErrors,observations:visualPass.observations.length}));onStage?.({id:"quality",label:"OpenRouter UX reasoning",detail:"OpenRouter did not return valid structured research findings; preserving screenshot evidence and using conservative evidence-linked fallback recommendations. "+reviewErrors.join(" | "),status:"complete"});review=[];}else{onStage?.({id:"quality",label:"OpenRouter UX reasoning",detail:"OpenRouter returned structured UX laws, research context and business-funnel hypotheses.",status:"complete"});}
 
   onStage?.({ id: "markers", label: "Place evidence markers", detail: "Linking each finding to its exact region on the original screenshot; no crops are created.", status: "active" });

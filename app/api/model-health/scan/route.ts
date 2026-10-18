@@ -25,7 +25,7 @@ async function testModel(item: ModelDef) {
    if (!key) return {...item,ok:false,latencyMs:0,error:"OpenRouter API key missing"};
    response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method:"POST",headers:{Authorization:`Bearer ${key}`,"Content-Type":"application/json","HTTP-Referer":"https://uxauditscreenroot.vercel.app","X-Title":"UX Audit Availability Check"},
-    body:JSON.stringify({model:item.model,messages:[{role:"user",content:"Reply OK"}],max_tokens:2,temperature:0,provider:{allow_fallbacks:false,max_price:{prompt:0.5,completion:2}}}),
+    body:JSON.stringify({model:item.model,messages:[{role:"user",content:"Reply OK"}],max_tokens:2,temperature:0,provider:{allow_fallbacks:true,sort:"latency",max_price:{prompt:0.5,completion:2}}}),
     signal:AbortSignal.timeout(7000),cache:"no-store"
    });
    payload = await response.json().catch(()=>({}));
@@ -81,15 +81,16 @@ export async function POST() {
  if(cachedScan&&cachedScan.expiresAt>Date.now())return Response.json({...cachedScan.payload,cacheHit:true},{headers:{"Cache-Control":"no-store"}});
  try {
   const models=await getPopularModels();
-  const auditCandidates=models.filter((m:any)=>m.imageCapable && m.tier==="paid" && !((m as any).audioOnly))
-    .sort((a:any,b:any)=>((a.promptPrice??0)+(a.completionPrice??0))-((b.promptPrice??0)+(b.completionPrice??0)) || (a.popularityRank??999)-(b.popularityRank??999))
-    .slice(0,8);
+  const fastVision=models.find((m:any)=>m.model==="deepseek/deepseek-v4.1-flash-1017"&&m.imageCapable&&m.tier==="paid");
+  const costRanked=models.filter((m:any)=>m.imageCapable && m.tier==="paid" && !((m as any).audioOnly))
+    .sort((a:any,b:any)=>((a.promptPrice??0)+(a.completionPrice??0))-((b.promptPrice??0)+(b.completionPrice??0)) || (a.popularityRank??999)-(b.popularityRank??999));
+  const auditCandidates=[...(fastVision?[fastVision]:[]),...costRanked.filter((m:any)=>m.model!==fastVision?.model).slice(0,fastVision?7:8)];
   const results=await mapLimit(auditCandidates,3,testModel);
   const working=results.filter((result:any)=>result.ok).map((result:any)=>({...result,...auditCandidates.find(m=>m.model===result.model)}));
   const failed=results.filter((result:any)=>!result.ok);
   // The audit analyzes screenshots, so the selected model must accept image input.
   const visionWorking=working.filter((m:any)=>m.imageCapable);
-  const ranked=[...visionWorking].sort((a:any,b:any)=>((a.promptPrice??0)+(a.completionPrice??0))-((b.promptPrice??0)+(b.completionPrice??0))||a.latencyMs-b.latencyMs);
+  const ranked=[...visionWorking].sort((a:any,b:any)=>a.latencyMs-b.latencyMs||((a.promptPrice??0)+(a.completionPrice??0))-((b.promptPrice??0)+(b.completionPrice??0)));
   const selectedModels=ranked.slice(0,3);
   const selected=selectedModels[0]??null;
   const verificationActivity=results.map((r:any)=>({model:r.model,ok:Boolean(r.ok),tokens:Number(r.totalTokens??0),costUsd:Number(r.estimatedCostUsd??0),latencyMs:Number(r.latencyMs??0)}));

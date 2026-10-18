@@ -50,7 +50,7 @@ export async function POST(req: Request) {
     if (!models.length) {
       models.push({
         provider: "OpenRouter",
-        model: process.env.UX_AUDIT_VISION_MODEL?.trim() || "deepseek/deepseek-v4-flash-vision-exp",
+        model: process.env.UX_AUDIT_VISION_MODEL?.trim() || "deepseek/deepseek-v4.1-flash-1017",
         tier: "paid",
       });
     }
