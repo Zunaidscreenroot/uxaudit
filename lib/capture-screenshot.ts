@@ -1,4 +1,4 @@
-import sharp from "sharp";
+import { getImageInfo } from "@/lib/image-info";
 
 type CaptureOptions = { url: string; width: number; height: number };
 
@@ -28,11 +28,11 @@ export async function captureWebsiteScreenshot({ url, width, height }: CaptureOp
       const type = response.headers.get("content-type") || "";
       if (response.ok && type.startsWith("image/")) {
         const bytes = Buffer.from(await response.arrayBuffer());
-        if (bytes.length > 0 && bytes.length <= 15 * 1024 * 1024) {
-          await sharp(bytes).metadata();
-          return { bytes, provider: "browserless" as const };
+        const image = getImageInfo(bytes);
+        if (bytes.length > 0 && bytes.length <= 15 * 1024 * 1024 && image) {
+          return { bytes, ...image, provider: "browserless" as const };
         }
-        errors.push("Browserless returned an empty or oversized image");
+        errors.push("Browserless returned an invalid, empty, or oversized image");
       } else {
         const detail = !response.ok ? "HTTP " + response.status : "non-image response (" + type + ")";
         errors.push("Browserless: " + detail);
@@ -57,11 +57,11 @@ export async function captureWebsiteScreenshot({ url, width, height }: CaptureOp
     const type = response.headers.get("content-type") || "";
     if (response.ok && type.startsWith("image/")) {
       const bytes = Buffer.from(await response.arrayBuffer());
-      if (bytes.length > 0 && bytes.length <= 15 * 1024 * 1024) {
-        await sharp(bytes).metadata();
-        return { bytes, provider: "thum.io" as const };
+      const image = getImageInfo(bytes);
+      if (bytes.length > 0 && bytes.length <= 15 * 1024 * 1024 && image) {
+        return { bytes, ...image, provider: "thum.io" as const };
       }
-      errors.push("thum.io returned an empty or oversized image");
+      errors.push("thum.io returned an invalid, empty, or oversized image");
     } else {
       const detail = !response.ok ? "HTTP " + response.status : "non-image response (" + type + ")";
       errors.push("thum.io: " + detail);
