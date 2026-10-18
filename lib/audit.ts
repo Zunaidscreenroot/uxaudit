@@ -1,5 +1,4 @@
 import { retrieveRelevantAuditKnowledge } from "@/lib/knowledge-base";
-import { PhotonImage, SamplingFilter, resize } from "@cf-wasm/photon/workerd";
 import { getImageInfo, type SupportedImageMime } from "@/lib/image-info";
 
 export type Severity = "high" | "medium" | "low";
@@ -313,46 +312,11 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   if (width < 320 || height < 200) throw new Error("Please upload a larger screenshot so the UX evidence can be reviewed reliably.");
   if (width > 20000 || height > 20000) throw new Error("Screenshot dimensions are too large. Please upload a smaller screenshot.");
 
-  // Resize/compress only modest images with WASM, which runs on Workers. Very tall
-  // full-page screenshots are passed through to avoid exceeding Workers' memory cap.
-  let analysisBuffer = buffer;
-  let analysisMimeType: SupportedImageMime = mimeType;
-  let screenshotBytes = buffer;
-  let screenshotMimeType: SupportedImageMime = mimeType;
-  if (width * height <= 6_000_000) {
-    let inputImage: PhotonImage | null = null;
-    let resizedImage: PhotonImage | null = null;
-    try {
-      inputImage = PhotonImage.new_from_byteslice(buffer);
-      const sourceWidth = inputImage.get_width();
-      const sourceHeight = inputImage.get_height();
-      const scale = Math.min(1280 / sourceWidth, 5000 / sourceHeight, 1);
-      if (scale < 1) {
-        resizedImage = resize(
-          inputImage,
-          Math.max(1, Math.round(sourceWidth * scale)),
-          Math.max(1, Math.round(sourceHeight * scale)),
-          SamplingFilter.Lanczos3
-        );
-      }
-      const analysisImage = resizedImage ?? inputImage;
-      analysisBuffer = Buffer.from(analysisImage.get_bytes_jpeg(72));
-      analysisMimeType = "image/jpeg";
-      screenshotBytes = Buffer.from(inputImage.get_bytes_jpeg(88));
-      screenshotMimeType = "image/jpeg";
-    } catch (error) {
-      console.warn("[uxaudit] image_processing_fallback", JSON.stringify({
-        error: error instanceof Error ? error.message : "WASM image processing failed"
-      }));
-      analysisBuffer = buffer;
-      analysisMimeType = mimeType;
-      screenshotBytes = buffer;
-      screenshotMimeType = mimeType;
-    } finally {
-      if (resizedImage) resizedImage.free();
-      if (inputImage) inputImage.free();
-    }
-  }
+  // Avoid native image dependencies in Workers. Keep the original supported image
+  // bytes for both model analysis and report rendering; dimensions were validated above.
+  const analysisBuffer = buffer;
+  const screenshotBytes = buffer;
+  const screenshotMimeType: SupportedImageMime = mimeType;
 
   const allowedModels=verifiedModels.filter(m=>m&&m.provider==="OpenRouter"&&typeof m.model==="string"&&m.model.length>0);
   // The connection layer owns model selection: the first verified model is the primary; later entries are ordered fallbacks.
