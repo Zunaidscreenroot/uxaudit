@@ -14,10 +14,10 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
-    "next": "14.2.32",
+    "next": "^15.5.28",
     "openai": "^7.10.0",
-    "react": "18.3.1",
-    "react-dom": "18.3.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
     "sharp": "^0.34.3",
     "@sparticuz/chromium": "153.0.0",
     "puppeteer-core": "25.11.0",
@@ -27,9 +27,9 @@
     "@neondatabase/serverless": "^1.1.0"
   },
   "devDependencies": {
-    "@types/node": "20.17.30",
-    "@types/react": "18.3.20",
-    "@types/react-dom": "18.3.5",
+    "@types/node": "^22.15.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
     "typescript": "5.8.2",
     "@opennextjs/cloudflare": "latest",
     "wrangler": "latest"
