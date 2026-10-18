@@ -212,7 +212,6 @@ async function runTool(name: string, args: any, request: Request) {
         id: memory.id,
         modelMemory: memory.model_payload,
         status: memory.status,
-        sourceFeedback: String(memory.raw_feedback || "").slice(0, 1200),
         sourceType: memory.source_type,
         sourceAuditId: memory.source_audit_id,
         sourceFindingTitle: memory.source_finding_title,
