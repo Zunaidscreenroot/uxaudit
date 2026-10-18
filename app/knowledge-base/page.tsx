@@ -60,7 +60,7 @@ export default function KnowledgeBasePage() {
   const highCount = useMemo(() => audit?.findings.filter((item) => item.finding.severity === "high").length || 0, [audit]);
 
   return <main className="kbShell">
-    <header className="kbNav"><a href="/" className="kbBrand">UX Audit <span>by ScreenRoot</span></a><a href="/" className="kbBack">← New audit</a></header>
+    <header className="kbNav"><a href="/" className="kbBrand">UX Audit <span>by ScreenRoot</span></a><a href="/coach" className="kbBack">✦ Coach &amp; Learn</a><a href="/" className="kbBack">← New audit</a></header>
     <section className="kbHero"><div><div className="kbEyebrow">Knowledge base</div><h1>Client findings, kept in one place.</h1><p>Every completed audit is stored against the detected client name. Browse previous analyses by client, audit date and individual finding.</p></div><div className="kbStat"><strong>{clients.length}</strong><span>clients</span></div></section>
 
     {error && <div className="kbError">{error}</div>}
