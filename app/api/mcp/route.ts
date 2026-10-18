@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { getMcpIssuer, verifyMcpPayload } from "../../../lib/mcp-oauth";
+import { listCoachingLessons, reviewCoachingLesson, saveCoachingLesson } from "@/lib/coach-learning";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,6 +32,32 @@ const toolDefinitions = [
   { name: "uxaudit_get_findings", title: "Get UX findings", requiredScope: "audit:read", annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     description: "Get concise findings from a saved IA session: severity, category, issue, recommendation, UX research and business analysis. Omits screenshot payloads.",
     inputSchema: { type: "object", properties: { sessionId: { type: "string", description: "UUID returned by UX Audit." }, pageUrl: { type: "string", description: "Optional URL filter." } }, required: ["sessionId"], additionalProperties: false } },
+  { name: "uxaudit_save_coaching_lesson", title: "Save a coaching lesson", requiredScope: "audit:coach", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    description: "Turn user feedback, including Hindi/Hinglish voice transcripts, into one concise reusable UX Audit rule. Preserve the raw feedback. Save as a draft by default; activate only when the user explicitly approves it for future audits. Only approved rules are retrieved during later audits.",
+    inputSchema: { type: "object", properties: {
+      rawFeedback: { type: "string", maxLength: 8000, description: "The original user feedback, preserving their wording and language." },
+      title: { type: "string", maxLength: 180, description: "Short English title for the reusable lesson." },
+      rule: { type: "string", maxLength: 1400, description: "Concise, actionable rule that the UX Audit system should follow." },
+      rationale: { type: "string", maxLength: 1000, description: "Why the rule matters." },
+      scope: { type: "string", maxLength: 160, description: "Where this should apply, e.g. all audits, Indian BFSI websites, mobile layouts, or CTA hierarchy." },
+      keywords: { type: "array", items: { type: "string", maxLength: 60 }, maxItems: 20 },
+      examples: { type: "array", items: { type: "string" }, maxItems: 8 },
+      sourceLanguage: { type: "string", maxLength: 40, description: "Language of the original feedback, e.g. Hindi, Hinglish, English." },
+      activate: { type: "boolean", description: "Set true only when the user explicitly approves immediate activation. Otherwise leave unset or false to save a draft." }
+    }, required: ["rawFeedback", "title", "rule"], additionalProperties: false } },
+  { name: "uxaudit_list_coaching_lessons", title: "List coaching lessons", requiredScope: "audit:coach", annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    description: "Review stored UX Audit coaching lessons and their status. Draft lessons do not affect audits; only approved lessons are active.",
+    inputSchema: { type: "object", properties: {
+      status: { type: "string", enum: ["all", "draft", "approved", "rejected", "archived"] },
+      limit: { type: "integer", minimum: 1, maximum: 100 }
+    }, additionalProperties: false } },
+  { name: "uxaudit_review_coaching_lesson", title: "Approve or archive a coaching lesson", requiredScope: "audit:coach", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    description: "Approve a draft lesson so it can guide future audits, reject it, or archive an approved rule. This changes the stored learning status but does not update model weights.",
+    inputSchema: { type: "object", properties: {
+      lessonId: { type: "string", description: "UUID returned by UX Audit when the lesson was saved." },
+      action: { type: "string", enum: ["approve", "reject", "archive"] },
+      reviewNote: { type: "string", maxLength: 1000, description: "Optional reason for the review decision." }
+    }, required: ["lessonId", "action"], additionalProperties: false } },
   { name: "uxaudit_generate_improved_ia", title: "Generate improved information architecture", requiredScope: "ia:generate", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     description: "Generate a reviewable improved IA proposal from a saved session, audit findings and discovered pages. Optionally focus on one URL or finding. Does not change live website routes.",
     inputSchema: { type: "object", properties: {
@@ -67,7 +94,7 @@ function unauthorized(request: Request) {
     {
       status: 401,
       headers: {
-        "WWW-Authenticate": 'Bearer resource_metadata="' + metadata + '", scope="audit:read audit:run ia:generate"',
+        "WWW-Authenticate": 'Bearer resource_metadata="' + metadata + '", scope="audit:read audit:run ia:generate audit:coach"',
         "Cache-Control": "no-store",
       },
     },
@@ -148,6 +175,54 @@ async function runTool(name: string, args: any, request: Request) {
     } catch {
       return { service: "UX Audit", mcpServer: "connected", openRouterKeyConfigured: true, openRouterConnected: false, note: "OpenRouter status endpoint could not be reached.", checkedAt: new Date().toISOString() };
     }
+  }
+
+
+  if (name === "uxaudit_save_coaching_lesson") {
+    const saved = await saveCoachingLesson({
+      rawFeedback: args.rawFeedback, title: args.title, rule: args.rule,
+      rationale: args.rationale, scope: args.scope, keywords: args.keywords,
+      examples: args.examples, sourceLanguage: args.sourceLanguage,
+      sourceType: "chatgpt_mcp", activate: args.activate,
+    });
+    return {
+      id: saved.id, title: saved.title, rule: saved.rule, scope: saved.scope,
+      status: saved.status, activeForFutureAudits: saved.status === "approved",
+      message: saved.status === "approved"
+        ? "Coaching lesson approved and available to relevant future audits."
+        : "Coaching lesson saved as a draft. Approve it before it influences future audits.",
+    };
+  }
+
+  if (name === "uxaudit_list_coaching_lessons") {
+    const lessons = await listCoachingLessons(
+      typeof args.status === "string" ? args.status : "all",
+      typeof args.limit === "number" ? args.limit : 30,
+    );
+    return {
+      count: lessons.length,
+      lessons: lessons.map((lesson) => ({
+        id: lesson.id, title: lesson.title, rule: lesson.rule, rationale: lesson.rationale,
+        scope: lesson.scope, keywords: lesson.keywords, sourceLanguage: lesson.source_language,
+        status: lesson.status, rawFeedback: String(lesson.raw_feedback || "").slice(0, 1200),
+        reviewNote: lesson.review_note, createdAt: lesson.created_at, updatedAt: lesson.updated_at,
+        approvedAt: lesson.approved_at, usageCount: lesson.usage_count, lastUsedAt: lesson.last_used_at,
+      })),
+    };
+  }
+
+  if (name === "uxaudit_review_coaching_lesson") {
+    const updated = await reviewCoachingLesson(args.lessonId, args.action, args.reviewNote);
+    return {
+      id: updated.id, title: updated.title, rule: updated.rule, scope: updated.scope,
+      status: updated.status, approvedAt: updated.approved_at,
+      activeForFutureAudits: updated.status === "approved",
+      message: updated.status === "approved"
+        ? "Lesson approved. It can now be retrieved by relevant future audits."
+        : updated.status === "rejected"
+          ? "Lesson rejected. It will not influence audits."
+          : "Lesson archived. It will no longer influence audits.",
+    };
   }
 
   if (name === "uxaudit_discover_site") {
@@ -276,7 +351,7 @@ export async function POST(request: Request) {
       protocolVersion: typeof rpc.params?.protocolVersion === "string" ? rpc.params.protocolVersion : "2025-06-18",
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: "uxaudit", title: "UX Audit", version: "1.0.0", websiteUrl: "https://github.com/Zunaidscreenroot/uxaudit" },
-      instructions: "Discover public websites, run evidence-led desktop/mobile screenshot audits, retrieve saved findings, and generate proposed improved IA. Never treat CDN denial pages as UX findings. AI audits and IA generation may incur OpenRouter costs.",
+      instructions: "Discover public websites, run evidence-led desktop/mobile screenshot audits, retrieve findings, generate improved IA proposals, and coach UX Audit using reusable learning rules. When the owner gives Hindi/Hinglish feedback, preserve it, distil a concise scoped rule, save it as a draft by default, and activate it only with explicit approval. Approved rules guide later audits but never override screenshot evidence. AI audits and IA generation may incur OpenRouter costs.",
     });
   }
   if (rpc.method === "tools/list") {
