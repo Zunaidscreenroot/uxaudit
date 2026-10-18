@@ -1,22 +1,31 @@
 name: Generate npm lockfile
 
+# Dependency lockfiles are only affected by package.json changes.
+# App-code and documentation pushes should not start this job.
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - package-lock.json
+    paths:
+      - package.json
 
 permissions:
   contents: write
 
+concurrency:
+  group: uxaudit-lockfile-main
+  cancel-in-progress: true
+
 jobs:
   lockfile:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
       - name: Generate lockfile
         run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
       - name: Commit lockfile
