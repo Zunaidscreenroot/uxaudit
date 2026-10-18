@@ -5,6 +5,10 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:cloudflare": "opennextjs-cloudflare build",
+    "preview:cloudflare": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "deploy:cloudflare": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+    "upload:cloudflare": "opennextjs-cloudflare build && opennextjs-cloudflare upload",
     "start": "next start",
     "lint": "next lint"
   },
@@ -24,9 +28,11 @@
     "zod": "^4.2.0"
   },
   "devDependencies": {
+    "@opennextjs/cloudflare": "latest",
     "@types/node": "20.17.30",
     "@types/react": "18.3.20",
     "@types/react-dom": "18.3.5",
-    "typescript": "5.8.2"
+    "typescript": "5.8.2",
+    "wrangler": "latest"
   }
 }
