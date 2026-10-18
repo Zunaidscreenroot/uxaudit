@@ -28,3 +28,6 @@ Import from `app/ui.tsx`:
 3. Preserve legible muted text, a strong focus ring, responsive layouts and reduced-motion support.
 4. Green is for confirmed success/connection, amber for warnings, and rose for errors. Purple is the primary action/accent, not a severity signal.
 5. Keep screenshot evidence itself unmodified; dark mode styles the audit workspace around the captured website, not the captured website image.
+
+## Shared headings across inner pages
+The reusable `PageHeading` is used by Overview, IA discovery, Benchmark, Past Findings, Coach & Learn, IA remediation, Model health & cost, and Model verification. The global shell remains the only app navigation layer, including responsive/mobile navigation. Route-specific workflow controls remain inside their page and use the shared foundation tokens.

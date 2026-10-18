@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { Finding } from "@/lib/audit";
+import { PageHeading } from "../ui";
 
 type Client = { id: string; name: string; created_at: string; updated_at: string };
 type Audit = { id: string; client_id: string; client_name: string; title: string; source_filename: string; created_at: string; screenshot_width: number; screenshot_height: number };
@@ -61,7 +62,7 @@ export default function KnowledgeBasePage() {
 
   return <main className="kbShell">
     <header className="kbNav"><a href="/" className="kbBrand">UX Audit <span>by ScreenRoot</span></a><a href="/coach" className="kbBack">✦ Coach &amp; Learn</a><a href="/" className="kbBack">← New audit</a></header>
-    <section className="kbHero"><div><div className="kbEyebrow">Past Findings</div><h1>Client findings, kept in one place.</h1><p>Every completed audit is stored against the detected client name. Browse previous analyses by client, audit date and individual finding.</p></div><div className="kbStat"><strong>{clients.length}</strong><span>clients</span></div></section>
+    <section className="kbHero"><PageHeading eyebrow="PAST FINDINGS" title="Client findings, kept in one place." description="Every completed audit is stored against the detected client name. Browse previous analyses by client, audit date and individual finding." className="kbSharedHeading" /><div className="kbStat"><strong>{clients.length}</strong><span>clients</span></div></section>
 
     {error && <div className="kbError">{error}</div>}
     {loading && <div className="kbLoading">Loading Past Findings…</div>}

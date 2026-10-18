@@ -446,3 +446,23 @@ html.uxaudit-embedded .uxd-page-content { padding:16px !important; }
     background:rgba(2,6,12,.68);backdrop-filter:blur(3px);
   }
 }
+
+/* Final shared PageHeading adoption across IA, Past Findings and model settings */
+.iaSharedHeading { margin:0 0 21px !important; }
+.iaSharedHeading .uxd-page-title { max-width:880px !important; }
+.iaSharedHeading .uxd-page-description { max-width:850px !important; }
+.kbHero { max-width:none !important;margin:0 !important;padding:7px 0 25px !important;align-items:flex-end !important;gap:20px !important; }
+.kbSharedHeading { flex:1;min-width:0;margin:0 !important; }
+.kbSharedHeading .uxd-page-title { max-width:760px !important; }
+.kbSharedHeading .uxd-page-description { font-size:13px !important;max-width:700px !important; }
+.kbStat { align-self:flex-end !important;border-left:1px solid var(--ds-border) !important; }
+.kbStat strong { color:var(--ds-text) !important; }
+.kbStat span { color:var(--ds-muted) !important; }
+.iaRemediationSharedHeading { margin:14px 0 16px !important; }
+.iaRemediationSharedHeading .uxd-page-title { max-width:900px !important; }
+.modelHealthSharedHeading,.modelVerificationSharedHeading { margin:7px 0 22px !important; }
+.modelHealthSharedHeading .uxd-page-description,.modelVerificationSharedHeading .uxd-page-description { max-width:920px !important; }
+@media(max-width:850px) {
+  .kbHero { align-items:flex-start !important;flex-direction:column !important; }
+  .kbStat { align-self:flex-start !important;margin-top:0 !important;padding-left:0 !important;border-left:0 !important; }
+}
