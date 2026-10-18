@@ -148,7 +148,7 @@ export async function retrieveRelevantAuditKnowledge(query: string, limit = 6): 
         id: learning.id,
         score,
         usageCount: Number(learning.usage_count || 0),
-        text: `[APPROVED COACHING RULE; scope: ${scope}] ${learning.title}: ${learning.rule}${learning.rationale ? " Why it matters: " + learning.rationale : ""}`,
+        text: `[APPROVED COACHING RULE; scope: ${scope}] ${String(learning.title || "UX rule").slice(0, 140)}: ${String(learning.rule || "").slice(0, 600)}${learning.rationale ? " Why it matters: " + String(learning.rationale).slice(0, 180) : ""}`,
       });
     }
     const rankedLessons = learningCandidates.sort((a,b)=>b.score-a.score).slice(0,3);
@@ -166,7 +166,7 @@ export async function retrieveRelevantAuditKnowledge(query: string, limit = 6): 
     }
     const ranked = candidates.sort((a,b)=>b.score-a.score).slice(0,Math.max(1,Math.min(limit,10)));
     const sections = [
-      rankedLessons.length ? "APPROVED COACHING RULES (apply only within the stated scope; current screenshot evidence remains mandatory):\n" + rankedLessons.map((item) => item.text).join("\n") : "",
+      rankedLessons.length ? "APPROVED COACHING RULES (apply only within the stated scope; current screenshot evidence remains mandatory):\n" + rankedLessons.map((item) => item.text).join("\n").slice(0, 2400) : "",
       ranked.length ? "RELEVANT HISTORICAL FINDINGS AND REFERENCE MATERIAL (examples only; never assume the current page has the same issue):\n" + ranked.map((item:any)=>item.text).join("\n") : "",
     ].filter(Boolean);
     return sections.join("\n\n");
