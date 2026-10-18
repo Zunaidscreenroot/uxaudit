@@ -43,6 +43,9 @@ const toolDefinitions = [
       keywords: { type: "array", items: { type: "string", maxLength: 60 }, maxItems: 20 },
       examples: { type: "array", items: { type: "string" }, maxItems: 8 },
       sourceLanguage: { type: "string", maxLength: 40, description: "Language of the original feedback, e.g. Hindi, Hinglish, English." },
+      feedbackKind: { type: "string", enum: ["general", "false_positive", "missed_issue", "severity_calibration", "recommendation_quality", "duplicate_finding", "benchmarking", "scope", "visual_evidence", "accessibility", "other"], description: "Classify what the correction addresses." },
+      sourceAuditId: { type: "string", description: "Optional UUID of the saved audit where the correction was observed." },
+      sourceFindingTitle: { type: "string", maxLength: 240, description: "Optional title of the finding being corrected." },
       activate: { type: "boolean", description: "Set true only when the user explicitly approves immediate activation. Otherwise leave unset or false to save a draft." }
     }, required: ["rawFeedback", "title", "rule"], additionalProperties: false } },
   { name: "uxaudit_list_coaching_lessons", title: "List coaching lessons", requiredScope: "audit:coach", annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
@@ -183,6 +186,8 @@ async function runTool(name: string, args: any, request: Request) {
       rawFeedback: args.rawFeedback, title: args.title, rule: args.rule,
       rationale: args.rationale, scope: args.scope, keywords: args.keywords,
       examples: args.examples, sourceLanguage: args.sourceLanguage,
+      feedbackKind: args.feedbackKind, sourceAuditId: args.sourceAuditId,
+      sourceFindingTitle: args.sourceFindingTitle,
       sourceType: "chatgpt_mcp", activate: args.activate,
     });
     return {
@@ -205,6 +210,8 @@ async function runTool(name: string, args: any, request: Request) {
         id: lesson.id, title: lesson.title, rule: lesson.rule, rationale: lesson.rationale,
         scope: lesson.scope, keywords: lesson.keywords, sourceLanguage: lesson.source_language,
         status: lesson.status, rawFeedback: String(lesson.raw_feedback || "").slice(0, 1200),
+        feedbackKind: lesson.feedback_kind, sourceAuditId: lesson.source_audit_id,
+        sourceFindingTitle: lesson.source_finding_title,
         reviewNote: lesson.review_note, createdAt: lesson.created_at, updatedAt: lesson.updated_at,
         approvedAt: lesson.approved_at, usageCount: lesson.usage_count, lastUsedAt: lesson.last_used_at,
       })),
