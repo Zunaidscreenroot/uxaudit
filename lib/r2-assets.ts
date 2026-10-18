@@ -4,6 +4,9 @@ import { queryDb } from "@/lib/db";
 
 export const SHARED_R2_BUCKET = "ux-shared-memory";
 
+const recentAssetRefs = new Map<string, string>();
+const MAX_RECENT_ASSET_REFS = 256;
+
 type R2ObjectBodyLike = { text(): Promise<string> };
 type R2BucketLike = {
   put(key: string, value: string | ArrayBuffer | Uint8Array, options?: Record<string, unknown>): Promise<unknown>;
@@ -32,6 +35,9 @@ export async function storeImageDataUri(dataUri: string, options: { sourceScope?
   if (!isImageDataUri(dataUri)) return dataUri;
 
   const hash = createHash("md5").update(dataUri, "utf8").digest("hex");
+  const cachedRef = recentAssetRefs.get(hash);
+  if (cachedRef) return cachedRef;
+
   const objectKey = `ux-audit/screenshots/${hash}.datauri`;
   const assetKey = `r2://${SHARED_R2_BUCKET}/${objectKey}`;
   const sizeBytes = Buffer.byteLength(dataUri, "utf8");
@@ -43,7 +49,7 @@ export async function storeImageDataUri(dataUri: string, options: { sourceScope?
     httpMetadata: { contentType: "text/plain; charset=utf-8" },
   });
 
-  await queryDb(
+  const stored = await queryDb<{ asset_key: string }>(
     `INSERT INTO public.ux_storage_assets
       (asset_key, bucket_name, object_key, content_hash, content_type, content_encoding, size_bytes, reference_count, source_scope)
      VALUES ($1, $2, $3, $4, $5, 'data-uri', $6, $7, $8)
@@ -67,7 +73,13 @@ export async function storeImageDataUri(dataUri: string, options: { sourceScope?
       options.sourceScope || "ux-audit",
     ],
   );
-  return assetKey;
+  const savedRef = stored[0]?.asset_key || assetKey;
+  recentAssetRefs.set(hash, savedRef);
+  if (recentAssetRefs.size > MAX_RECENT_ASSET_REFS) {
+    const oldest = recentAssetRefs.keys().next().value;
+    if (oldest) recentAssetRefs.delete(oldest);
+  }
+  return savedRef;
 }
 
 export function normalizeR2Reference(reference: string): string {

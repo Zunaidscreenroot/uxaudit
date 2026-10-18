@@ -1,5 +1,5 @@
 "use client";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { PageHeading } from "../ui";
 
 type Page={url:string;title:string;category:string;depth:number;source:string};
@@ -47,6 +47,7 @@ async function compressScreenshotForAudit(file:File,mode:AuditMode):Promise<stri
 }
 
 export default function SiteMapPage(){
+ const selectionSaveTimer = useRef<number | null>(null);
  const [auditMode,setAuditMode]=useState<AuditMode>("desktop");
  const viewport:Viewport = auditMode === "mobile" ? {width:393,height:852} : {width:1440,height:900};
  const [expandedIATree,setExpandedIATree]=useState<string[]>([]);const [hoveredIATree,setHoveredIATree]=useState<string|null>(null);const [iaZoom,setIaZoom]=useState(1);
@@ -56,7 +57,13 @@ export default function SiteMapPage(){
  useEffect(()=>{const onMarker=(event:MessageEvent)=>{if(event.data?.type==="uxaudit-marker"&&Number.isInteger(event.data.index)){setActiveFinding(event.data.index);setReportTab("findings");}};window.addEventListener("message",onMarker);return()=>window.removeEventListener("message",onMarker);},[]);
 useEffect(()=>{let cancelled=false;const q=new URLSearchParams(window.location.search);const existing=q.get("session");if(existing){setSessionId(existing);setRestoring(true);fetch("/api/ia-session?id="+encodeURIComponent(existing),{cache:"no-store"}).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||"Saved IA session expired.");const v=d.session;if(cancelled)return;setUrl(v.root);setProjectName(v.project_name||new URL(v.root).hostname);setData(v.discovery||null);setSelected(Array.isArray(v.selected_urls)?v.selected_urls:[]);setAudited(Array.isArray(v.audited_pages)?v.audited_pages:[]);setStage(v.stage==="results"?"results":v.discovery?"select":"discover");setRunStatus((v.audited_pages||[]).length?"Restored saved screenshots and audit results.":"Restored saved IA session.");}).catch(e=>{if(!cancelled)setError(e instanceof Error?e.message:"Could not restore saved session.");}).finally(()=>{if(!cancelled)setRestoring(false);});}else{const initial=q.get("url");if(initial){setUrl(initial);void discoverUrl(initial);}}return()=>{cancelled=true}},[]);
 async function saveSession(patch:Record<string,any>={}){if(!sessionId||!url)return;const root=data?.root||url;const r=await fetch("/api/ia-session",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:sessionId,root,title:data?.title||root,discovery:data,selected_urls:selected,audited_pages:audited,stage,project_name:projectName||new URL(root).hostname,...patch})});if(!r.ok)throw new Error("Could not save IA session.");try{localStorage.setItem("uxaudit-current-ia-session",sessionId);}catch{}}
-useEffect(()=>{if(sessionId&&data){saveSession().catch(e=>setError(e instanceof Error?e.message:"Could not save session."));}},[sessionId,data,selected,audited,stage,projectName]);
+async function patchSession(patch:Record<string,any>={}) {
+ if(!sessionId)return;
+ const r=await fetch("/api/ia-session",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:sessionId,...patch})});
+ if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.error||"Could not save IA changes.");}
+ try{localStorage.setItem("uxaudit-current-ia-session",sessionId);}catch{}
+}
+
  async function discover(e:FormEvent){e.preventDefault();await discoverUrl(url);}
  const groups=useMemo(()=>data?.pages.reduce((a:Record<string,Page[]>,p)=>{(a[p.category]??=[]).push(p);return a;}, {})||{},[data]);
  const activePages=groups[activeCategory]||[];
@@ -66,7 +73,12 @@ useEffect(()=>{if(sessionId&&data){saveSession().catch(e=>setError(e instanceof 
  function toggleTreeNode(node:IANode){if(node.children.length){setExpandedIATree(previous=>previous.includes(node.key)?previous.filter(key=>key!==node.key):[...previous,node.key]);}else if(node.page){toggle(node.page.url);}}
  const renderIANode=(node:IANode):any=>{const nodeUrls=new Set(collectNodeUrls(node));const relatedFindings=audited.filter(report=>nodeUrls.has(canonicalPageUrl(report.url))).flatMap(report=>report.findings.map(finding=>({pageTitle:report.title||report.url,url:report.url,finding})));const relatedWarnings=heuristicIssues.filter(issue=>issue.urls.some(url=>nodeUrls.has(canonicalPageUrl(url))));const flawed=relatedFindings.length>0||relatedWarnings.length>0;const expanded=expandedIATree.includes(node.key);return <div className={"iaTreeBranch "+(flawed?"hasIssue ":"")+(hoveredIATree===node.key?"isHovered":"")} key={node.key} onMouseEnter={()=>setHoveredIATree(node.key)} onMouseLeave={()=>setHoveredIATree(previous=>previous===node.key?null:previous)}><div className="iaTreeNodeRow"><button type="button" className={"iaNode iaEndNode "+(flawed?"issue ":"")+(node.page&&selected.includes(node.page.url)?"selected":"")} aria-expanded={node.children.length?expanded:undefined} title={flawed?"Hover to inspect linked UX findings and IA warnings":node.url} onClick={()=>toggleTreeNode(node)}><span className="iaNodeToggle" aria-hidden="true">{node.children.length?(expanded?"▾":"▸"):"•"}</span><span className="iaNodeLabel"><strong>{node.label}</strong><small>{treeNodePath(node.url)}</small></span><span className="iaNodeLevel">{node.depth===0?"HOME":"L"+node.depth} · {node.children.length?node.children.length+" "+(node.children.length===1?"child":"children"):node.page?"page":"section"}</span>{flawed&&<span className="iaNodeFindingCount">⚠ {relatedFindings.length+relatedWarnings.length}</span>}</button>{node.page&&<label className="iaTreeSelect" title="Include this page in the screenshot audit"><input type="checkbox" checked={selected.includes(node.page.url)} onChange={()=>toggle(node.page!.url)}/><span>Audit</span></label>}</div>{flawed&&hoveredIATree===node.key&&<div className="iaTreeFindingTooltip" role="status"><div className="iaTreeFindingTooltipTitle">⚠ {relatedFindings.length} audit finding{relatedFindings.length===1?"":"s"}{relatedWarnings.length?" · "+relatedWarnings.length+" IA warning"+(relatedWarnings.length===1?"":"s"):""}</div>{relatedFindings.slice(0,8).map((item,index)=><article className="iaTreeFindingItem" key={item.url+item.finding.id+index}><strong>{item.finding.title}</strong><small>{item.pageTitle} · {item.finding.severity.toUpperCase()} · {item.finding.category}</small><p>{item.finding.description}</p>{sessionId&&<a className="iaFixCta" href={"/ia-remediation?session="+encodeURIComponent(sessionId)+"&target="+encodeURIComponent(item.url)+"&finding="+encodeURIComponent(item.finding.id)}>Fix this in a new IA ↗</a>}</article>)}{relatedWarnings.map(issue=><article className="iaTreeFindingItem" key={issue.title}><strong>{issue.title}</strong><p>{issue.detail}</p>{sessionId&&issue.urls?.[0]&&<a className="iaFixCta" href={"/ia-remediation?session="+encodeURIComponent(sessionId)+"&target="+encodeURIComponent(issue.urls[0])+"&issue="+encodeURIComponent(issue.title)}>Resolve in proposed IA ↗</a>}</article>)}</div>}{node.children.length>0&&expanded&&<div className="iaNestedChildren">{node.children.map(child=>renderIANode(child))}</div>}</div>;};
  const heuristicIssues=useMemo(()=>{if(!data)return [];const deep=data.pages.filter(p=>p.depth>=3);const other=data.pages.filter(p=>p.category==="Other Pages");const about=data.pages.filter(p=>p.category==="About Us");return [...(deep.length?[{title:"Deep page hierarchy",detail:`${deep.length} URLs are three or more levels deep. Consider bringing priority journeys closer to the top level.`,urls:deep.map(p=>p.url)}]:[]),...(about.length>=4?[{title:"About Us sprawl",detail:`${about.length} About Us pages found. Check overlap and whether related content can be consolidated.`,urls:about.map(p=>p.url)}]:[]),...(other.length?[{title:"Unclear page grouping",detail:`${other.length} pages could not be classified confidently from their URL/title.`,urls:other.map(p=>p.url)}]:[])];},[data]);
- function toggle(url:string){setSelected(s=>{const next=s.includes(url)?s.filter(x=>x!==url):[...s,url];void saveSession({selected_urls:next});return next;});}
+ function toggle(url:string){
+  const next=selected.includes(url)?selected.filter(x=>x!==url):[...selected,url];
+  setSelected(next);
+  if(selectionSaveTimer.current!==null)window.clearTimeout(selectionSaveTimer.current);
+  selectionSaveTimer.current=window.setTimeout(()=>{void patchSession({selected_urls:next}).catch(e=>setError(e instanceof Error?e.message:"Could not save page selection."));},250);
+}
  const runSelectedAudits = async (force=false) => {
   if (!selected.length || running) return;
   setRunning(true); setError(""); setManualCaptureNeeded(false); setManualCaptureTarget(""); setStage("results");
@@ -90,15 +102,16 @@ useEffect(()=>{if(sessionId&&data){saveSession().catch(e=>setError(e instanceof 
     while(true){const chunk=await reader.read();if(chunk.done)break;buffer+=decoder.decode(chunk.value,{stream:true});const frames=buffer.split("\n\n");buffer=frames.pop()||"";for(const frame of frames){const line=frame.split("\n").find(x=>x.startsWith("data: "));if(!line)continue;const event=JSON.parse(line.slice(6));if(event.type==="stage"){setTimeline(prev=>{const next=prev.filter(s=>s.id!==event.stage.id);return [...next,{...event.stage}];});setRunStatus(event.stage.detail);}else if(event.type==="result"){result=event.payload;}else if(event.type==="error"){throw new Error(event.error||"AI analysis failed.");}}}
     if(!result?.page)throw new Error("AI audit ended without a report. Check the timeline for the last completed stage.");
     setTimeline(prev=>prev.map(s=>s.status==="active"?{...s,status:"complete" as const}:s));
-    setAudited(prev => {const next=[...prev.filter((p:any)=>p.url!==target),result.page];void saveSession({audited_pages:next,stage:"results",selected_urls:selected,project_name:projectName});return next;});
+    setAudited(prev => [...prev.filter((p:any)=>p.url!==target),result.page]);
+    void patchSession({audited_page:result.page,stage:"results",selected_urls:selected,project_name:projectName}).catch(e=>setError(e instanceof Error?e.message:"Could not save audit result."));
     setActiveAudit(Math.max(0,audited.length));
    }
-   setRunStatus("Completed selected page audits. Saved results are reused on resume; use Re-run to refresh them.");void saveSession({stage:"results",audited_pages:audited,selected_urls:selected,project_name:projectName});
+   setRunStatus("Completed selected page audits. Saved results are reused on resume; use Re-run to refresh them.");void patchSession({stage:"results",selected_urls:selected,project_name:projectName}).catch(e=>setError(e instanceof Error?e.message:"Could not save audit status."));
   } catch (e) {
    const message=e instanceof Error ? e.message : "Selected-page audit failed.";
    setTimeline(prev=>prev.map(s=>s.status==="active"?{...s,status:"failed" as const,detail:message}:s));
    setError(message);
-   setRunStatus("Audit stopped. Completed page results remain available.");void saveSession({stage:"results",audited_pages:audited,selected_urls:selected,project_name:projectName});
+   setRunStatus("Audit stopped. Completed page results remain available.");void patchSession({stage:"results",selected_urls:selected,project_name:projectName}).catch(e=>setError(e instanceof Error?e.message:"Could not save audit status."));
   } finally {
    setRunning(false);
   }
@@ -132,8 +145,9 @@ useEffect(()=>{if(sessionId&&data){saveSession().catch(e=>setError(e instanceof 
    while(true){const chunk=await reader.read();if(chunk.done)break;buffer+=decoder.decode(chunk.value,{stream:true});const frames=buffer.split("\n\n");buffer=frames.pop()||"";for(const frame of frames){const line=frame.split("\n").find(x=>x.startsWith("data: "));if(!line)continue;const event=JSON.parse(line.slice(6));if(event.type==="stage"){setTimeline(prev=>[...prev.filter(x=>x.id!==event.stage.id),{...event.stage}]);setRunStatus(event.stage.detail);}else if(event.type==="result"){result=event.payload;}else if(event.type==="error"){throw new Error(event.error||"AI analysis failed.");}}}
    if(!result?.page)throw new Error("AI audit ended without a report. Check the timeline for the last completed stage.");
    setTimeline(prev=>prev.map(x=>x.status==="active"?{...x,status:"complete" as const}:x));
-   setAudited(prev=>{const index=prev.findIndex((p:any)=>p.url===manualCaptureTarget);const next=index>=0?prev.map((p:any,i:number)=>i===index?result.page:p):[...prev,result.page];setActiveAudit(index>=0?index:prev.length);void saveSession({audited_pages:next,stage:"results",selected_urls:selected,project_name:projectName});return next;});
-   setManualCaptureNeeded(false);setRunStatus("Desktop screenshot analysed successfully. The report uses the screenshot you uploaded.");void saveSession({stage:"results",selected_urls:selected,project_name:projectName});
+   setAudited(prev=>{const index=prev.findIndex((p:any)=>p.url===manualCaptureTarget);setActiveAudit(index>=0?index:prev.length);return index>=0?prev.map((p:any,i:number)=>i===index?result.page:p):[...prev,result.page];});
+   void patchSession({audited_page:result.page,stage:"results",selected_urls:selected,project_name:projectName}).catch(e=>setError(e instanceof Error?e.message:"Could not save audit result."));
+   setManualCaptureNeeded(false);setRunStatus("Desktop screenshot analysed successfully. The report uses the screenshot you uploaded.");void patchSession({stage:"results",selected_urls:selected,project_name:projectName}).catch(e=>setError(e instanceof Error?e.message:"Could not save audit status."));
   }catch(error){const message=error instanceof Error?error.message:"Manual screenshot audit failed.";setError(message);setTimeline(prev=>prev.map(x=>x.status==="active"?{...x,status:"failed" as const,detail:message}:x));setRunStatus("Manual screenshot audit stopped.");}
   finally{setManualUploadBusy(false);}
  }

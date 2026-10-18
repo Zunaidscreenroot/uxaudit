@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Badge } from "./ui";
@@ -44,10 +45,10 @@ export default function ProductShell({ children }: { children: ReactNode }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const title = useMemo(() => titles[pathname] || "UX Audit workspace", [pathname]);
 
-  const refreshConnection = useCallback(async () => {
+  const refreshConnection = useCallback(async (force = false) => {
     setChecking(true);
     try {
-      const response = await fetch("/api/openrouter-status", { cache: "no-store" });
+      const response = await fetch("/api/openrouter-status" + (force ? "?force=1" : ""), { cache: "no-store" });
       const payload = await response.json();
       setConnection(response.ok ? payload : { connected: false, provider: "OpenRouter", error: payload?.error || "Status endpoint unavailable" });
     } catch (error) {
@@ -69,12 +70,12 @@ export default function ProductShell({ children }: { children: ReactNode }) {
   useEffect(() => { setMobileNavOpen(false); }, [pathname]);
 
   return (
-    <div className="uxd-shell">
-      <aside className="uxd-sidebar" aria-label="Product navigation">
-        <a href="/" className="uxd-brand" aria-label="UX Audit home" onClick={() => setMobileNavOpen(false)}>
+    <div className={"uxd-shell" + (mobileNavOpen ? " is-mobile-nav-open" : "")}>
+      <aside id="uxd-sidebar" className="uxd-sidebar" aria-label="Product navigation">
+        <Link href="/" className="uxd-brand" aria-label="UX Audit home" onClick={() => setMobileNavOpen(false)}>
           <span className="uxd-brand-mark">u</span>
           <span className="uxd-brand-copy">ux<span>audit</span><small>UX INTELLIGENCE</small></span>
-        </a>
+        </Link>
 
         <div className="uxd-workspace-switcher">
           <span className="uxd-workspace-avatar">SR</span>
@@ -88,11 +89,11 @@ export default function ProductShell({ children }: { children: ReactNode }) {
             {group.links.map((link) => {
               const active = link.href === "/" ? pathname === "/" : pathname === link.href || pathname.startsWith(link.href + "/");
               return (
-                <a href={link.href} key={link.href} className={"uxd-nav-link" + (active ? " is-active" : "")} aria-current={active ? "page" : undefined}>
+                <Link href={link.href} key={link.href} onClick={() => setMobileNavOpen(false)} className={"uxd-nav-link" + (active ? " is-active" : "")} aria-current={active ? "page" : undefined}>
                   <span className="uxd-nav-icon" aria-hidden="true">{link.icon}</span>
                   <span>{link.label}</span>
                   {active && <span className="uxd-nav-active-dot" aria-hidden="true" />}
-                </a>
+                </Link>
               );
             })}
           </div>
@@ -108,9 +109,10 @@ export default function ProductShell({ children }: { children: ReactNode }) {
 
       <div className="uxd-main">
         <header className="uxd-topbar">
+          <button type="button" className="uxd-mobile-menu-toggle" aria-controls="uxd-sidebar" aria-expanded={mobileNavOpen} aria-label={mobileNavOpen ? "Close navigation" : "Open navigation"} onClick={() => setMobileNavOpen(open => !open)}><span aria-hidden="true">☰</span></button>
           <div className="uxd-breadcrumb"><span>Workspace</span><i>/</i><strong>{title}</strong></div>
           <div className="uxd-topbar-actions">
-            <button type="button" className="uxd-status-button" onClick={() => void refreshConnection()} title={connection?.error || "Click to refresh OpenRouter status"} aria-label="Refresh OpenRouter connection status">
+            <button type="button" className="uxd-status-button" onClick={() => void refreshConnection(true)} title={connection?.error || "Click to refresh OpenRouter status"} aria-label="Refresh OpenRouter connection status">
               <Badge tone={connection?.connected ? "success" : connection ? "danger" : "neutral"} className="uxd-status-chip">
                 <span className="uxd-status-dot" />
                 <span>{checking ? "Checking provider…" : connection?.connected ? "OpenRouter connected" : connection ? "Provider unavailable" : "Connecting provider"}</span>
@@ -121,6 +123,7 @@ export default function ProductShell({ children }: { children: ReactNode }) {
             <span className="uxd-topbar-avatar" aria-label="Current workspace user">Z</span>
           </div>
         </header>
+        {mobileNavOpen && <button type="button" className="uxd-mobile-nav-backdrop" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)} />}
         <div className="uxd-page-content" data-route={pathname}>{children}</div>
         <footer className="uxd-footer">
           <span>UX AUDIT <i>·</i> Evidence first, recommendations second.</span>

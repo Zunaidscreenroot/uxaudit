@@ -1,6 +1,9 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const STATUS_CACHE_TTL_MS = 20_000;
+let lastVerifiedStatus: { expiresAt: number; payload: { connected: boolean; provider: string; label?: string; checkedAt: string } } | null = null;
+
 function jsonError(error: string, status = 503) {
   return Response.json(
     { connected: false, provider: "OpenRouter", error },
@@ -8,7 +11,11 @@ function jsonError(error: string, status = 503) {
   );
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  const force = new URL(request.url).searchParams.get("force") === "1";
+  if (!force && lastVerifiedStatus && lastVerifiedStatus.expiresAt > Date.now()) {
+    return Response.json(lastVerifiedStatus.payload, { headers: { "Cache-Control": "private, max-age=10" } });
+  }
   const key = process.env.OPENROUTER_API_KEY?.trim();
   if (!key) {
     return jsonError("OPENROUTER_API_KEY is not configured on the server.");
@@ -41,15 +48,14 @@ export async function GET() {
       return jsonError("OpenRouter key check returned HTTP " + response.status + ".");
     }
 
-    return Response.json(
-      {
-        connected: true,
-        provider: "OpenRouter",
-        label: typeof payload?.data?.label === "string" ? payload.data.label : undefined,
-        checkedAt: new Date().toISOString(),
-      },
-      { headers: { "Cache-Control": "no-store" } }
-    );
+    const verified = {
+      connected: true,
+      provider: "OpenRouter",
+      label: typeof payload?.data?.label === "string" ? payload.data.label : undefined,
+      checkedAt: new Date().toISOString(),
+    };
+    lastVerifiedStatus = { expiresAt: Date.now() + STATUS_CACHE_TTL_MS, payload: verified };
+    return Response.json(verified, { headers: { "Cache-Control": "private, max-age=10" } });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Could not reach OpenRouter.");
   }

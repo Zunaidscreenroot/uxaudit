@@ -5,6 +5,9 @@ export const maxDuration = 20;
 
 type SitePage = { url: string; title: string; category: string; depth: number; source: "navigation" | "sitemap" };
 
+const DISCOVERY_CACHE_TTL_MS = 3 * 60 * 1000;
+const discoveryCache = new Map<string, { expiresAt: number; payload: Record<string, unknown> }>();
+
 function isPrivateHost(hostname: string) {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return true;
@@ -18,16 +21,26 @@ function isPrivateHost(hostname: string) {
 }
 
 function classify(url: URL, title = "") {
-  const text = (url.pathname + " " + title).toLowerCase();
-  if (/about|story|leadership|team|mission|vision|who-we-are/.test(text)) return "About Us";
-  if (/contact|support|help|branch|location/.test(text)) return "Contact & Support";
-  if (/career|job|work-with-us/.test(text)) return "Careers";
-  if (/product|service|saving|deposit|loan|card|account|mortgage|fixed-deposit/.test(text)) return "Products & Services";
-  if (/blog|news|media|article|insight|press/.test(text)) return "Insights & News";
-  if (/investor|disclosure|policy|compliance|governance/.test(text)) return "Investor & Governance";
-  return url.pathname === "/" ? "Home" : "Other Pages";
-}
+  const path = url.pathname.toLowerCase();
+  const text = (path + " " + title).replace(/[._-]+/g, " ").toLowerCase();
+  if (path === "/") return "Home";
 
+  // Match task-oriented BFSI destinations before broader keyword rules.
+  if (/interest rate|service charge|service fee|\bfees?\b|\bcharges?\b|\bapr\b|\beblr\b|\bmclr\b|forex|exchange rate|tariff|pricing/.test(text)) return "Rates & Fees";
+  if (/credit bureau|dispute|complaint|grievance|ombudsman|recovery agent|customer service|customer care|support|help|contact|branch|atm|locate us|feedback|service request|form center/.test(text)) return "Service & Support";
+  if (/\bcard\b|cards|rupay|debit card|credit card|\bupi\b|payment|wallet|transaction|mandate/.test(text)) return "Cards & Payments";
+  if (/\bloan\b|loans|\bcredit\b|mortgage|lending|borrow|emi|msme|microfinance|disbursement|overdraft|business loan/.test(text)) return "Loans & Credit";
+  if (/saving|\bsavings\b|deposit|fixed deposit|term deposit|recurring deposit|\bfd\b|rd account|fd account/.test(text)) return "Savings & Deposits";
+  if (/net banking|internet banking|mobile banking|digital banking|whatsapp banking|phone banking|sms banking|missed call banking|video banking|\bezy\b|api banking|online banking/.test(text)) return "Digital Banking";
+  if (/open account|account opening|application|\bkyc\b|onboarding|track .*application|application status|loan tracking|application form/.test(text)) return "Accounts & Applications";
+  if (/security|safe banking|fraud|phishing|scam|privacy|data protection|cyber/.test(text)) return "Security & Trust";
+  if (/investor|disclosure|policy|compliance|governance|annual report|annual return|stock information|financial results|board of|committee|shareholder|regulatory/.test(text)) return "Investor & Governance";
+  if (/blog|news|media|article|insight|press|faq|financial literacy|notice|leaflet|resource|knowledge/.test(text)) return "Insights & Guidance";
+  if (/career|job|work with us/.test(text)) return "Careers";
+  if (/about|story|leadership|team|mission|vision|who we are|management|company profile/.test(text)) return "About Us";
+  if (/\baccount\b|personal banking|business banking|current account|salary account|nri|product|service|branch banking/.test(text)) return "Products & Services";
+  return "Other Pages";
+}
 function cleanTitle(value: string) {
   return value.replace(/<[^>]*>/g, " ").replace(/&amp;/g, "&").replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, " ").trim().slice(0, 120);
 }
@@ -41,6 +54,11 @@ export async function POST(request: Request) {
     if (!["http:", "https:"].includes(root.protocol) || isPrivateHost(root.hostname)) return Response.json({ error: "Only public HTTP/HTTPS websites can be scanned." }, { status: 400 });
     root.hash = ""; root.search = ""; root.pathname = "/";
     const origin = root.origin;
+    const cached = discoveryCache.get(origin);
+    if (cached && cached.expiresAt > Date.now()) {
+      return Response.json({ ...cached.payload, cacheHit: true }, { headers: { "Cache-Control": "private, max-age=30" } });
+    }
+    if (cached) discoveryCache.delete(origin);
     const pages = new Map<string, SitePage>();
     const add = (rawUrl: string, title: string, source: SitePage["source"]) => {
       try {
@@ -54,6 +72,16 @@ export async function POST(request: Request) {
       } catch {}
     };
     add(origin, "Home", "navigation");
+    const sitemapUrls = [new URL("/sitemap.xml", origin).href, new URL("/sitemap_index.xml", origin).href];
+    const sitemapContentPromise = Promise.all(sitemapUrls.map(async (sitemapUrl) => {
+      try {
+        const sm = await fetch(sitemapUrl, { redirect: "follow", signal: AbortSignal.timeout(4500), headers: { "User-Agent": "UXAudit-PageDiscovery/1.0" } });
+        if (!sm.ok) return "";
+        return (await sm.text()).slice(0, 1_500_000);
+      } catch {
+        return "";
+      }
+    }));
     const response = await fetch(origin, { redirect: "follow", signal: AbortSignal.timeout(10000), headers: { "User-Agent": "UXAudit-PageDiscovery/1.0", Accept: "text/html,application/xhtml+xml" } });
     if (!response.ok) throw new Error(`Website returned HTTP ${response.status}`);
     const html = (await response.text()).slice(0, 3_000_000);
@@ -68,21 +96,22 @@ export async function POST(request: Request) {
       const attrLabel = attrs.match(/(?:aria-label|title)\s*=\s*["']([^"']+)["']/i)?.[1] || "";
       add(match[2], label || attrLabel, "navigation");
     }
-    const sitemapUrls = [new URL("/sitemap.xml", origin).href, new URL("/sitemap_index.xml", origin).href];
-    for (const sitemapUrl of sitemapUrls) {
-      try {
-        const sm = await fetch(sitemapUrl, { redirect: "follow", signal: AbortSignal.timeout(4500), headers: { "User-Agent": "UXAudit-PageDiscovery/1.0" } });
-        if (!sm.ok) continue;
-        const xml = (await sm.text()).slice(0, 1_500_000);
-        for (const match of xml.matchAll(/<loc>\s*([^<]+?)\s*<\/loc>/gi)) {
-          const candidate = match[1].trim();
-          if (/sitemap[^/]*\.xml(?:$|\?)/i.test(candidate)) continue;
-          add(candidate, "", "sitemap");
-        }
-      } catch {}
+    for (const xml of await sitemapContentPromise) {
+      if (!xml) continue;
+      for (const match of xml.matchAll(/<loc>\s*([^<]+?)\s*<\/loc>/gi)) {
+        const candidate = match[1].trim();
+        if (/sitemap[^/]*\.xml(?:$|\?)/i.test(candidate)) continue;
+        add(candidate, "", "sitemap");
+      }
     }
     const result = [...pages.values()].sort((a, b) => a.depth - b.depth || a.category.localeCompare(b.category) || a.title.localeCompare(b.title)).slice(0, 120);
-    return Response.json({ root: origin, title: homeTitle, pages: result, scannedAt: new Date().toISOString(), note: "Discovery checks homepage links and common sitemap files. Pages behind login or not linked in the public site may not be discovered." });
+    const payload = { root: origin, title: homeTitle, pages: result, scannedAt: new Date().toISOString(), note: "Discovery checks homepage links and common sitemap files. Pages behind login or not linked in the public site may not be discovered.", cacheHit: false };
+    discoveryCache.set(origin, { expiresAt: Date.now() + DISCOVERY_CACHE_TTL_MS, payload });
+    if (discoveryCache.size > 100) {
+      const oldest = discoveryCache.keys().next().value;
+      if (oldest) discoveryCache.delete(oldest);
+    }
+    return Response.json(payload, { headers: { "Cache-Control": "private, max-age=30" } });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Could not discover pages on this website." }, { status: 502 });
   }

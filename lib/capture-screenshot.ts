@@ -15,14 +15,14 @@ export async function captureWebsiteScreenshot({ url, width, height }: CaptureOp
         headers: { "Content-Type": "application/json", Accept: "image/*" },
         body: JSON.stringify({
           url,
-          options: { type: "jpeg", quality: 82, fullPage: true, captureBeyondViewport: true, waitForImages: true },
+          options: { type: "jpeg", quality: 80, fullPage: true, captureBeyondViewport: true, waitForImages: false },
           viewport: { width, height, deviceScaleFactor: 1 },
-          gotoOptions: { waitUntil: "domcontentloaded", timeout: 18000 },
-          waitForTimeout: 1800,
+          gotoOptions: { waitUntil: "domcontentloaded", timeout: 9000 },
+          waitForTimeout: 650,
           scrollPage: true,
           bestAttempt: true
         }),
-        signal: AbortSignal.timeout(30000),
+        signal: AbortSignal.timeout(13000),
         cache: "no-store"
       });
       const type = response.headers.get("content-type") || "";
@@ -47,11 +47,11 @@ export async function captureWebsiteScreenshot({ url, width, height }: CaptureOp
 
   // Secondary provider. Keep a small render delay here too, but prefer Browserless
   // because it explicitly scrolls the page to trigger lazy-loaded media.
-  const thumUrl = "https://image.thum.io/get/fullpage/width/" + width + "/viewportWidth/" + width + "/wait/5/maxAge/0/noanimate/" + url;
+  const thumUrl = "https://image.thum.io/get/fullpage/width/" + width + "/viewportWidth/" + width + "/wait/2/maxAge/60/noanimate/" + url;
   try {
     const response = await fetch(thumUrl, {
       headers: { Accept: "image/*" },
-      signal: AbortSignal.timeout(16000),
+      signal: AbortSignal.timeout(9000),
       cache: "no-store"
     });
     const type = response.headers.get("content-type") || "";
