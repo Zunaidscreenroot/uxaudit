@@ -98,15 +98,15 @@ function normalizeVisualPass(value: unknown): VisualPass {
 function normalizeIssueText(value: string) { return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " "); }
 
 function inferredCategory(observation: VisualObservation): typeof CATEGORIES[number] {
-  // UX friction is multi-dimensional; order broad performance terms last so visual
-  // observations about CTA hierarchy do not get misclassified as performance issues.
+  // Match the causal UX problem before individual UI nouns such as button or CTA.
   const text = normalizeIssueText([observation.section, observation.element, observation.issue, observation.whyItMatters].join(" "));
   if (/\b(responsive|responsiveness|mobile|viewport|breakpoint|horizontal overflow|clipped|off screen|screen width|stacked layout|touch target|thumb reach)\b/.test(text)) return "Responsiveness";
+  if (/\b(performance|slow|loading time|load time|latency|page speed|web vital|lcp|cls|inp|largest contentful paint|rendering delay|core web vitals)\b/.test(text)) return "Web performance";
+  if (/\b(competing calls to action|visual competition|primary cta|secondary cta|hierarchy|prioriti[sz]|prominence|competing|overload|grouping|grouped|clutter|scannability|scan|information architecture|information overload|visual order|equally prominent)\b/.test(text)) return "Information hierarchy";
   if (/\b(navigation|nav bar|navbar|menu|breadcrumb|sitemap|page not found|discoverability|discoverable|menu item|navigation item|tabs?)\b/.test(text)) return "Navigation";
-  if (/\b(form|button|click|tap|checkbox|radio button|stepper|input|dropdown|select control|interactive|interaction|disabled|error state|feedback|submit|login|sign in|control|cta)\b/.test(text)) return "Usability & interaction";
+  if (/\b(form|button|click|tap|checkbox|radio button|stepper|input|dropdown|select control|interactive|interaction|disabled|error state|feedback|submit|login|sign in|control)\b/.test(text)) return "Usability & interaction";
   if (/\b(copy|content|tone|wording|label|microcopy|text|sentence|description|instruction|ambiguous wording|unclear language|typo|grammar|readability|headline|duplicate copy|footnote|disclaimer)\b/.test(text)) return "Content & tone";
-  if (/\b(hierarchy|prioriti[sz]|prominence|competing|overload|grouping|grouped|clutter|scannability|scan|primary cta|secondary cta|information architecture|information overload|visual order|competing calls to action|visual competition)\b/.test(text)) return "Information hierarchy";
-  if (/\b(performance|slow|loading time|load time|latency|spinner|skeleton|loading state|unloaded|page speed|web vital|lcp|cls|inp|largest contentful paint)\b/.test(text)) return "Web performance";
+  if (/\b(spinner|skeleton|loading state|unloaded|wait indicator|progress indicator)\b/.test(text)) return "Usability & interaction";
   return "Visual design";
 }
 function categoryFor(value: unknown, observation?: VisualObservation): typeof CATEGORIES[number] {
@@ -218,11 +218,15 @@ function normalizeFinding(raw: unknown, observation: VisualObservation, index: n
   const description = !descriptionValue || normalizeIssueText(descriptionValue) === normalizeIssueText(title) || isRepeated(descriptionValue, prior, (finding) => finding.description) || /^(this issue|this finding|poor ux|visual design|high density|the design is poor)\b/i.test(descriptionValue) ? evidenceSpecificDescription(observation) : capWords(descriptionValue, 700);
   const recommendationValue = textValue(item.recommendation, "");
   const recommendationLooksLikePerformance = /\b(core web vitals|largest contentful paint|\blcp\b|\bcls\b|\binp\b|page speed|loading time|load time|latency|defer non-critical|critical resources)\b/i.test(recommendationValue);
-  const issueLooksLikePerformance = /\b(slow|loading|load time|page speed|performance|latency|lcp|cls|inp|contentful paint|spinner|skeleton)\b/i.test([observation.section, observation.element, observation.issue, observation.whyItMatters].join(" "));
+  const issueText = normalizeIssueText([observation.section, observation.element, observation.issue, observation.whyItMatters].join(" "));
+  const issueLooksLikePerformance = /\b(slow|loading|load time|page speed|performance|latency|lcp|cls|inp|contentful paint|spinner|skeleton|rendering delay)\b/i.test(issueText);
   const categoryMismatch = category === "Web performance" && !issueLooksLikePerformance;
   const unsupportedPerformanceAdvice = recommendationLooksLikePerformance && !issueLooksLikePerformance;
-  const inferred = inferredCategory(observation);
-  const resolvedCategory = categoryMismatch ? inferred : category;
+  const suppliedKpi = String(business.kpi ?? "");
+  const unsupportedPerformanceKpi = !issueLooksLikePerformance && /\b(core web vitals|largest contentful paint|\blcp\b|\bcls\b|\binp\b|page speed|bounce rate|loading time|load time)\b/i.test(suppliedKpi);
+  const footerNavigationIssue = /\bfooter\b/.test(normalizeIssueText(observation.section)) && /\b(accordion|collapsed sections|link list|navigation|rows|menu)\b/.test(issueText);
+  const inferred = footerNavigationIssue ? "Navigation" : inferredCategory(observation);
+  const resolvedCategory = categoryMismatch || (footerNavigationIssue && category === "Web performance") ? inferred : category;
   const recommendation = !recommendationValue || isRepeated(recommendationValue, prior, (finding) => finding.recommendation) || /^(improve the design|make it better|enhance usability|improve visual hierarchy|simplify the interface)[.! ]*$/i.test(recommendationValue) || /\b(use a specific heading, group supporting information nearby|reduce competing messages|improve visual hierarchy|make the design more consistent)\b/i.test(recommendationValue) || unsupportedPerformanceAdvice ? evidenceSpecificRecommendation(observation, resolvedCategory) : capWords(recommendationValue, 850);
   const businessDefaults = evidenceSpecificBusinessAnalysis(observation, resolvedCategory);
   function businessField(key: "funnelStage" | "impact" | "kpi" | "mechanism" | "suggestions"): any {
@@ -235,6 +239,8 @@ function normalizeFinding(raw: unknown, observation: VisualObservation, index: n
     const supplied = textValue(value, "");
     const generic = /^(consideration\s*\/\s*conversion|cta click through\s*\/\s*conversion rate|primary cta click through rate|users may take longer to understand the value proposition or choose the next action|the friction can reduce clarity and increase hesitation before the next funnel step)[.! ]*$/i.test(supplied);
     const repeated = isRepeated(supplied, prior, (finding) => String(finding.businessAnalysis[key] ?? ""));
+    if (key === "kpi" && unsupportedPerformanceKpi) return businessDefaults.kpi;
+    if ((key === "impact" || key === "mechanism") && categoryMismatch && !issueLooksLikePerformance) return businessDefaults[key];
     return !supplied || generic || repeated ? businessDefaults[key] : supplied;
   }
   return {
