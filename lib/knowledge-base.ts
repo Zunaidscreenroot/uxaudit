@@ -25,7 +25,7 @@ export async function saveAudit(result: AuditResult, sourceFilename: string): Pr
   if (!client?.id) throw new Error("Neon did not return the client record.");
 
   const auditId = crypto.randomUUID();
-  const screenshotRef = await storeAuditScreenshot(page.screenshot, auditId);
+  const screenshotRef = await storeAuditScreenshot(page.screenshot);
   const viewMode = page.auditMode || "unknown";
   const [audit] = await sql`
     INSERT INTO audits (
