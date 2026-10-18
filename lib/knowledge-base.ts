@@ -52,7 +52,7 @@ export async function saveAudit(result: AuditResult, sourceFilename: string): Pr
     const tuples = page.findings.map((finding, index) => {
       const base = values.length;
       values.push(audit.id, savedPage.id, index, JSON.stringify(finding));
-      return `(${base + 1}::uuid, ${base + 2}::uuid, ${base + 3}, ${base + 4}::jsonb)`;
+      return `(${base + 1}::uuid, ${base + 2}::uuid, ${base + 3}::integer, ${base + 4}::jsonb)`;
     });
     await queryDb(
       `INSERT INTO public.audit_findings (audit_id, page_id, finding_index, finding)
