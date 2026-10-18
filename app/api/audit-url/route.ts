@@ -3,6 +3,7 @@ import { lookup } from "node:dns/promises";
 import { createAuditFromScreenshot } from "@/lib/audit";
 import { captureWebsiteScreenshot } from "@/lib/capture-screenshot";
 import { saveAudit } from "@/lib/knowledge-base";
+import { inferSharedBrainScope } from "@/lib/shared-brain";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -83,7 +84,8 @@ export async function POST(req: Request) {
 
     const title = u.pathname === "/" ? "Homepage" : u.pathname.split("/").filter(Boolean).pop()?.replace(/[-_]/g, " ") || u.hostname;
     console.info("[uxaudit] ai_audit_start", JSON.stringify({ elapsedMs: Date.now() - requestStarted, models: models.map((m: any) => m.model) }));
-    const result = await createAuditFromScreenshot(bytes, title + ".jpg", undefined, models);
+    const brainScope = inferSharedBrainScope([body.projectName || "", u.hostname, u.href].join(" "));
+    const result = await createAuditFromScreenshot(bytes, title + ".jpg", undefined, models, auditMode, brainScope);
     console.info("[uxaudit] ai_audit_ok", JSON.stringify({ elapsedMs: Date.now() - requestStarted, findings: result.pages[0]?.findings?.length }));
     result.pages = result.pages.map((p) => ({
       ...p,
