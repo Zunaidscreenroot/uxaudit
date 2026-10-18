@@ -16,13 +16,20 @@ export default function BenchmarkPage(){
    if(!entries[0].url)throw new Error("Enter the client website URL.");
    if(entries.length<2)throw new Error("Add at least one competitor URL to compare against the client.");
    if(new Set(entries.map(x=>x.url)).size!==entries.length)throw new Error("Each website must have a unique URL.");
+   setStatus("Checking paid vision models…");
+   const modelCheck=await fetch("/api/model-health/scan",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}",cache:"no-store"});
+   const modelData=await modelCheck.json().catch(()=>({}));
+   const verifiedModels=Array.isArray(modelData.selectedModels)
+    ? modelData.selectedModels.filter((m:any)=>m?.provider==="OpenRouter"&&m?.tier==="paid"&&typeof m.model==="string"&&!m.model.endsWith(":free")&&m.model!=="openrouter/auto").slice(0,2).map((m:any)=>({provider:"OpenRouter",model:m.model,tier:"paid"}))
+    : [];
+   if(!modelCheck.ok||!verifiedModels.length)throw new Error(modelData.error||"No paid image-capable model was verified. Refresh model health and try again.");
    const output:Report[]=new Array(entries.length);let nextIndex=0;
    await Promise.all(Array.from({length:Math.min(2,entries.length)},async()=>{
     while(true){
      const index=nextIndex++;if(index>=entries.length)return;
      const entry=entries[index];setStatus("Auditing "+(index+1)+" of "+entries.length+" ("+auditMode+"): "+entry.name);
      try{
-      const response=await fetch("/api/audit-url",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:entry.url,projectName:entry.name,auditMode,verifiedModels:[{provider:"OpenRouter",model:"openrouter/auto"}]})});
+      const response=await fetch("/api/audit-url",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:entry.url,projectName:entry.name,auditMode,verifiedModels})});
       const data=await response.json().catch(()=>({}));
       if(!response.ok)throw new Error(data.error||"Audit request failed.");
       output[index]={name:entry.name,url:entry.url,mode:auditMode,auditId:typeof data.auditId==="string"?data.auditId:undefined,findings:Array.isArray(data.page?.findings)?data.page.findings:[]};
