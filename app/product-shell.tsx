@@ -12,8 +12,8 @@ const groups = [
     label: "WORKSPACE",
     links: [
       { href: "/", label: "Overview", icon: "◫" },
-      { href: "/site-map", label: "IA & Audit", icon: "⌘" },
-      { href: "/benchmark", label: "Benchmark", icon: "⇄" },
+      { href: "/audit-studio", label: "Audit Studio", icon: "⌘" },
+      { href: "/benchmarking-studio", label: "Benchmarking Studio", icon: "⇄" },
       { href: "/knowledge-base", label: "Past Findings", icon: "▤" },
     ],
   },
@@ -29,8 +29,10 @@ const groups = [
 
 const titles: Record<string, string> = {
   "/": "Overview",
-  "/site-map": "Information architecture & audit",
-  "/benchmark": "Competitor benchmark",
+  "/site-map": "Audit Studio",
+  "/audit-studio": "Audit Studio",
+  "/benchmark": "Benchmarking Studio",
+  "/benchmarking-studio": "Benchmarking Studio",
   "/knowledge-base": "Past Findings",
   "/coach": "Coach & Learn",
   "/ia-remediation": "IA remediation proposal",
@@ -87,7 +89,8 @@ export default function ProductShell({ children }: { children: ReactNode }) {
           <div className="uxd-nav-group" key={group.label}>
             <div className="uxd-nav-label">{group.label}</div>
             {group.links.map((link) => {
-              const active = link.href === "/" ? pathname === "/" : pathname === link.href || pathname.startsWith(link.href + "/");
+              const legacyPath = (link.href === "/audit-studio" && pathname === "/site-map") || (link.href === "/benchmarking-studio" && pathname === "/benchmark");
+              const active = link.href === "/" ? pathname === "/" : legacyPath || pathname === link.href || pathname.startsWith(link.href + "/");
               return (
                 <Link href={link.href} key={link.href} onClick={() => setMobileNavOpen(false)} className={"uxd-nav-link" + (active ? " is-active" : "")} aria-current={active ? "page" : undefined}>
                   <span className="uxd-nav-icon" aria-hidden="true">{link.icon}</span>
