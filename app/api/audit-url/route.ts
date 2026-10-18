@@ -1,4 +1,5 @@
 import { privateHost, resolvesToPrivateAddress } from "@/lib/public-url";
+import { assertPaidOpenRouterModel } from "@/lib/openrouter-paid";
 import { createAuditFromScreenshot } from "@/lib/audit";
 import { captureWebsiteScreenshot } from "@/lib/capture-screenshot";
 import { saveAudit } from "@/lib/knowledge-base";
@@ -33,7 +34,7 @@ export async function POST(req: Request) {
     }
 
 
-    const models = Array.isArray(body?.verifiedModels)
+    const models: Array<{ provider: "OpenRouter"; model: string; tier: "paid" }> = Array.isArray(body?.verifiedModels)
       ? body.verifiedModels.filter((m: any) =>
           m?.provider === "OpenRouter" &&
           m?.tier === "paid" &&
@@ -42,7 +43,17 @@ export async function POST(req: Request) {
           m.model !== "openrouter/auto"
         ).slice(0, 2)
       : [];
-    if (!models.length) return Response.json({ error: "No verified paid OpenRouter model is available. Refresh model verification; free and auto-routed models are disabled for audits." }, { status: 503 });
+
+    // MCP callers do not have the browser's verifiedModels list. Use the configured,
+    // explicit paid vision model on the server; lib/openrouter-paid verifies actual
+    // catalogue pricing before any model inference is allowed.
+    if (!models.length) {
+      models.push({
+        provider: "OpenRouter",
+        model: process.env.UX_AUDIT_VISION_MODEL?.trim() || "deepseek/deepseek-v4-flash-vision-exp",
+        tier: "paid",
+      });
+    }
 
     const auditMode = body?.auditMode === "mobile" ? "mobile" : "desktop";
     const viewport = auditMode === "mobile" ? { width: 393, height: 852 } : { width: 1440, height: 900 };
@@ -52,7 +63,12 @@ export async function POST(req: Request) {
       provider: "thum.io→browserless fallback", host: u.hostname, auditMode, viewport, fullPage: true
     }));
 
-    const captured = await captureWebsiteScreenshot({ url: u.href, width: viewport.width, height: viewport.height });
+    const [captured] = await Promise.all([
+      captureWebsiteScreenshot({ url: u.href, width: viewport.width, height: viewport.height }),
+      // Run the paid-pricing check alongside capture instead of serially delaying the next stage.
+      assertPaidOpenRouterModel(models[0].model),
+      ...models.slice(1).map((model) => assertPaidOpenRouterModel(model.model)),
+    ]);
     const bytes = captured.bytes;
     console.info("[uxaudit] screenshot_provider_selected", JSON.stringify({
       provider: captured.provider, host: u.hostname, elapsedMs: Date.now() - captureStarted, bytes: bytes.length
