@@ -1,5 +1,4 @@
 import { isIP } from "node:net";
-import { lookup } from "node:dns/promises";
 import { createAuditFromScreenshot } from "@/lib/audit";
 import { captureWebsiteScreenshot } from "@/lib/capture-screenshot";
 import { saveAudit } from "@/lib/knowledge-base";
@@ -9,21 +8,54 @@ export const maxDuration = 60;
 
 function privateHost(host: string) {
   const h = host.toLowerCase().replace(/^\[|\]$/g, "");
-  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local")) return true;
-  const v = isIP(h);
-  if (v === 4) {
-    const [a, b] = h.split(".").map(Number);
-    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a >= 224;
+  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal")) return true;
+  const version = isIP(h);
+  if (version === 4) {
+    const [a, b, c] = h.split(".").map(Number);
+    return a === 10 || a === 127 || a === 0 || a >= 224 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 192 && b === 0 && c === 0) ||
+      (a === 198 && (b === 18 || b === 19)) ||
+      (a === 198 && b === 51 && c === 100) ||
+      (a === 203 && b === 0 && c === 113);
   }
-  return v === 6 && (h === "::1" || h.startsWith("fc") || h.startsWith("fd") || h.startsWith("fe80:"));
+  if (version === 6) {
+    return h === "::" || h === "::1" ||
+      h.startsWith("fc") || h.startsWith("fd") ||
+      /^fe[89ab]/.test(h) || h.startsWith("ff") ||
+      h.startsWith("::ffff:");
+  }
+  return false;
 }
 
 async function resolvesToPrivateAddress(host: string) {
-  if (isIP(host.replace(/^\[|\]$/g, ""))) return privateHost(host);
+  const normalized = host.replace(/^\[|\]$/g, "");
+  if (isIP(normalized)) return privateHost(normalized);
   try {
-    const addresses = await lookup(host, { all: true, verbatim: true });
-    return !addresses.length || addresses.some((address) => privateHost(address.address));
+    // Workers do not expose Node's DNS resolver consistently. Use DNS-over-HTTPS
+    // and fail closed if either lookup is unusable or no public address is returned.
+    const queries = await Promise.all(["A", "AAAA"].map(async (type) => {
+      const response = await fetch(
+        "https://cloudflare-dns.com/dns-query?name=" + encodeURIComponent(normalized) + "&type=" + type,
+        {
+          headers: { accept: "application/dns-json" },
+          signal: AbortSignal.timeout(3000),
+          cache: "no-store",
+        },
+      );
+      if (!response.ok) throw new Error("DNS resolution failed.");
+      const payload = await response.json() as { Status?: number; Answer?: Array<{ type?: number; data?: string }> };
+      if (payload.Status !== 0 && payload.Status !== 3) throw new Error("DNS resolution failed.");
+      return (payload.Answer || [])
+        .filter((answer) => answer.type === 1 || answer.type === 28)
+        .map((answer) => answer.data)
+        .filter((value): value is string => typeof value === "string" && value.length > 0);
+    }));
+    const addresses = queries.flat();
+    return addresses.length === 0 || addresses.some((address) => privateHost(address));
   } catch {
     return true;
   }
@@ -55,7 +87,6 @@ export async function POST(req: Request) {
       }
     }
 
-
     const models = Array.isArray(body?.verifiedModels)
       ? body.verifiedModels.filter((m: any) => m?.provider === "OpenRouter" && typeof m.model === "string").slice(0, 3)
       : [];
@@ -80,10 +111,13 @@ export async function POST(req: Request) {
     if (!bytes.length || bytes.length > 15 * 1024 * 1024) {
       return Response.json({ error: "Screenshot was empty or too large." }, { status: 502 });
     }
+    if (!captured.width || !captured.height || captured.width > 20000 || captured.height > 20000) {
+      return Response.json({ error: "The captured page dimensions are invalid or too large. Select a shorter page or upload a screenshot." }, { status: 502 });
+    }
 
     const title = u.pathname === "/" ? "Homepage" : u.pathname.split("/").filter(Boolean).pop()?.replace(/[-_]/g, " ") || u.hostname;
     console.info("[uxaudit] ai_audit_start", JSON.stringify({ elapsedMs: Date.now() - requestStarted, models: models.map((m: any) => m.model) }));
-    const result = await createAuditFromScreenshot(bytes, title + ".jpg", undefined, models);
+    const result = await createAuditFromScreenshot(bytes, title + ".jpg", undefined, models, auditMode);
     console.info("[uxaudit] ai_audit_ok", JSON.stringify({ elapsedMs: Date.now() - requestStarted, findings: result.pages[0]?.findings?.length }));
     result.pages = result.pages.map((p) => ({
       ...p,

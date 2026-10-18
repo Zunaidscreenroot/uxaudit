@@ -1,3 +1,5 @@
+import { getSql } from "@/lib/neon-db";
+
 export type CoachLearningStatus = "draft" | "approved" | "rejected" | "archived";
 export type CoachLearningAction = "approve" | "reject" | "archive";
 
@@ -24,30 +26,8 @@ export type CoachLearning = {
   source_finding_title: string | null;
 };
 
-function config() {
-  const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) {
-    throw new Error("Configure SUPABASE_URL and SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_ROLE_KEY) to use Coach & Learn.");
-  }
-  return { url: url.replace(/\/$/, ""), key };
-}
-
-async function supabaseRequest(path: string, init: RequestInit = {}) {
-  const { url, key } = config();
-  const response = await fetch(`${url}/rest/v1/${path}`, {
-    ...init,
-    headers: {
-      apikey: key,
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-      ...(init.headers || {}),
-    },
-    cache: "no-store",
-  });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`Supabase returned HTTP ${response.status}: ${text.slice(0, 500)}`);
-  return text ? JSON.parse(text) : null;
+function toPgTextArray(values: string[]): string {
+  return "{" + values.map((value) => '"' + value.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"').join(",") + "}";
 }
 
 function limitedText(value: unknown, max: number, field: string, required = false): string {
@@ -110,13 +90,23 @@ export async function saveCoachingLesson(input: {
     approved_at: activate ? now : null,
     updated_at: now,
   };
-  const result = await supabaseRequest("ux_coach_learnings", {
-    method: "POST",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify(row),
-  });
-  const saved = Array.isArray(result) ? result[0] : null;
-  if (!saved?.id) throw new Error("Supabase did not return the saved coaching lesson.");
+  const sql = getSql();
+  const [saved] = await sql`
+    INSERT INTO ux_coach_learnings (
+      raw_feedback, title, rule, rationale, scope, keywords, examples,
+      source_language, source_type, feedback_kind, source_audit_id,
+      source_finding_title, status, approved_at, updated_at
+    )
+    VALUES (
+      ${row.raw_feedback}, ${row.title}, ${row.rule}, ${row.rationale}, ${row.scope},
+      ${toPgTextArray(row.keywords)}::text[], ${JSON.stringify(row.examples)}::jsonb,
+      ${row.source_language}, ${row.source_type}, ${row.feedback_kind},
+      ${row.source_audit_id}::uuid, ${row.source_finding_title},
+      ${row.status}, ${row.approved_at}, ${row.updated_at}
+    )
+    RETURNING *
+  `;
+  if (!saved?.id) throw new Error("Neon did not return the saved coaching lesson.");
   return saved as CoachLearning;
 }
 
@@ -126,18 +116,31 @@ export async function listCoachingLessons(status: string = "all", limit = 50) {
   const safeLimit = Math.max(1, Math.min(100, Number.isFinite(limit) ? Math.floor(limit) : 50));
   const columns = "id,raw_feedback,title,rule,rationale,scope,keywords,examples,source_language,source_type,feedback_kind,source_audit_id,source_finding_title,status,review_note,created_at,updated_at,approved_at,usage_count,last_used_at";
   const filter = normalizedStatus === "all" ? "" : `&status=eq.${normalizedStatus}`;
-  const result = await supabaseRequest(
-    `ux_coach_learnings?select=${columns}${filter}&order=updated_at.desc&limit=${safeLimit}`,
-  );
-  return Array.isArray(result) ? result as CoachLearning[] : [];
+  const sql = getSql();
+  if (normalizedStatus === "all") {
+    return await sql`
+      SELECT ${sql.unsafe(columns)} FROM ux_coach_learnings
+      ORDER BY updated_at DESC LIMIT ${safeLimit}
+    ` as CoachLearning[];
+  }
+  return await sql`
+    SELECT ${sql.unsafe(columns)} FROM ux_coach_learnings
+    WHERE status = ${normalizedStatus}
+    ORDER BY updated_at DESC LIMIT ${safeLimit}
+  ` as CoachLearning[];
 }
 
 export async function listApprovedCoachLearnings(limit = 100) {
   const safeLimit = Math.max(1, Math.min(100, Number.isFinite(limit) ? Math.floor(limit) : 100));
-  const result = await supabaseRequest(
-    `ux_coach_learnings?select=id,title,rule,rationale,scope,keywords,feedback_kind,source_audit_id,source_finding_title,status,created_at,updated_at,approved_at,usage_count,last_used_at&status=eq.approved&order=updated_at.desc&limit=${safeLimit}`,
-  );
-  return Array.isArray(result) ? result : [];
+  const sql = getSql();
+  return await sql`
+    SELECT id, title, rule, rationale, scope, keywords, feedback_kind,
+      source_audit_id, source_finding_title, status, created_at, updated_at,
+      approved_at, usage_count, last_used_at
+    FROM ux_coach_learnings
+    WHERE status = 'approved'
+    ORDER BY updated_at DESC LIMIT ${safeLimit}
+  `;
 }
 
 export async function reviewCoachingLesson(idValue: unknown, actionValue: unknown, noteValue?: unknown) {
@@ -149,17 +152,15 @@ export async function reviewCoachingLesson(idValue: unknown, actionValue: unknow
   }
   const now = new Date().toISOString();
   const status: CoachLearningStatus = action === "approve" ? "approved" : action === "reject" ? "rejected" : "archived";
-  const result = await supabaseRequest(`ux_coach_learnings?id=eq.${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify({
-      status,
-      updated_at: now,
-      approved_at: status === "approved" ? now : null,
-      review_note: limitedText(noteValue, 1000, "reviewNote"),
-    }),
-  });
-  const saved = Array.isArray(result) ? result[0] : null;
+  const sql = getSql();
+  const [saved] = await sql`
+    UPDATE ux_coach_learnings
+    SET status = ${status}, updated_at = ${now},
+      approved_at = ${status === "approved" ? now : null},
+      review_note = ${limitedText(noteValue, 1000, "reviewNote")}
+    WHERE id = ${id}::uuid
+    RETURNING *
+  `;
   if (!saved?.id) throw new Error("Learning rule was not found or could not be updated.");
   return saved as CoachLearning;
 }

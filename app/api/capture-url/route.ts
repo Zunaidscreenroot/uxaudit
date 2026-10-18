@@ -1,6 +1,4 @@
 import { isIP } from "node:net";
-import { lookup } from "node:dns/promises";
-import sharp from "sharp";
 import { captureWebsiteScreenshot } from "@/lib/capture-screenshot";
 
 export const runtime = "nodejs";
@@ -10,21 +8,54 @@ type AuditMode = "desktop" | "mobile";
 
 function privateHost(host: string) {
   const h = host.toLowerCase().replace(/^\[|\]$/g, "");
-  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local")) return true;
+  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal")) return true;
   const version = isIP(h);
   if (version === 4) {
-    const [a, b] = h.split(".").map(Number);
-    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a >= 224;
+    const [a, b, c] = h.split(".").map(Number);
+    return a === 10 || a === 127 || a === 0 || a >= 224 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 192 && b === 0 && c === 0) ||
+      (a === 198 && (b === 18 || b === 19)) ||
+      (a === 198 && b === 51 && c === 100) ||
+      (a === 203 && b === 0 && c === 113);
   }
-  return version === 6 && (h === "::1" || h.startsWith("fc") || h.startsWith("fd") || h.startsWith("fe80:"));
+  if (version === 6) {
+    return h === "::" || h === "::1" ||
+      h.startsWith("fc") || h.startsWith("fd") ||
+      /^fe[89ab]/.test(h) || h.startsWith("ff") ||
+      h.startsWith("::ffff:");
+  }
+  return false;
 }
 
 async function resolvesToPrivateAddress(host: string) {
-  if (isIP(host.replace(/^\[|\]$/g, ""))) return privateHost(host);
+  const normalized = host.replace(/^\[|\]$/g, "");
+  if (isIP(normalized)) return privateHost(normalized);
   try {
-    const addresses = await lookup(host, { all: true, verbatim: true });
-    return !addresses.length || addresses.some((address) => privateHost(address.address));
+    // Workers do not expose Node's DNS resolver consistently. Use DNS-over-HTTPS
+    // and fail closed if either lookup is unusable or no public address is returned.
+    const queries = await Promise.all(["A", "AAAA"].map(async (type) => {
+      const response = await fetch(
+        "https://cloudflare-dns.com/dns-query?name=" + encodeURIComponent(normalized) + "&type=" + type,
+        {
+          headers: { accept: "application/dns-json" },
+          signal: AbortSignal.timeout(3000),
+          cache: "no-store",
+        },
+      );
+      if (!response.ok) throw new Error("DNS resolution failed.");
+      const payload = await response.json() as { Status?: number; Answer?: Array<{ type?: number; data?: string }> };
+      if (payload.Status !== 0 && payload.Status !== 3) throw new Error("DNS resolution failed.");
+      return (payload.Answer || [])
+        .filter((answer) => answer.type === 1 || answer.type === 28)
+        .map((answer) => answer.data)
+        .filter((value): value is string => typeof value === "string" && value.length > 0);
+    }));
+    const addresses = queries.flat();
+    return addresses.length === 0 || addresses.some((address) => privateHost(address));
   } catch {
     return true;
   }
@@ -53,7 +84,6 @@ export async function POST(req: Request) {
       }
     }
 
-
     const auditMode: AuditMode = body?.auditMode === "mobile" ? "mobile" : "desktop";
     const mobile = auditMode === "mobile";
     const viewport = mobile ? { width: 393, height: 852 } : { width: 1440, height: 900 };
@@ -68,24 +98,16 @@ export async function POST(req: Request) {
     if (!raw.length || raw.length > 15 * 1024 * 1024) {
       throw new Error("The screenshot is empty or exceeds the 15 MB analysis limit.");
     }
+    if (!captured.width || !captured.height || captured.width > 20000 || captured.height > 20000) {
+      throw new Error("The captured page dimensions are invalid or too large. Select a shorter page or upload a screenshot.");
+    }
 
-    const metadata = await sharp(raw).metadata();
-    if (!metadata.width || !metadata.height) throw new Error("Browserless returned an invalid screenshot.");
-    const boundedWidth = Math.min(metadata.width, viewport.width);
-    const boundedHeight = Math.min(metadata.height, 18000);
-    let image = sharp(raw);
-    if (boundedWidth !== metadata.width || boundedHeight !== metadata.height) {
-      image = image.extract({ left: 0, top: 0, width: boundedWidth, height: boundedHeight });
-    }
-    const bytes = await image.jpeg({ quality: 88, progressive: true }).toBuffer();
-    if (!bytes.length || bytes.length > 15 * 1024 * 1024) {
-      throw new Error("The responsive screenshot is too large to analyse. Try a shorter page or a smaller capture.");
-    }
-    const finalMetadata = await sharp(bytes).metadata();
-    const screenshot = "data:image/jpeg;base64," + bytes.toString("base64");
+    // Keep the provider's encoded bytes. Sharp's native image bindings are not suitable
+    // for Workers; dimension validation is handled by the portable image header parser.
+    const screenshot = "data:" + captured.mimeType + ";base64," + raw.toString("base64");
     const title = url.pathname === "/" ? "Homepage" : (url.pathname.split("/").filter(Boolean).pop() || url.hostname).replace(/[-_]/g, " ");
     const result = {
-      screenshot, width: finalMetadata.width, height: finalMetadata.height, url: url.href,
+      screenshot, width: captured.width, height: captured.height, url: url.href,
       title, auditMode, viewportWidth: viewport.width, viewportHeight: viewport.height,
       viewport: { ...viewport, unit: "CSS px" },
       actualViewport: { innerWidth: viewport.width, innerHeight: viewport.height, devicePixelRatio: 1 },
