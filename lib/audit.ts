@@ -345,7 +345,7 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
 
   const knowledgeQuery=[auditMode === "mobile" ? "mobile audit mobile viewport" : "desktop audit desktop viewport",visualPass.clientName,visualPass.pageSummary,...visualPass.observations.map(o=>[o.section,o.element,o.issue,o.whyItMatters].join(" "))].join(" ");
   const knowledgeContext=await retrieveRelevantAuditKnowledge(knowledgeQuery,6);
-  if(knowledgeContext)onStage?.({id:"knowledge",label:"Retrieve prior audit evidence",detail:"Retrieved relevant saved findings from the Supabase knowledge base to calibrate recommendations; current findings still require screenshot evidence.",status:"complete"});
+  if(knowledgeContext)onStage?.({id:"knowledge",label:"Retrieve prior audit evidence",detail:"Retrieved approved guidance from the shared Knowledge Base and relevant examples from Past Findings; current findings still require screenshot evidence.",status:"complete"});
 
   onStage?.({ id: "quality", label: "OpenRouter UX reasoning", detail: "OpenRouter Auto Router · low-cost tier · text-only UX research and business analysis. OpenRouter selects the reasoning model.", status: "active" });
   let review: unknown[]=[];let reviewOk=visualPass.observations.length===0;let reviewErrors:string[]=[];
