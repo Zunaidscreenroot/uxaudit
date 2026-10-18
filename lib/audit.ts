@@ -1,5 +1,6 @@
 import { retrieveRelevantAuditKnowledge } from "@/lib/knowledge-base";
 import { getImageInfo, type SupportedImageMime } from "@/lib/image-info";
+import { getRuntimeEnv } from "@/lib/neon-db";
 
 export type Severity = "high" | "medium" | "low";
 export type MarkerPoint = { x: number; y: number };
@@ -42,7 +43,7 @@ function extractJson(text: string): unknown | null {
 type VerifiedModel = {provider:"OpenRouter"|"Gemini";model:string;tier:"free"|"paid"};
 async function modelGenerate(model: VerifiedModel, parts: Array<Record<string, unknown>>, maxOutputTokens = 6000, timeoutMs = 12000) {
  if(model.provider!=="OpenRouter")throw new Error("Only verified OpenRouter models are enabled for UX Audit.");
- const key=process.env.OPENROUTER_API_KEY;if(!key)throw new Error("Configure OPENROUTER_API_KEY before running an audit.");
+ const key=getRuntimeEnv().OPENROUTER_API_KEY?.trim();if(!key)throw new Error("Configure OPENROUTER_API_KEY as a Cloudflare Worker secret before running an audit.");
  const content:any[]=[];for(const part of parts){if(typeof part.text==="string")content.push({type:"text",text:part.text});else if(part.inline_data&&typeof part.inline_data==="object"){const im=part.inline_data as {mime_type?:string;data?:string};if(im.data)content.push({type:"image_url",image_url:{url:"data:"+(im.mime_type||"image/jpeg")+";base64,"+im.data}});}}
  let lastError="OpenRouter model request failed.";const started=Date.now();
  try{
