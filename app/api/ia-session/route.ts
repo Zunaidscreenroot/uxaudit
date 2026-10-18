@@ -110,7 +110,7 @@ export async function PATCH(req: Request) {
     }
 
     const rows = await queryDb<{ id: string; updated_at: string; stage: string }>(
-      \`UPDATE public.ia_sessions
+      `UPDATE public.ia_sessions
        SET selected_urls = CASE WHEN $2::boolean THEN $3::jsonb ELSE selected_urls END,
            audited_pages = CASE WHEN $4::boolean THEN (
              SELECT COALESCE(jsonb_agg(item.value), '[]'::jsonb)
@@ -122,7 +122,7 @@ export async function PATCH(req: Request) {
            updated_at = now(),
            expires_at = now() + interval '30 minutes'
        WHERE id = $1::uuid AND expires_at > now()
-       RETURNING id, updated_at, stage\`,
+       RETURNING id, updated_at, stage`,
       [body.id, hasSelected, JSON.stringify(selectedUrls), hasPage, pageUrl, JSON.stringify(savedPage), stage, projectName],
     );
     if (!rows[0]) return Response.json({ error: "Session expired or not found." }, { status: 404 });
