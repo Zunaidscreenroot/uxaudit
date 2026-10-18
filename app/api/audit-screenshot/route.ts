@@ -1,5 +1,5 @@
 import { createAuditFromScreenshot } from "@/lib/audit";
-import { saveAudit } from "@/lib/knowledge-base";
+import { saveAudit } from "@/lib/past-findings";
 export const runtime="nodejs";
 export const maxDuration=60;
 type Model={provider:"OpenRouter";model:string;tier:"paid"};
