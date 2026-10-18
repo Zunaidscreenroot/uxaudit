@@ -1,10 +1,11 @@
 import { getImageInfo } from "@/lib/image-info";
+import { getRuntimeEnv } from "@/lib/neon-db";
 
 type CaptureOptions = { url: string; width: number; height: number };
 
 export async function captureWebsiteScreenshot({ url, width, height }: CaptureOptions) {
   const errors: string[] = [];
-  const token = process.env.BROWSERLESS_API_TOKEN;
+  const token = getRuntimeEnv().BROWSERLESS_API_TOKEN?.trim();
 
   // Prefer a real browser for full-page capture. Scroll the page first so lazy-loaded
   // images and below-the-fold sections have a chance to render before the screenshot.
