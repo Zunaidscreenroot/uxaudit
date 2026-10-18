@@ -1,8 +1,7 @@
 name: Deploy UX Audit to Cloudflare
 
+# Run manually after the repository has a CLOUDFLARE_API_TOKEN Actions secret.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
