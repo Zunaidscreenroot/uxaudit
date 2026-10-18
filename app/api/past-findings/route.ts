@@ -13,8 +13,8 @@ export async function GET(request: Request) {
     if (clientId) return Response.json({ audits: await listAudits(clientId) }, { headers: { "Cache-Control": "no-store" } });
     return Response.json({ clients: await listClients() }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    console.error("Knowledge base request failed", error);
-    const message = error instanceof Error ? error.message : "Could not load the knowledge base.";
+    console.error("Past Findings request failed", error);
+    const message = error instanceof Error ? error.message : "Could not load Past Findings.";
     return Response.json({ error: message }, { status: 500 });
   }
 }
