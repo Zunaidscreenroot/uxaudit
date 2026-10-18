@@ -2,7 +2,7 @@ import { isIP } from "node:net";
 import { lookup } from "node:dns/promises";
 import { createAuditFromScreenshot } from "@/lib/audit";
 import { captureWebsiteScreenshot } from "@/lib/capture-screenshot";
-import { saveAudit } from "@/lib/knowledge-base";
+import { saveAudit } from "@/lib/past-findings";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
