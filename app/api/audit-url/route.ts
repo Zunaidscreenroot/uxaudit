@@ -82,13 +82,16 @@ export async function POST(req: Request) {
 
     const title = u.pathname === "/" ? "Homepage" : u.pathname.split("/").filter(Boolean).pop()?.replace(/[-_]/g, " ") || u.hostname;
     console.info("[uxaudit] ai_audit_start", JSON.stringify({ elapsedMs: Date.now() - requestStarted, models: models.map((m: any) => m.model) }));
-    const result = await createAuditFromScreenshot(bytes, title + ".jpg", undefined, models);
+    const result = await createAuditFromScreenshot(bytes, title + ".jpg", undefined, models, auditMode);
     console.info("[uxaudit] ai_audit_ok", JSON.stringify({ elapsedMs: Date.now() - requestStarted, findings: result.pages[0]?.findings?.length }));
     result.pages = result.pages.map((p) => ({
       ...p,
       clientName: typeof body.projectName === "string" && body.projectName.trim() ? body.projectName.trim() : u.hostname,
       url: u.href,
       title,
+      auditMode,
+      viewportWidth: viewport.width,
+      viewportHeight: viewport.height,
       createdAt: new Date().toISOString()
     }));
     const auditId = await saveAudit(result, "URL audit · " + (typeof body.projectName === "string" && body.projectName.trim() ? body.projectName.trim() : u.hostname) + " · " + title);
