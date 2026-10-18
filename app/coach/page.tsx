@@ -96,7 +96,7 @@ export default function CoachPage() {
           </section>
 
           <section className="coach-library">
-            <div className="coach-library-head"><div><div className="coach-kicker">APPROVED LEARNING LIBRARY</div><h2>Rules currently guiding audits</h2><p>These are the active lessons available to audit runs.</p></div><div className="coach-count"><strong>{loading ? "—" : lessons.length}</strong><span>active rules</span></div></div>
+            <div className="coach-library-head"><div><div className="coach-kicker">KNOWLEDGE BASE · APPROVED RULES</div><h2>Rules currently guiding audits</h2><p>These are the active lessons available to audit runs.</p></div><div className="coach-count"><strong>{loading ? "—" : lessons.length}</strong><span>active rules</span></div></div>
             {loading && <div className="coach-empty">Loading approved lessons…</div>}
             {!loading && error && <div className="coach-error"><strong>Could not load learning rules.</strong><span>{error}</span><small>Check Supabase configuration and confirm the Coach &amp; Learn table migration is available in this deployment.</small></div>}
             {!loading && !error && !lessons.length && <div className="coach-empty"><strong>No approved lessons yet.</strong><span>That is expected for a new learning loop. Use ChatGPT voice or text to save your first coaching lesson, review it, and approve it before it affects audits.</span></div>}
