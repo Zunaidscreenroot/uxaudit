@@ -135,6 +135,7 @@ export async function retrieveRelevantAuditKnowledge(query: string, limit = 6): 
       const learning = lesson as CoachLearning;
       const scope = String(learning.scope || "all audits");
       const keywordList = Array.isArray(learning.keywords) ? learning.keywords : [];
+      const example = Array.isArray(learning.examples) ? learning.examples.find((value): value is string => typeof value === "string") : undefined;
       const searchable = [learning.title, learning.rule, learning.rationale, scope, ...keywordList].filter(Boolean).join(" ");
       const tokenSet = new Set(terms(searchable));
       const overlap = queryTerms.filter((term) => tokenSet.has(term)).length;
@@ -148,7 +149,7 @@ export async function retrieveRelevantAuditKnowledge(query: string, limit = 6): 
         id: learning.id,
         score,
         usageCount: Number(learning.usage_count || 0),
-        text: `[APPROVED COACHING RULE; scope: ${scope}] ${String(learning.title || "UX rule").slice(0, 140)}: ${String(learning.rule || "").slice(0, 600)}${learning.rationale ? " Why it matters: " + String(learning.rationale).slice(0, 180) : ""}`,
+        text: `[APPROVED COACHING RULE; scope: ${scope}] ${String(learning.title || "UX rule").slice(0, 140)}: ${String(learning.rule || "").slice(0, 600)}${learning.rationale ? " Why it matters: " + String(learning.rationale).slice(0, 180) : ""}${example ? " Calibration example (preference only, not evidence): " + example.slice(0, 220) : ""}`,
       });
     }
     const rankedLessons = learningCandidates.sort((a,b)=>b.score-a.score).slice(0,3);
