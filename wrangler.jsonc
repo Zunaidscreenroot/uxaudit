@@ -1,4 +1,6 @@
-// Recreate the migration Preview from current Preview Base settings without touching Production.
+// Cloudflare Workers / OpenNext configuration for UX Audit.
+// Production shares UX Direct's R2 memory bucket. Preview writes go to an isolated bucket.
+// Historical screenshots remain readable through UX_AUDIT_LEGACY_ASSETS.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "uxaudit",
@@ -15,22 +17,36 @@
   "observability": {
     "enabled": true
   },
+  "vars": {
+    "APP_ENV": "production",
+    "DAILY_BUDGET_INR": "100",
+    "UX_SHARED_ASSETS_BUCKET": "ux-shared-memory"
+  },
   "previews": {
     "r2_buckets": [
       {
         "binding": "UX_SHARED_ASSETS",
+        "bucket_name": "ux-direct-assets-preview"
+      },
+      {
+        "binding": "UX_AUDIT_LEGACY_ASSETS",
         "bucket_name": "ux-direct-assets"
       }
     ],
     "vars": {
       "APP_ENV": "preview",
-      "DAILY_BUDGET_INR": "100"
+      "DAILY_BUDGET_INR": "100",
+      "UX_SHARED_ASSETS_BUCKET": "ux-direct-assets-preview"
     }
   },
   "preview_urls": true,
   "r2_buckets": [
     {
       "binding": "UX_SHARED_ASSETS",
+      "bucket_name": "ux-shared-memory"
+    },
+    {
+      "binding": "UX_AUDIT_LEGACY_ASSETS",
       "bucket_name": "ux-direct-assets"
     }
   ]

@@ -7,19 +7,21 @@ const DATA_URI_PATTERN = /^data:(image\/(?:jpeg|jpg|png|webp));base64,([A-Za-z0-
 const MAX_SCREENSHOT_BYTES = 15 * 1024 * 1024;
 
 export async function GET(request: Request) {
-  const key = new URL(request.url).searchParams.get("key") || "";
+  const url = new URL(request.url);
+  const key = url.searchParams.get("key") || "";
+  const bucket = url.searchParams.get("bucket") || undefined;
   if (!key || key.length > 200) {
     return Response.json({ error: "A valid screenshot key is required." }, { status: 400 });
   }
 
   try {
-    const object = await getAuditScreenshotObject(key);
+    const object = await getAuditScreenshotObject(key, bucket);
     if (!object) {
       return Response.json({ error: "Screenshot not found." }, { status: 404 });
     }
 
-    // Shared legacy assets are stored as textual data URIs. Convert them to
-    // an actual image response so <img> elements can display them directly.
+    // Stored screenshots use textual data URIs. Convert the payload to a
+    // binary image response so <img> elements can render the asset directly.
     const payload = await new Response(object.body).text();
     if (payload.length > MAX_SCREENSHOT_BYTES * 1.5) {
       return Response.json({ error: "Screenshot exceeds the storage limit." }, { status: 413 });

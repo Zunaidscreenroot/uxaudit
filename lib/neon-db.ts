@@ -26,7 +26,9 @@ export type RuntimeEnv = Record<string, unknown> & {
   BROWSERLESS_API_TOKEN?: string;
   UXAUDIT_MCP_LOGIN_CODE?: string;
   UXAUDIT_MCP_OAUTH_SECRET?: string;
+  UX_SHARED_ASSETS_BUCKET?: string;
   UX_SHARED_ASSETS?: R2BucketLike;
+  UX_AUDIT_LEGACY_ASSETS?: R2BucketLike;
 };
 
 /**

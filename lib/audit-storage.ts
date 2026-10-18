@@ -1,11 +1,23 @@
 import { getRuntimeEnv, getSql, type R2BucketLike } from "@/lib/neon-db";
 
 const ASSET_PREFIX = "ux-audit/screenshots/";
-const BUCKET_NAME = "ux-direct-assets";
+const DEFAULT_SHARED_BUCKET_NAME = "ux-shared-memory";
+const LEGACY_BUCKET_NAME = "ux-direct-assets";
 const DATA_URI_PATTERN = /^data:(image\/(?:jpeg|jpg|png|webp));base64,([A-Za-z0-9+/=\r\n]+)$/i;
+const SCREENSHOT_KEY_PATTERN = /^ux-audit\/screenshots\/[a-f0-9]{32,64}\.datauri$/i;
 
-function getBucket(): R2BucketLike | undefined {
-  return getRuntimeEnv().UX_SHARED_ASSETS;
+function getActiveBucketName(): string {
+  const configured = getRuntimeEnv().UX_SHARED_ASSETS_BUCKET;
+  return typeof configured === "string" && configured.trim()
+    ? configured.trim()
+    : DEFAULT_SHARED_BUCKET_NAME;
+}
+
+function getBucketForName(bucketName: string): R2BucketLike | undefined {
+  const env = getRuntimeEnv();
+  if (bucketName === getActiveBucketName()) return env.UX_SHARED_ASSETS;
+  if (bucketName === LEGACY_BUCKET_NAME) return env.UX_AUDIT_LEGACY_ASSETS;
+  return undefined;
 }
 
 async function sha256(value: Uint8Array): Promise<string> {
@@ -14,11 +26,13 @@ async function sha256(value: Uint8Array): Promise<string> {
 }
 
 /**
- * Store screenshot data using the existing shared asset registry convention:
- * r2://ux-direct-assets/ux-audit/screenshots/<sha256>.datauri
+ * New screenshots go to the shared-memory bucket used by UX Direct.
+ * Existing r2://ux-direct-assets/... references continue to resolve through the
+ * dedicated legacy binding while old objects remain in that bucket.
  */
 export async function storeAuditScreenshot(screenshot: string): Promise<string> {
-  const bucket = getBucket();
+  const bucketName = getActiveBucketName();
+  const bucket = getBucketForName(bucketName);
   if (!bucket) return screenshot;
 
   const match = DATA_URI_PATTERN.exec(screenshot);
@@ -33,7 +47,7 @@ export async function storeAuditScreenshot(screenshot: string): Promise<string> 
 
   const contentHash = await sha256(utf8);
   const objectKey = ASSET_PREFIX + contentHash + ".datauri";
-  const assetKey = "r2://" + BUCKET_NAME + "/" + objectKey;
+  const assetKey = "r2://" + bucketName + "/" + objectKey;
 
   if (!(await bucket.get(objectKey))) {
     await bucket.put(objectKey, screenshot, {
@@ -57,11 +71,18 @@ export async function storeAuditScreenshot(screenshot: string): Promise<string> 
       content_encoding, size_bytes, reference_count, source_scope
     )
     VALUES (
-      ${assetKey}, ${BUCKET_NAME}, ${objectKey}, ${contentHash},
+      ${assetKey}, ${bucketName}, ${objectKey}, ${contentHash},
       'text/plain; charset=utf-8', 'data-uri', ${utf8.byteLength}, 2, 'ux-audit'
     )
     ON CONFLICT (content_hash) DO UPDATE
-    SET reference_count = ux_storage_assets.reference_count + 2
+    SET asset_key = EXCLUDED.asset_key,
+        bucket_name = EXCLUDED.bucket_name,
+        object_key = EXCLUDED.object_key,
+        content_type = EXCLUDED.content_type,
+        content_encoding = EXCLUDED.content_encoding,
+        size_bytes = EXCLUDED.size_bytes,
+        source_scope = EXCLUDED.source_scope,
+        reference_count = ux_storage_assets.reference_count + 2
   `;
 
   return assetKey;
@@ -69,16 +90,22 @@ export async function storeAuditScreenshot(screenshot: string): Promise<string> 
 
 export function resolveAuditScreenshot(value: unknown): unknown {
   if (typeof value !== "string" || !value.startsWith("r2://")) return value;
-  const prefix = "r2://" + BUCKET_NAME + "/";
-  if (!value.startsWith(prefix)) return null;
-  const key = value.slice(prefix.length);
-  if (!/^ux-audit\/screenshots\/[a-f0-9]{32,64}\.datauri$/i.test(key)) return null;
-  return "/api/audit-asset?key=" + encodeURIComponent(key);
+
+  const match = /^r2:\/\/([a-z0-9-]+)\/(ux-audit\/screenshots\/[a-f0-9]{32,64}\.datauri)$/i.exec(value);
+  if (!match) return null;
+
+  const bucketName = match[1];
+  if (bucketName !== getActiveBucketName() && bucketName !== LEGACY_BUCKET_NAME) return null;
+  return "/api/audit-asset?bucket=" + encodeURIComponent(bucketName) + "&key=" + encodeURIComponent(match[2]);
 }
 
-export async function getAuditScreenshotObject(key: string) {
-  if (!/^ux-audit\/screenshots\/[a-f0-9]{32,64}\.datauri$/i.test(key)) return null;
-  const bucket = getBucket();
-  if (!bucket) throw new Error("The shared R2 assets binding is not configured on this Worker.");
+export async function getAuditScreenshotObject(key: string, requestedBucketName?: string) {
+  if (!SCREENSHOT_KEY_PATTERN.test(key)) return null;
+
+  const bucketName = requestedBucketName || getActiveBucketName();
+  if (bucketName !== getActiveBucketName() && bucketName !== LEGACY_BUCKET_NAME) return null;
+
+  const bucket = getBucketForName(bucketName);
+  if (!bucket) throw new Error("The requested R2 assets binding is not configured on this Worker.");
   return bucket.get(key);
 }
