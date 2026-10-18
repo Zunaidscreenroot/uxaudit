@@ -117,3 +117,6 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible{
 .iaShell .iaTabs,.iaShell .iaFooter,.iaShell .iaWarning{background:#171b17!important;color:#e9eee7!important;border-color:#30382d!important}
 .iaShell .iaWarning{border-left-color:#c7f36b!important}
 @media(max-width:700px){.kbNav{padding:0 18px!important}.kbHero{padding:42px 18px 30px!important}.kbHero h1{font-size:clamp(36px,10vw,54px)!important}.kbContent{padding:0 18px 54px!important}.analysisDetail{padding:16px!important}.auditRow{grid-template-columns:68px minmax(0,1fr) 20px!important;gap:10px!important;padding:12px!important}.analysisHeader{align-items:flex-start}.kbStat{padding-left:16px!important;min-width:76px!important}}
+
+/* The audit entry path has one primary continuation; benchmarking lives in its own workspace. */
+.or-start-options-single{grid-template-columns:minmax(0,1fr)}
