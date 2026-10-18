@@ -32,7 +32,14 @@ export default function BenchmarkPage(){
       const response=await fetch("/api/audit-url",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:entry.url,projectName:entry.name,auditMode,verifiedModels})});
       const data=await response.json().catch(()=>({}));
       if(!response.ok)throw new Error(data.error||"Audit request failed.");
-      output[index]={name:entry.name,url:entry.url,mode:auditMode,auditId:typeof data.auditId==="string"?data.auditId:undefined,findings:Array.isArray(data.page?.findings)?data.page.findings:[]};
+      const page=data.page;
+      if(!page||!Array.isArray(page.findings))throw new Error("Audit returned no structured findings; this site is not comparable.");
+      if(page.auditMode&&page.auditMode!==auditMode)throw new Error("Viewport mismatch: expected "+auditMode+" but the audit report says "+page.auditMode+".");
+      const evidenceText=[page.clientName,page.title,page.screenshot? "screenshot attached":"", ...(page.findings||[]).flatMap((f:any)=>[f.title,f.description,f.recommendation,...(f.evidence||[]).flatMap((e:any)=>[e.section,e.element,e.detail])])].join(" ").toLowerCase();
+      const challenge=/verify you are human|checking your browser|security verification|performing security verification|cloudflare ray id|access denied|robot check|one more step|security service to protect itself|enable javascript and cookies to continue/.test(evidenceText);
+      if(challenge)throw new Error("Capture blocker: the screenshot appears to show a security or bot-verification page, not the intended homepage. Excluded from comparison.");
+      if(!page.screenshot||!page.screenshotWidth||!page.screenshotHeight)throw new Error("Audit has no valid screenshot evidence. Excluded from comparison.");
+      output[index]={name:entry.name,url:entry.url,mode:auditMode,auditId:typeof data.auditId==="string"?data.auditId:undefined,findings:page.findings};
      }catch(e){output[index]={name:entry.name,url:entry.url,mode:auditMode,findings:[],error:e instanceof Error?e.message:"Audit failed"};}
      setReports(output.filter((item)=>Boolean(item)) as Report[]);
     }
@@ -40,7 +47,8 @@ export default function BenchmarkPage(){
    const completed=output.filter((item)=>Boolean(item)) as Report[];
    if(completed.every(x=>x.error))throw new Error("None of the websites could be audited. Check capture access and OpenRouter configuration.");
    const success=completed.filter(x=>!x.error).length;
-   setStatus("Benchmark finished: "+success+" of "+entries.length+" sites audited in "+auditMode+" mode. Compare matched evidence; counts are not a quality score.");
+   const blocked=completed.length-success;
+   setStatus("Benchmark finished: "+success+" of "+entries.length+" sites audited in "+auditMode+" mode"+(blocked?"; "+blocked+" site(s) excluded because capture or validation failed":"")+". Compare matched evidence; counts are not a quality score.");
   }catch(e){setError(e instanceof Error?e.message:"Could not run benchmark.");}
   finally{setBusy(false);}
  }
