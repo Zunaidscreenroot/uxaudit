@@ -98,13 +98,15 @@ function normalizeVisualPass(value: unknown): VisualPass {
 function normalizeIssueText(value: string) { return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " "); }
 
 function inferredCategory(observation: VisualObservation): typeof CATEGORIES[number] {
+  // UX friction is multi-dimensional; order broad performance terms last so visual
+  // observations about CTA hierarchy do not get misclassified as performance issues.
   const text = normalizeIssueText([observation.section, observation.element, observation.issue, observation.whyItMatters].join(" "));
   if (/\b(responsive|responsiveness|mobile|viewport|breakpoint|horizontal overflow|clipped|off screen|screen width|stacked layout|touch target|thumb reach)\b/.test(text)) return "Responsiveness";
-  if (/\b(performance|slow|loading time|load time|latency|spinner|skeleton|loading state|unloaded|page speed|web vital|lcp|cls|inp)\b/.test(text)) return "Web performance";
   if (/\b(navigation|nav bar|navbar|menu|breadcrumb|sitemap|page not found|discoverability|discoverable|menu item|navigation item|tabs?)\b/.test(text)) return "Navigation";
-  if (/\b(form|button|click|tap|checkbox|radio button|stepper|input|dropdown|select control|interactive|interaction|disabled|error state|feedback|submit|login|sign in|control)\b/.test(text)) return "Usability & interaction";
-  if (/\b(copy|content|tone|wording|label|microcopy|text|sentence|description|instruction|ambiguous wording|unclear language|typo|grammar|readability|headline|duplicate copy)\b/.test(text)) return "Content & tone";
-  if (/\b(hierarchy|prioriti[sz]|prominence|competing|overload|grouping|grouped|clutter|scannability|scan|primary cta|secondary cta|information architecture|information overload|visual order)\b/.test(text)) return "Information hierarchy";
+  if (/\b(form|button|click|tap|checkbox|radio button|stepper|input|dropdown|select control|interactive|interaction|disabled|error state|feedback|submit|login|sign in|control|cta)\b/.test(text)) return "Usability & interaction";
+  if (/\b(copy|content|tone|wording|label|microcopy|text|sentence|description|instruction|ambiguous wording|unclear language|typo|grammar|readability|headline|duplicate copy|footnote|disclaimer)\b/.test(text)) return "Content & tone";
+  if (/\b(hierarchy|prioriti[sz]|prominence|competing|overload|grouping|grouped|clutter|scannability|scan|primary cta|secondary cta|information architecture|information overload|visual order|competing calls to action|visual competition)\b/.test(text)) return "Information hierarchy";
+  if (/\b(performance|slow|loading time|load time|latency|spinner|skeleton|loading state|unloaded|page speed|web vital|lcp|cls|inp|largest contentful paint)\b/.test(text)) return "Web performance";
   return "Visual design";
 }
 function categoryFor(value: unknown, observation?: VisualObservation): typeof CATEGORIES[number] {
@@ -215,8 +217,14 @@ function normalizeFinding(raw: unknown, observation: VisualObservation, index: n
   const descriptionValue = textValue(item.description, "");
   const description = !descriptionValue || normalizeIssueText(descriptionValue) === normalizeIssueText(title) || isRepeated(descriptionValue, prior, (finding) => finding.description) || /^(this issue|this finding|poor ux|visual design|high density|the design is poor)\b/i.test(descriptionValue) ? evidenceSpecificDescription(observation) : capWords(descriptionValue, 700);
   const recommendationValue = textValue(item.recommendation, "");
-  const recommendation = !recommendationValue || isRepeated(recommendationValue, prior, (finding) => finding.recommendation) || /^(improve the design|make it better|enhance usability|improve visual hierarchy|simplify the interface)[.! ]*$/i.test(recommendationValue) || /\b(use a specific heading, group supporting information nearby|reduce competing messages|improve visual hierarchy|make the design more consistent)\b/i.test(recommendationValue) ? evidenceSpecificRecommendation(observation, category) : capWords(recommendationValue, 850);
-  const businessDefaults = evidenceSpecificBusinessAnalysis(observation, category);
+  const recommendationLooksLikePerformance = /\b(core web vitals|largest contentful paint|\blcp\b|\bcls\b|\binp\b|page speed|loading time|load time|latency|defer non-critical|critical resources)\b/i.test(recommendationValue);
+  const issueLooksLikePerformance = /\b(slow|loading|load time|page speed|performance|latency|lcp|cls|inp|contentful paint|spinner|skeleton)\b/i.test([observation.section, observation.element, observation.issue, observation.whyItMatters].join(" "));
+  const categoryMismatch = category === "Web performance" && !issueLooksLikePerformance;
+  const unsupportedPerformanceAdvice = recommendationLooksLikePerformance && !issueLooksLikePerformance;
+  const inferred = inferredCategory(observation);
+  const resolvedCategory = categoryMismatch ? inferred : category;
+  const recommendation = !recommendationValue || isRepeated(recommendationValue, prior, (finding) => finding.recommendation) || /^(improve the design|make it better|enhance usability|improve visual hierarchy|simplify the interface)[.! ]*$/i.test(recommendationValue) || /\b(use a specific heading, group supporting information nearby|reduce competing messages|improve visual hierarchy|make the design more consistent)\b/i.test(recommendationValue) || unsupportedPerformanceAdvice ? evidenceSpecificRecommendation(observation, resolvedCategory) : capWords(recommendationValue, 850);
+  const businessDefaults = evidenceSpecificBusinessAnalysis(observation, resolvedCategory);
   function businessField(key: "funnelStage" | "impact" | "kpi" | "mechanism" | "suggestions"): any {
     const value = business[key];
     if (key === "suggestions") {
@@ -232,7 +240,7 @@ function normalizeFinding(raw: unknown, observation: VisualObservation, index: n
   return {
     id: textValue(item.id, "finding-" + (index + 1)),
     severity: severityFor(item.severity),
-    category, title, description, recommendation,
+    category: resolvedCategory, title, description, recommendation,
     // Keep good model-generated UX research as-is; only fill missing fields.
     uxPerspective: {
       law: textValue(ux.law, "Relevant UX principle"),
@@ -343,8 +351,31 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   }
   visualPass = { ...visualPass, observations: distinctObservations };
   const captureEvidence=[visualPass.pageSummary,...visualPass.observations.map(o=>o.issue+" "+o.element+" "+o.whyItMatters)].join(" ").toLowerCase();
-  const blockedCapturePatterns=[/err_tunnel_connection_failed/,/err_connection_(?:failed|timed_out|refused)/,/dns_probe_finished_nxdomain/,/this site can.t be reached/,/403 forbidden/,/access denied/,/verify you are human/,/checking your browser/,/cloudflare ray id/,/robot check/];
-  if(blockedCapturePatterns.some(pattern=>pattern.test(captureEvidence)))throw new Error("Screenshot capture appears to show a browser, proxy, CDN, or access-block page rather than the intended website. No UX findings were generated. Open the site in your normal browser and upload/paste a screenshot of the actual page.");
+  // A returned image is not sufficient proof that the intended page was captured.
+  // Refuse common browser/CDN/challenge interstitials rather than persisting false UX findings.
+  const blockedCapturePatterns=[
+    /err_tunnel_connection_failed/,
+    /err_connection_(?:failed|timed_out|refused)/,
+    /dns_probe_finished_nxdomain/,
+    /this site can.t be reached/,
+    /403 forbidden/,
+    /access denied/,
+    /verify you are human/,
+    /checking your browser/,
+    /cloudflare ray id/,
+    /robot check/,
+    /security verification/,
+    /performing security verification/,
+    /browser verification/,
+    /one more step/,
+    /complete the action below/,
+    /enable javascript and cookies to continue/,
+    /security service to protect itself from online attacks/
+  ];
+  const challengeSignals=blockedCapturePatterns.filter(pattern=>pattern.test(captureEvidence)).length;
+  if(challengeSignals>=2||blockedCapturePatterns.slice(0,10).some(pattern=>pattern.test(captureEvidence))){
+    throw new Error("Capture quality gate: screenshot appears to show a browser, proxy, CDN, bot-check, or security-verification interstitial instead of the intended website. This run was rejected and must not be used in a competitor comparison. Retry or provide a screenshot of the actual page.");
+  }
   onStage?.({ id: "analyse", label: "Image → text", detail: `${visualPass.clientName} · ${visualPass.observations.length} visual regions identified on the full screenshot.`, status: "complete" });
 
   const knowledgeQuery=[auditMode === "mobile" ? "mobile audit mobile viewport" : "desktop audit desktop viewport",visualPass.clientName,visualPass.pageSummary,...visualPass.observations.map(o=>[o.section,o.element,o.issue,o.whyItMatters].join(" "))].join(" ");

@@ -117,3 +117,145 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible{
 .iaShell .iaTabs,.iaShell .iaFooter,.iaShell .iaWarning{background:#171b17!important;color:#e9eee7!important;border-color:#30382d!important}
 .iaShell .iaWarning{border-left-color:#c7f36b!important}
 @media(max-width:700px){.kbNav{padding:0 18px!important}.kbHero{padding:42px 18px 30px!important}.kbHero h1{font-size:clamp(36px,10vw,54px)!important}.kbContent{padding:0 18px 54px!important}.analysisDetail{padding:16px!important}.auditRow{grid-template-columns:68px minmax(0,1fr) 20px!important;gap:10px!important;padding:12px!important}.analysisHeader{align-items:flex-start}.kbStat{padding-left:16px!important;min-width:76px!important}}
+
+
+/* UX Direct / IA Studio embed theme — shared teal + violet palette. */
+:root {
+  --ds-bg:#0a0d13;
+  --ds-sidebar:#0c1018;
+  --ds-panel:#10151f;
+  --ds-panel-2:#151c28;
+  --ds-line:#222c3b;
+  --ds-text:#f4f7fc;
+  --ds-muted:#8b99ae;
+  --ds-accent:#86f0d0;
+  --ds-violet:#a38bff;
+}
+.or-app[data-embedded="true"] {
+  --or-bg:var(--ds-bg);
+  --or-border:var(--ds-line);
+  background:var(--ds-bg)!important;
+  color:var(--ds-text)!important;
+  grid-template-columns:minmax(0,1fr)!important;
+  min-height:100vh;
+}
+.or-app[data-embedded="true"] .or-sidebar,
+.or-app[data-embedded="true"] .or-topbar,
+.or-app[data-embedded="true"] .or-footer {
+  display:none!important;
+}
+.or-app[data-embedded="true"] .or-main {
+  min-width:0;
+  background:var(--ds-bg)!important;
+  color:var(--ds-text)!important;
+}
+.or-app[data-embedded="true"] .or-content {
+  width:100%;
+  max-width:1440px;
+  margin:0 auto;
+  padding:28px clamp(18px,3vw,42px) 38px;
+}
+.or-app[data-embedded="true"] .or-content .or-welcome-row h1,
+.or-app[data-embedded="true"] .or-content h1,
+.or-app[data-embedded="true"] .or-content h2,
+.or-app[data-embedded="true"] .or-content h3,
+.or-app[data-embedded="true"] .or-content label,
+.or-app[data-embedded="true"] .or-content strong {
+  color:var(--ds-text)!important;
+}
+.or-app[data-embedded="true"] .or-start-card,
+.or-app[data-embedded="true"] .bm-competitor,
+.or-app[data-embedded="true"] .bm-report,
+.or-app[data-embedded="true"] .bm-caveat,
+.or-app[data-embedded="true"] .or-resume-card,
+.or-app[data-embedded="true"] .or-workflow-card,
+.or-app[data-embedded="true"] .or-bottom-note {
+  background:var(--ds-panel)!important;
+  border:1px solid var(--ds-line)!important;
+  box-shadow:none!important;
+  color:var(--ds-text)!important;
+}
+.or-app[data-embedded="true"] .or-start-card p,
+.or-app[data-embedded="true"] .or-section-heading p,
+.or-app[data-embedded="true"] .or-content .intro,
+.or-app[data-embedded="true"] .bm-competitor-heading p,
+.or-app[data-embedded="true"] .bm-run-row p,
+.or-app[data-embedded="true"] .bm-caveat p,
+.or-app[data-embedded="true"] .bm-finding p {
+  color:var(--ds-muted)!important;
+}
+.or-app[data-embedded="true"] .or-step-icon,
+.or-app[data-embedded="true"] .bm-competitor-index span,
+.or-app[data-embedded="true"] .bm-run-button,
+.or-app[data-embedded="true"] .or-text-link {
+  background:var(--ds-accent)!important;
+  border-color:var(--ds-accent)!important;
+  color:#0a1716!important;
+}
+.or-app[data-embedded="true"] .or-muted-chip {
+  background:var(--ds-panel-2)!important;
+  color:var(--ds-muted)!important;
+  border-color:var(--ds-line)!important;
+}
+.or-app[data-embedded="true"] .bm-form-grid input,
+.or-app[data-embedded="true"] .bm-competitor input,
+.or-app[data-embedded="true"] .or-url-control input {
+  background:#0c111a!important;
+  color:var(--ds-text)!important;
+  border-color:#344154!important;
+}
+.or-app[data-embedded="true"] .bm-form-grid input:focus,
+.or-app[data-embedded="true"] .bm-competitor input:focus,
+.or-app[data-embedded="true"] .or-url-control input:focus {
+  outline:2px solid var(--ds-violet)!important;
+  outline-offset:1px;
+}
+.or-app[data-embedded="true"] .bm-status {
+  background:#17182a!important;
+  border-color:#423968!important;
+  color:#c4b8ff!important;
+}
+.or-app[data-embedded="true"] .bm-error,
+.or-app[data-embedded="true"] .bm-report-error {
+  background:#291920!important;
+  border-color:#5b3442!important;
+  color:#ffb3c1!important;
+}
+.or-app[data-embedded="true"] .bm-severity.high {background:#2a1821!important}
+.or-app[data-embedded="true"] .bm-severity.medium {background:#282315!important}
+.or-app[data-embedded="true"] .bm-severity.low {background:#142720!important}
+.or-app[data-embedded="true"] .bm-finding {border-color:var(--ds-line)!important}
+.or-app[data-embedded="true"] .bm-caveat strong {color:#c4b8ff!important}
+.or-app[data-embedded="true"] :focus-visible {
+  outline:2px solid var(--ds-violet)!important;
+  outline-offset:3px;
+}
+@media(max-width:650px) {
+  .or-app[data-embedded="true"] .or-content {padding:22px 14px 28px}
+}
+
+/* Full audit page also hides the independent product chrome when framed by UX Direct. */
+.or-app[data-embedded="true"] .or-url-form label,
+.or-app[data-embedded="true"] .or-content label {
+  color:var(--ds-muted)!important;
+}
+.or-app[data-embedded="true"] .or-content .or-start-card-top h2 {
+  font-size:18px;
+  letter-spacing:-.3px;
+}
+.or-app[data-embedded="true"] .or-content .or-start-card-top p {
+  line-height:1.7;
+}
+.or-app[data-embedded="true"] .or-content .or-url-control {
+  background:var(--ds-bg)!important;
+  border-color:#344154!important;
+}
+.or-app[data-embedded="true"] .or-content .or-url-control input {
+  background:transparent!important;
+}
+.or-app[data-embedded="true"] .or-content .or-start-options>a {
+  border-color:var(--ds-line)!important;
+}
+.or-app[data-embedded="true"] .or-content .or-start-options>a:hover {
+  background:var(--ds-panel-2)!important;
+}
