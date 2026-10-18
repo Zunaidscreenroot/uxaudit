@@ -1,40 +1,46 @@
 html.uxaudit-embedded,
 html.uxaudit-embedded body {
   min-height: 100%;
-  background: #f7f6f1;
+  background: #0a0d13;
+  color: #e8edf5;
 }
-html.uxaudit-embedded body {
-  overflow-x: hidden;
-}
+html.uxaudit-embedded body { overflow-x: hidden; }
+html.uxaudit-embedded .uxd-sidebar,
+html.uxaudit-embedded .uxd-topbar,
+html.uxaudit-embedded .uxd-footer,
 html.uxaudit-embedded .or-sidebar,
 html.uxaudit-embedded .or-topbar,
 html.uxaudit-embedded .or-footer,
 html.uxaudit-embedded .nav,
 html.uxaudit-embedded .top-nav,
-html.uxaudit-embedded body > a[href="/knowledge-base"] {
+html.uxaudit-embedded .kbNav,
+html.uxaudit-embedded .iaNav {
   display: none !important;
 }
-html.uxaudit-embedded .or-app {
+html.uxaudit-embedded .uxd-shell {
   display: block !important;
   grid-template-columns: minmax(0, 1fr) !important;
   min-height: 100vh;
 }
+html.uxaudit-embedded .uxd-main,
 html.uxaudit-embedded .or-main {
   width: 100%;
   min-width: 0;
   min-height: 100vh;
+  background: transparent !important;
 }
+html.uxaudit-embedded .uxd-page-content,
 html.uxaudit-embedded .or-content {
   max-width: none !important;
-  padding: 24px clamp(16px, 3vw, 38px) 30px !important;
+  padding: 18px !important;
 }
 html.uxaudit-embedded .hero {
   max-width: none;
-  padding: 30px clamp(16px, 3vw, 38px) 28px;
+  padding: 20px 18px 18px;
 }
 html.uxaudit-embedded .results {
   max-width: none;
-  padding: 0 clamp(16px, 3vw, 38px) 40px;
+  padding: 0 18px 30px;
 }
 html.uxaudit-embedded .auditForm,
 html.uxaudit-embedded .uploadInfo,
@@ -42,17 +48,10 @@ html.uxaudit-embedded .uploadHint,
 html.uxaudit-embedded .uploadPreview {
   max-width: 100%;
 }
-html.uxaudit-embedded .reportTabs {
-  top: 8px;
-}
+html.uxaudit-embedded .reportTabs { top: 8px; }
 @media (max-width: 700px) {
-  html.uxaudit-embedded .or-content {
-    padding: 16px 12px 24px !important;
-  }
-  html.uxaudit-embedded .hero {
-    padding: 24px 12px 18px;
-  }
-  html.uxaudit-embedded .results {
-    padding: 0 12px 28px;
-  }
+  html.uxaudit-embedded .uxd-page-content,
+  html.uxaudit-embedded .or-content { padding: 12px !important; }
+  html.uxaudit-embedded .hero { padding: 16px 12px 14px; }
+  html.uxaudit-embedded .results { padding: 0 12px 20px; }
 }

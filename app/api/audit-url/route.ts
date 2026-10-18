@@ -1,33 +1,10 @@
-import { isIP } from "node:net";
-import { lookup } from "node:dns/promises";
+import { privateHost, resolvesToPrivateAddress } from "@/lib/public-url";
 import { createAuditFromScreenshot } from "@/lib/audit";
 import { captureWebsiteScreenshot } from "@/lib/capture-screenshot";
 import { saveAudit } from "@/lib/knowledge-base";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
-
-function privateHost(host: string) {
-  const h = host.toLowerCase().replace(/^\[|\]$/g, "");
-  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local")) return true;
-  const v = isIP(h);
-  if (v === 4) {
-    const [a, b] = h.split(".").map(Number);
-    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a >= 224;
-  }
-  return v === 6 && (h === "::1" || h.startsWith("fc") || h.startsWith("fd") || h.startsWith("fe80:"));
-}
-
-async function resolvesToPrivateAddress(host: string) {
-  if (isIP(host.replace(/^\[|\]$/g, ""))) return privateHost(host);
-  try {
-    const addresses = await lookup(host, { all: true, verbatim: true });
-    return !addresses.length || addresses.some((address) => privateHost(address.address));
-  } catch {
-    return true;
-  }
-}
 
 export async function POST(req: Request) {
   try {

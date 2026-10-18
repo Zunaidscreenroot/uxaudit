@@ -1,34 +1,11 @@
-import { isIP } from "node:net";
-import { lookup } from "node:dns/promises";
-import sharp from "sharp";
+import { inspectImage } from "@/lib/image-utils";
+import { privateHost, resolvesToPrivateAddress } from "@/lib/public-url";
 import { captureWebsiteScreenshot } from "@/lib/capture-screenshot";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 type AuditMode = "desktop" | "mobile";
-
-function privateHost(host: string) {
-  const h = host.toLowerCase().replace(/^\[|\]$/g, "");
-  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local")) return true;
-  const version = isIP(h);
-  if (version === 4) {
-    const [a, b] = h.split(".").map(Number);
-    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a >= 224;
-  }
-  return version === 6 && (h === "::1" || h.startsWith("fc") || h.startsWith("fd") || h.startsWith("fe80:"));
-}
-
-async function resolvesToPrivateAddress(host: string) {
-  if (isIP(host.replace(/^\[|\]$/g, ""))) return privateHost(host);
-  try {
-    const addresses = await lookup(host, { all: true, verbatim: true });
-    return !addresses.length || addresses.some((address) => privateHost(address.address));
-  } catch {
-    return true;
-  }
-}
 
 export async function POST(req: Request) {
   try {
@@ -69,23 +46,13 @@ export async function POST(req: Request) {
       throw new Error("The screenshot is empty or exceeds the 15 MB analysis limit.");
     }
 
-    const metadata = await sharp(raw).metadata();
-    if (!metadata.width || !metadata.height) throw new Error("Browserless returned an invalid screenshot.");
-    const boundedWidth = Math.min(metadata.width, viewport.width);
-    const boundedHeight = Math.min(metadata.height, 18000);
-    let image = sharp(raw);
-    if (boundedWidth !== metadata.width || boundedHeight !== metadata.height) {
-      image = image.extract({ left: 0, top: 0, width: boundedWidth, height: boundedHeight });
-    }
-    const bytes = await image.jpeg({ quality: 88, progressive: true }).toBuffer();
-    if (!bytes.length || bytes.length > 15 * 1024 * 1024) {
-      throw new Error("The responsive screenshot is too large to analyse. Try a shorter page or a smaller capture.");
-    }
-    const finalMetadata = await sharp(bytes).metadata();
-    const screenshot = "data:image/jpeg;base64," + bytes.toString("base64");
+    const image = inspectImage(raw);
+    if (!image.width || !image.height || image.width > 20000 || image.height > 20000) throw new Error("The screenshot dimensions are invalid or too large.");
+    const bytes = raw;
+    const screenshot = "data:" + image.mimeType + ";base64," + bytes.toString("base64");
     const title = url.pathname === "/" ? "Homepage" : (url.pathname.split("/").filter(Boolean).pop() || url.hostname).replace(/[-_]/g, " ");
     const result = {
-      screenshot, width: finalMetadata.width, height: finalMetadata.height, url: url.href,
+      screenshot, width: image.width, height: image.height, url: url.href,
       title, auditMode, viewportWidth: viewport.width, viewportHeight: viewport.height,
       viewport: { ...viewport, unit: "CSS px" },
       actualViewport: { innerWidth: viewport.width, innerHeight: viewport.height, devicePixelRatio: 1 },

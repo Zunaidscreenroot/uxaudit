@@ -1,4 +1,4 @@
-import sharp from "sharp";
+import { inspectImage } from "@/lib/image-utils";
 
 type CaptureOptions = { url: string; width: number; height: number };
 
@@ -29,7 +29,7 @@ export async function captureWebsiteScreenshot({ url, width, height }: CaptureOp
       if (response.ok && type.startsWith("image/")) {
         const bytes = Buffer.from(await response.arrayBuffer());
         if (bytes.length > 0 && bytes.length <= 15 * 1024 * 1024) {
-          await sharp(bytes).metadata();
+          inspectImage(bytes);
           return { bytes, provider: "browserless" as const };
         }
         errors.push("Browserless returned an empty or oversized image");
@@ -58,7 +58,7 @@ export async function captureWebsiteScreenshot({ url, width, height }: CaptureOp
     if (response.ok && type.startsWith("image/")) {
       const bytes = Buffer.from(await response.arrayBuffer());
       if (bytes.length > 0 && bytes.length <= 15 * 1024 * 1024) {
-        await sharp(bytes).metadata();
+        inspectImage(bytes);
         return { bytes, provider: "thum.io" as const };
       }
       errors.push("thum.io returned an empty or oversized image");
