@@ -93,3 +93,27 @@ html,body{background:#101310!important;color:#e9eee7!important}
 .iaRemediationPage button{border-color:#394235!important}
 input,textarea,select{accent-color:#c7f36b}
 a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid #c7f36b!important;outline-offset:2px}
+
+
+/* Consistent dark/lime design tokens for knowledge-base and IA inline surfaces */
+.kbShell{background:#101310!important;color:#e9eee7!important}
+.kbNav{background:rgba(11,13,11,.96)!important;border-color:#2a3029!important}
+.kbBrand,.kbBack,.kbSectionHead h2,.kbHero h1,.kbStat strong,.clientCard h3,.auditMain h3,.analysisHeader h2,.analysisDetail>h2,.storedScreenshotHead h3{color:#f1f5ed!important}
+.kbHero p,.kbStat span,.kbSectionHead>div span,.kbSectionHead>span,.auditDate span,.auditMain p,.analysisHeader p,.analysisStats span,.analysisStats em,.detailGrid p,.detailGrid ul,.storedScreenshotHead small,.storedEvidence span{color:#a3ada0!important}
+.kbEyebrow{background:#c7f36b!important;color:#101310!important}
+.clientCard,.auditRow,.analysisDetail,.findingIndex,.detailGrid section,.kbEmpty,.kbLoading,.kbError,.storedEvidence,.detailRecommendation{background:#171b17!important;color:#e9eee7!important;border-color:#30382d!important;box-shadow:none!important}
+.clientInitial,.indexDot{background:#c7f36b!important;color:#101310!important}
+.findingIndex button.active,.findingIndex button:hover{background:#20271d!important}
+.detailGrid section:nth-child(2){background:#1d241a!important;border-color:#46523f!important}
+.detailRecommendation{border-left-color:#c7f36b!important}
+.kbError{border-color:#8b4941!important;color:#ffb8ad!important}
+.kbLoading{color:#c7f36b!important}
+.kbBrand span{color:#a3ada0!important}
+.iaShell article,.iaShell section,.iaShell aside{color:#e9eee7}
+.iaShell article[style*="background: rgb(255, 255, 255)"],.iaShell section[style*="background: rgb(255, 255, 255)"],.iaShell article[style*="background: rgb(248, 250, 252)"],.iaShell section[style*="background: rgb(248, 250, 252)"]{background:#171b17!important;border-color:#30382d!important}
+.iaShell input,.iaShell textarea,.iaShell select{background:#101310!important;color:#e9eee7!important;border-color:#394235!important}
+.iaShell button{color:#e9eee7}
+.iaShell .iaBtn,.iaShell .iaTab.on{background:#c7f36b!important;color:#101310!important;border-color:#c7f36b!important}
+.iaShell .iaTabs,.iaShell .iaFooter,.iaShell .iaWarning{background:#171b17!important;color:#e9eee7!important;border-color:#30382d!important}
+.iaShell .iaWarning{border-left-color:#c7f36b!important}
+@media(max-width:700px){.kbNav{padding:0 18px!important}.kbHero{padding:42px 18px 30px!important}.kbHero h1{font-size:clamp(36px,10vw,54px)!important}.kbContent{padding:0 18px 54px!important}.analysisDetail{padding:16px!important}.auditRow{grid-template-columns:68px minmax(0,1fr) 20px!important;gap:10px!important;padding:12px!important}.analysisHeader{align-items:flex-start}.kbStat{padding-left:16px!important;min-width:76px!important}}
