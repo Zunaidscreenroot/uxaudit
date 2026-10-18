@@ -16,7 +16,7 @@ function connectionString(): string {
 }
 
 /** Use Neon's HTTP serverless driver; do not keep a WebSocket/Pool alive between Worker requests. */
-export async function queryDb<T extends Row = Row>(query: string, parameters: unknown[] = []): Promise<T[]> {
+export async function queryDb<T = Row>(query: string, parameters: unknown[] = []): Promise<T[]> {
   const sql = neon(connectionString());
   return await sql.query(query, parameters) as T[];
 }
