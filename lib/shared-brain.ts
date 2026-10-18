@@ -54,7 +54,7 @@ export async function sharedBrainRequest<T = any>(action: string, payload: Recor
 }
 
 export async function retrieveSharedBrainContext(query: string, options: {
-  scopeKey?: SharedBrainScope; limit?: number; maxContextChars?: number; includeKnowledge?: boolean;
+  scopeKey?: SharedBrainScope; relatedScopes?: SharedBrainScope[]; limit?: number; maxContextChars?: number; includeKnowledge?: boolean;
 } = {}) {
   if (!config()) return { available: false, context: "", memoryCount: 0, knowledgeCount: 0, retrievalMode: "not-configured" as const };
   try {
@@ -64,6 +64,7 @@ export async function retrieveSharedBrainContext(query: string, options: {
     }>("retrieve", {
       query: query.slice(0, 4000),
       scopeKey: options.scopeKey || inferSharedBrainScope(query),
+      relatedScopes: options.relatedScopes || [],
       maxResults: Math.max(1, Math.min(10, options.limit || 6)),
       maxContextChars: Math.max(300, Math.min(5000, options.maxContextChars || 2800)),
       includeKnowledge: options.includeKnowledge !== false,
