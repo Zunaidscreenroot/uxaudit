@@ -23,5 +23,5 @@ jobs:
         run: npm ci
       - name: Type-check server and client code
         run: npx tsc --noEmit
-      - name: Build for Cloudflare Workers
-        run: npm run build
+      - name: Build and bundle for Cloudflare Workers
+        run: npx opennextjs-cloudflare build
