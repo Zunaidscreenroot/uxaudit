@@ -18,6 +18,19 @@ const nextConfig = {
       ],
     };
   },
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          {
+            key: "Content-Security-Policy",
+            value: "frame-ancestors 'self' https://ux-direct.zunaid-cb7.workers.dev",
+          },
+        ],
+      },
+    ];
+  },
   experimental: {
     // Externalize Chromium so Next/Webpack preserves the package's runtime path.
     serverComponentsExternalPackages: ["@sparticuz/chromium", "puppeteer-core"],
