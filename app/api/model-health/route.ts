@@ -1,3 +1,5 @@
+import { getRuntimeEnv } from "@/lib/neon-db";
+
 export const runtime = "nodejs";
 export const maxDuration = 20;
 type Provider = "OpenRouter" | "Gemini";
@@ -24,7 +26,8 @@ async function getJson(url:string,headers:Record<string,string>) {
  const payload=await response.json().catch(()=>({})); return {response,payload};
 }
 export async function GET() {
- const orKey=process.env.OPENROUTER_API_KEY, gemKey=process.env.GEMINI_API_KEY;
+ const runtimeEnv = getRuntimeEnv();
+ const orKey = runtimeEnv.OPENROUTER_API_KEY?.trim(), gemKey = runtimeEnv.GEMINI_API_KEY?.trim();
  let orConnected=false, orError:string|null=null, catalog=new Map<string,CatalogItem>();
  if(orKey) try { const {response,payload}=await getJson("https://openrouter.ai/api/v1/models",{Authorization:`Bearer ${orKey}`});
  if(response.ok&&Array.isArray(payload?.data)){orConnected=true;catalog=new Map((payload.data as CatalogItem[]).filter(m=>typeof m.id==="string").map(m=>[m.id!,m]));}
@@ -52,7 +55,7 @@ export async function POST(request:Request) {
  if(!MODELS.some(m=>m.model===model&&m.provider===provider))return Response.json({error:"Choose a model from the configured list."},{status:400});
  const started=Date.now();
  if(provider==="OpenRouter"){
- const key=process.env.OPENROUTER_API_KEY;if(!key)return Response.json({error:"OPENROUTER_API_KEY is not configured."},{status:503});
+ const key=getRuntimeEnv().OPENROUTER_API_KEY?.trim();if(!key)return Response.json({error:"OPENROUTER_API_KEY is not configured."},{status:503});
  let response:Response|undefined,result:any={},attempts=0;
  for(let attempt=0;attempt<2;attempt++){
   attempts=attempt+1;
@@ -74,7 +77,7 @@ export async function POST(request:Request) {
  usage:{promptTokens:usage.prompt_tokens??null,completionTokens:usage.completion_tokens??null,totalTokens:usage.total_tokens??null,costUsd:usage.cost??null},
  attempts,note:"One short text-only prompt was sent. Paid models may incur a small charge; no screenshot is used."},{headers:{"Cache-Control":"no-store"}});
  }
- const key=process.env.GEMINI_API_KEY;if(!key)return Response.json({error:"GEMINI_API_KEY is not configured."},{status:503});
+ const key=getRuntimeEnv().GEMINI_API_KEY?.trim();if(!key)return Response.json({error:"GEMINI_API_KEY is not configured."},{status:503});
  const response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,{method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":key},
  body:JSON.stringify({contents:[{role:"user",parts:[{text:"Reply with exactly: OK"}]}],generationConfig:{maxOutputTokens:8,temperature:0}}),signal:AbortSignal.timeout(12000),cache:"no-store"});
  const result=await response.json().catch(()=>({}));if(!response.ok)return Response.json({model,provider,status:"error",latencyMs:Date.now()-started,error:`HTTP ${response.status}: ${result?.error?.message??"Provider request failed"}`});
