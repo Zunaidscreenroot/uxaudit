@@ -46,16 +46,15 @@ const toolDefinitions = [
       feedbackKind: { type: "string", enum: ["general", "false_positive", "missed_issue", "severity_calibration", "recommendation_quality", "duplicate_finding", "benchmarking", "scope", "visual_evidence", "accessibility", "other"], description: "Classify what the correction addresses." },
       sourceAuditId: { type: "string", maxLength: 120, description: "Optional identifier for the saved audit that motivated this lesson." },
       sourceFindingTitle: { type: "string", maxLength: 240, description: "Optional title of the finding being corrected." },
-      activate: { type: "boolean", description: "Set true only when the user explicitly approves immediate activation. Otherwise leave unset or false to save a draft." }
     }, required: ["rawFeedback", "title", "rule"], additionalProperties: false } },
   { name: "uxaudit_list_coaching_lessons", title: "List coaching lessons", requiredScope: "audit:coach", annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-    description: "Review stored UX Audit coaching lessons and their status. Draft lessons do not affect audits; only approved lessons are active.",
+    description: "List UX Audit-originated coaching records in UX Direct’s shared brain, including drafts and approval status. This is not a separate UX Audit memory store.",
     inputSchema: { type: "object", properties: {
       status: { type: "string", enum: ["all", "draft", "approved", "rejected", "archived"] },
       limit: { type: "integer", minimum: 1, maximum: 100 }
     }, additionalProperties: false } },
   { name: "uxaudit_review_coaching_lesson", title: "Approve or archive a coaching lesson", requiredScope: "audit:coach", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-    description: "Approve a draft lesson so it can guide future audits, reject it, or archive an approved rule. This changes the stored learning status but does not update model weights.",
+    description: "Approve/reject/archive the corresponding UX Audit-originated lesson in UX Direct’s shared brain. Approval makes it retrievable to any product within the lesson’s approved scope; it does not fine-tune model weights.",
     inputSchema: { type: "object", properties: {
       lessonId: { type: "string", description: "UUID returned by UX Audit when the lesson was saved." },
       action: { type: "string", enum: ["approve", "reject", "archive"] },
