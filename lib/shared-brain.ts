@@ -10,10 +10,13 @@ function config() {
 }
 
 export function inferSharedBrainScope(query: string): SharedBrainScope {
-  if (/\b(express computers|express-computers)\b/i.test(query)) return "EXPRESS_COMPUTERS";
-  if (/\b(dmi|dmi hfc|dmi finance)\b/i.test(query)) return "DMI_HFC";
-  if (/\b(ujjivan|ujjivan sfb)\b/i.test(query)) return "UJJIVAN_SFB";
-  if (/\b(bfsi|bank|banking|finance|financial services|insurance|nbfc|lender|loan|credit|upi|deposit|wealth|indian)\b/i.test(query)) return "INDIA_BFCI_SHARED";
+  const value = query.toLowerCase();
+  if (/\b(express computers|express-computers)\b/i.test(value)) return "EXPRESS_COMPUTERS";
+  if (/\b(dmi|dmi hfc|dmi finance|dmi housing finance)\b/i.test(value)) return "DMI_HFC";
+  if (/\b(ujjivan|ujjivan sfb|ujjivan small finance)\b/i.test(value)) return "UJJIVAN_SFB";
+  const indianSignals = /\b(bfsi|rbi|indian bank|indian banking|india banking|india bfsi|upi|ifsc|aadhaar|aadhar|pan card|nbfc|sfb|small finance bank)\b|\.in(?:[/:?#]|$)|₹/i.test(value);
+  const financialSignals = /\b(bank|banking|finance|financial services|insurance|lender|loan|credit|deposit|wealth)\b/i.test(value);
+  if ((indianSignals && financialSignals) || /\b(bfsi|rbi|upi|ifsc|nbfc|sfb|small finance bank)\b/i.test(value)) return "INDIA_BFCI_SHARED";
   return "UX_AUDIT";
 }
 
