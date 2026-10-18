@@ -42,7 +42,7 @@ const toolDefinitions = [
       scope: { type: "string", maxLength: 160, description: "Where this should apply, e.g. all audits, Indian BFSI websites, mobile layouts, or CTA hierarchy." },
       keywords: { type: "array", items: { type: "string", maxLength: 40 }, maxItems: 12 },
       examples: { type: "array", items: { type: "string", maxLength: 180 }, maxItems: 4 },
-      sourceLanguage: { type: "string", maxLength: 40, description: "Language of the original feedback, e.g. Hindi, Hinglish, English." },
+      sourceLanguage: { type: "string", maxLength: 32, description: "Language of the original feedback, e.g. Hindi, Hinglish, English." },
       feedbackKind: { type: "string", enum: ["general", "false_positive", "missed_issue", "severity_calibration", "recommendation_quality", "duplicate_finding", "benchmarking", "scope", "visual_evidence", "accessibility", "other"], description: "Classify what the correction addresses." },
       sourceAuditId: { type: "string", description: "Optional UUID from the auditId field returned by UX Audit. Do not pass an MCP sessionId here." },
       sourceFindingTitle: { type: "string", maxLength: 240, description: "Optional title of the finding being corrected." },
