@@ -19,6 +19,9 @@ export type CoachLearning = {
   approved_at: string | null;
   usage_count: number;
   last_used_at: string | null;
+  feedback_kind: string;
+  source_audit_id: string | null;
+  source_finding_title: string | null;
 };
 
 function config() {
@@ -77,11 +80,19 @@ export async function saveCoachingLesson(input: {
   examples?: unknown;
   sourceLanguage?: unknown;
   sourceType?: unknown;
+  feedbackKind?: unknown;
+  sourceAuditId?: unknown;
+  sourceFindingTitle?: unknown;
   activate?: unknown;
 }) {
   const now = new Date().toISOString();
   const activate = input.activate === true;
   const examples = Array.isArray(input.examples) ? input.examples.slice(0, 8) : [];
+  const sourceAuditId = limitedText(input.sourceAuditId, 64, "sourceAuditId");
+  if (sourceAuditId && !isUuid(sourceAuditId)) throw new Error("sourceAuditId must be a valid audit UUID.");
+  const feedbackKind = limitedText(input.feedbackKind, 40, "feedbackKind") || "general";
+  const allowedFeedbackKinds = ["general", "false_positive", "missed_issue", "severity_calibration", "recommendation_quality", "duplicate_finding", "benchmarking", "scope", "visual_evidence", "accessibility", "other"];
+  if (!allowedFeedbackKinds.includes(feedbackKind)) throw new Error("feedbackKind is not a supported coaching category.");
   const row = {
     raw_feedback: limitedText(input.rawFeedback, 8000, "rawFeedback", true),
     title: limitedText(input.title, 180, "title", true),
@@ -92,6 +103,9 @@ export async function saveCoachingLesson(input: {
     examples,
     source_language: limitedText(input.sourceLanguage, 40, "sourceLanguage") || "unknown",
     source_type: limitedText(input.sourceType, 40, "sourceType") || "chatgpt_voice",
+    feedback_kind: feedbackKind,
+    source_audit_id: sourceAuditId || null,
+    source_finding_title: limitedText(input.sourceFindingTitle, 240, "sourceFindingTitle") || null,
     status: activate ? "approved" : "draft",
     approved_at: activate ? now : null,
     updated_at: now,
@@ -110,7 +124,7 @@ export async function listCoachingLessons(status: string = "all", limit = 50) {
   const allowed: CoachLearningStatus[] = ["draft", "approved", "rejected", "archived"];
   const normalizedStatus = status === "all" ? "all" : allowed.includes(status as CoachLearningStatus) ? status : "all";
   const safeLimit = Math.max(1, Math.min(100, Number.isFinite(limit) ? Math.floor(limit) : 50));
-  const columns = "id,raw_feedback,title,rule,rationale,scope,keywords,examples,source_language,source_type,status,review_note,created_at,updated_at,approved_at,usage_count,last_used_at";
+  const columns = "id,raw_feedback,title,rule,rationale,scope,keywords,examples,source_language,source_type,feedback_kind,source_audit_id,source_finding_title,status,review_note,created_at,updated_at,approved_at,usage_count,last_used_at";
   const filter = normalizedStatus === "all" ? "" : `&status=eq.${normalizedStatus}`;
   const result = await supabaseRequest(
     `ux_coach_learnings?select=${columns}${filter}&order=updated_at.desc&limit=${safeLimit}`,
