@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { getRuntimeEnv, type R2BucketLike } from "@/lib/neon-db";
 
 const ASSET_PREFIX = "uxaudit/audits/";
