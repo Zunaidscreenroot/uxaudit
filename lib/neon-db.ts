@@ -20,7 +20,12 @@ export type RuntimeEnv = Record<string, unknown> & {
   NEON_DATABASE_URL?: string;
   DATABASE_URL?: string;
   OPENROUTER_API_KEY?: string;
+  OPENROUTER_MANAGEMENT_KEY?: string;
+  GEMINI_API_KEY?: string;
+  DAILY_BUDGET_INR?: string;
   BROWSERLESS_API_TOKEN?: string;
+  UXAUDIT_MCP_LOGIN_CODE?: string;
+  UXAUDIT_MCP_OAUTH_SECRET?: string;
   UX_SHARED_ASSETS?: R2BucketLike;
 };
 
