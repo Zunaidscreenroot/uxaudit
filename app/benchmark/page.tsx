@@ -2,8 +2,8 @@
 import { useEffect, useState } from "react";
 type Finding={severity:string;category:string;title:string;recommendation:string;};
 type Report={name:string;url:string;findings:Finding[];error?:string;};
-const initial=[{name:"Competitor 1",url:""},{name:"Competitor 2",url:""},{name:"Competitor 3",url:""}];
-const inputStyle={width:"100%",boxSizing:"border-box" as const,border:"1px solid #e1e4eb",borderRadius:8,padding:"11px 12px",fontSize:13,background:"#fff",color:"#242833",outlineColor:"#7565e8"};
+const initial=[{name:"AU Small Finance Bank",url:"https://www.aubank.in/"},{name:"Equitas Small Finance Bank",url:"https://www.equitasbank.com/"},{name:"Jana Small Finance Bank",url:"https://www.janabank.com/"}];
+const inputStyle={width:"100%",boxSizing:"border-box" as const,border:"1px solid #e1e4eb",borderRadius:8,padding:"11px 12px",fontSize:13,background:"#fff",color:"#242833",outlineColor:"#c7f36b"};
 function normalizeUrl(raw:string){const s=raw.trim();if(!s)return "";const u=new URL(/^https?:\/\//i.test(s)?s:"https://"+s);if(!["http:","https:"].includes(u.protocol))throw new Error("Use a public HTTP or HTTPS website.");return u.origin;}
 export default function BenchmarkPage(){
  const [connection,setConnection]=useState<{connected:boolean;error?:string}|null>(null);const [clientName,setClientName]=useState("Ujjivan Small Finance Bank");const [clientUrl,setClientUrl]=useState("https://www.ujjivansfb.in/");const [competitors,setCompetitors]=useState(initial);const [busy,setBusy]=useState(false);const [status,setStatus]=useState("");const [error,setError]=useState("");const [reports,setReports]=useState<Report[]>([]);
