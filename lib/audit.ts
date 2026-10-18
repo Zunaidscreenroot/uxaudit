@@ -356,9 +356,9 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
     if (!duplicate) distinctObservations.push(observation);
   }
   visualPass = { ...visualPass, observations: distinctObservations };
-  const captureEvidence=[visualPass.pageSummary,...visualPass.observations.map(o=>o.issue+" "+o.element+" "+o.whyItMatters)].join(" ").toLowerCase();
-  // A returned image is not sufficient proof that the intended page was captured.
-  // Refuse common browser/CDN/challenge interstitials rather than persisting false UX findings.
+  const captureEvidence=[visualPass.clientName,visualPass.pageSummary,...visualPass.observations.flatMap(o=>[o.section,o.element,o.issue,o.whyItMatters])].join(" ").toLowerCase();
+  // Reject likely bot-challenge pages even when the vision model describes them as a valid UI.
+  // Include image-shape signals for interstitials that do not expose recognizable body copy.
   const blockedCapturePatterns=[
     /err_tunnel_connection_failed/,
     /err_connection_(?:failed|timed_out|refused)/,
@@ -376,10 +376,19 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
     /one more step/,
     /complete the action below/,
     /enable javascript and cookies to continue/,
-    /security service to protect itself from online attacks/
+    /security service to protect itself from online attacks/,
+    /challenge-platform/,
+    /cf-chl-/,
+    /attention required/,
+    /just a moment/,
+    /unusual traffic/,
+    /request id.{0,30}security/
   ];
   const challengeSignals=blockedCapturePatterns.filter(pattern=>pattern.test(captureEvidence)).length;
-  if(challengeSignals>=2||blockedCapturePatterns.slice(0,10).some(pattern=>pattern.test(captureEvidence))){
+  const weakBrowserSignals=(/unknown client/.test(captureEvidence)?1:0)+(/verification|captcha|challenge|checking your browser|ray id|request id/.test(captureEvidence)?1:0);
+  const knownInterstitial=blockedCapturePatterns.some(pattern=>pattern.test(captureEvidence));
+  const structuralInterstitital=visualPass.observations.length>0 && /security verification|checking your browser|attention required|verify you are human|captcha|bot protection|access denied/.test(captureEvidence);
+  if(knownInterstitial||challengeSignals>=2||structuralInterstitital){
     throw new Error("Capture quality gate: screenshot appears to show a browser, proxy, CDN, bot-check, or security-verification interstitial instead of the intended website. This run was rejected and must not be used in a competitor comparison. Retry or provide a screenshot of the actual page.");
   }
   onStage?.({ id: "analyse", label: "Image → text", detail: `${visualPass.clientName} · ${visualPass.observations.length} visual regions identified on the full screenshot.`, status: "complete" });
