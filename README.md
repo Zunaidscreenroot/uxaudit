@@ -11,6 +11,17 @@ AI-assisted UX auditing platform for turning website experiences into prioritize
 - Saved IA sessions, findings, and improved IA proposals
 - Remote MCP server with OAuth authorization for ChatGPT-compatible clients
 
+## Shared UX Brain
+
+UX Audit uses the persistent shared brain hosted by UX Direct, also used by the UX Direct planner and Figma plugin. Coaching is a backend/MCP operation: ChatGPT interprets natural-language or Hindi/Hinglish feedback, saves the original plus a normalized lesson as a draft, and activates it only after explicit approval. There is no Coach & Learn frontend page.
+
+- Shared source-backed guidance and approved reusable rules are retrieved with a bounded context budget before UX reasoning.
+- Keyword retrieval is always available; vector retrieval is opt-in when a shared embedding provider is configured.
+- Scope defaults distinguish general UX from Indian BFSI and named projects (DMI HFC / Ujjivan SFB).
+- Client screenshots and saved client-specific findings remain in **Past findings**. They may be examples for the relevant client/audit, but are never automatically promoted into global product memory.
+- Current screenshot evidence remains mandatory; memory does not prove a finding, legal violation, WCAG conformance, or measured business impact.
+- UX Audit server-side environment variables: `UX_SHARED_BRAIN_URL=https://uxdirect.netlify.app/api/brain` and `UX_DIRECT_BRAIN_API_KEY`. Keep the key secret; never add either secret material or service-role credentials to browser/extension bundles.
+
 ## Remote MCP connection
 
 Production MCP endpoint:
