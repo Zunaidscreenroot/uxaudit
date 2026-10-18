@@ -30,7 +30,7 @@ export default function KnowledgeBasePage() {
       const response = await fetch("/api/knowledge-base", { cache: "no-store" });
       const data = await response.json(); if (!response.ok) throw new Error(data.error || "Could not load clients.");
       setClients(data.clients || []);
-    } catch (err) { setError(err instanceof Error ? err.message : "Could not load the knowledge base."); }
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not load Past Findings."); }
     finally { setLoading(false); }
   }
 
@@ -60,11 +60,11 @@ export default function KnowledgeBasePage() {
   const highCount = useMemo(() => audit?.findings.filter((item) => item.finding.severity === "high").length || 0, [audit]);
 
   return <main className="kbShell">
-    <header className="kbNav"><a href="/" className="kbBrand">UX Audit <span>by ScreenRoot</span></a><a href="/coach" className="kbBack">✦ Coach &amp; Learn</a><a href="/" className="kbBack">← New audit</a></header>
-    <section className="kbHero"><div><div className="kbEyebrow">Knowledge base</div><h1>Client findings, kept in one place.</h1><p>Every completed audit is stored against the detected client name. Browse previous analyses by client, audit date and individual finding.</p></div><div className="kbStat"><strong>{clients.length}</strong><span>clients</span></div></section>
+    <header className="kbNav"><a href="/" className="kbBrand">UX Audit <span>by ScreenRoot</span></a><a href="/" className="kbBack">← New audit</a></header>
+    <section className="kbHero"><div><div className="kbEyebrow">Past Findings</div><h1>Client findings, kept in one place.</h1><p>Every completed audit is stored against the detected client name. Browse previous analyses by client, audit date and individual finding.</p></div><div className="kbStat"><strong>{clients.length}</strong><span>clients</span></div></section>
 
     {error && <div className="kbError">{error}</div>}
-    {loading && <div className="kbLoading">Loading knowledge base…</div>}
+    {loading && <div className="kbLoading">Loading Past Findings…</div>}
 
     {!loading && !selectedClient && <section className="kbContent"><div className="kbSectionHead"><div><span>Clients</span><h2>Choose a client</h2></div><span>{clients.length} total</span></div><div className="clientGrid">{clients.map((client) => <button className="clientCard" key={client.id} onClick={() => void openClient(client)}><div className="clientInitial">{client.name.slice(0, 1).toUpperCase()}</div><div><h3>{client.name}</h3><p>View audit history →</p></div></button>)}{!clients.length && <div className="kbEmpty">No audits have been stored yet. Run your first screenshot audit and it will appear here.</div>}</div></section>}
 

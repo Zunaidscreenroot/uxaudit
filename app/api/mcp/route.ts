@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { getMcpIssuer, verifyMcpPayload } from "../../../lib/mcp-oauth";
-import { listCoachingLessons, reviewCoachingLesson, saveCoachingLesson } from "@/lib/coach-learning";
+import { listSharedBrainFeedback, reviewSharedBrainFeedback, saveSharedBrainFeedback, mapBrainScope } from "@/lib/ux-direct-brain";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,29 +33,28 @@ const toolDefinitions = [
     description: "Get concise findings from a saved IA session: severity, category, issue, recommendation, UX research and business analysis. Omits screenshot payloads.",
     inputSchema: { type: "object", properties: { sessionId: { type: "string", description: "UUID returned by UX Audit." }, pageUrl: { type: "string", description: "Optional URL filter." } }, required: ["sessionId"], additionalProperties: false } },
   { name: "uxaudit_save_coaching_lesson", title: "Save a coaching lesson", requiredScope: "audit:coach", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-    description: "Turn user feedback, including Hindi/Hinglish voice transcripts, into one concise reusable UX Audit rule. Classify the correction, preserve the raw feedback, and attach audit/finding context when available. If an earlier approved rule is explicitly reported as ineffective or wrong, list and archive that rule before approving its replacement. Save as a draft by default; activate only when the user explicitly approves it. Only approved rules and short optional examples are retrieved during later audits.",
+    description: "Internal coaching operation: when the owner explains a correction in Hindi, Hinglish, voice transcript or English, ChatGPT should interpret it and distil a concise reusable rule without asking the owner to use a special prompt. Save through UX Direct’s shared brain and preserve the original words. Draft by default; never approve unless the owner explicitly asks.",
     inputSchema: { type: "object", properties: {
       rawFeedback: { type: "string", maxLength: 8000, description: "The original user feedback, preserving their wording and language." },
       title: { type: "string", maxLength: 180, description: "Short English title for the reusable lesson." },
       rule: { type: "string", maxLength: 1400, description: "Concise, actionable rule that the UX Audit system should follow." },
       rationale: { type: "string", maxLength: 1000, description: "Why the rule matters." },
-      scope: { type: "string", maxLength: 160, description: "Where this should apply, e.g. all audits, Indian BFSI websites, mobile layouts, or CTA hierarchy." },
+      scope: { type: "string", enum: ["all audits", "Indian BFSI websites", "UX Audit", "UX Direct", "DMI Finance", "Ujjivan Small Finance Bank", "Express Computers"], description: "Human-readable learning scope; mapped to a protected shared-brain scope." },
       keywords: { type: "array", items: { type: "string", maxLength: 60 }, maxItems: 20 },
       examples: { type: "array", items: { type: "string" }, maxItems: 8 },
       sourceLanguage: { type: "string", maxLength: 40, description: "Language of the original feedback, e.g. Hindi, Hinglish, English." },
       feedbackKind: { type: "string", enum: ["general", "false_positive", "missed_issue", "severity_calibration", "recommendation_quality", "duplicate_finding", "benchmarking", "scope", "visual_evidence", "accessibility", "other"], description: "Classify what the correction addresses." },
-      sourceAuditId: { type: "string", description: "Optional UUID from the auditId field returned by UX Audit. Do not pass an MCP sessionId here." },
+      sourceAuditId: { type: "string", maxLength: 120, description: "Optional identifier for the saved audit that motivated this lesson." },
       sourceFindingTitle: { type: "string", maxLength: 240, description: "Optional title of the finding being corrected." },
-      activate: { type: "boolean", description: "Set true only when the user explicitly approves immediate activation. Otherwise leave unset or false to save a draft." }
     }, required: ["rawFeedback", "title", "rule"], additionalProperties: false } },
   { name: "uxaudit_list_coaching_lessons", title: "List coaching lessons", requiredScope: "audit:coach", annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-    description: "Review stored UX Audit coaching lessons and their status. Draft lessons do not affect audits; only approved lessons are active.",
+    description: "List UX Audit-originated coaching records in UX Direct’s shared brain, including drafts and approval status. This is not a separate UX Audit memory store.",
     inputSchema: { type: "object", properties: {
       status: { type: "string", enum: ["all", "draft", "approved", "rejected", "archived"] },
       limit: { type: "integer", minimum: 1, maximum: 100 }
     }, additionalProperties: false } },
   { name: "uxaudit_review_coaching_lesson", title: "Approve or archive a coaching lesson", requiredScope: "audit:coach", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-    description: "Approve a draft lesson so it can guide future audits, reject it, or archive an approved rule. This changes the stored learning status but does not update model weights.",
+    description: "Approve/reject/archive the corresponding UX Audit-originated lesson in UX Direct’s shared brain. Approval makes it retrievable to any product within the lesson’s approved scope; it does not fine-tune model weights.",
     inputSchema: { type: "object", properties: {
       lessonId: { type: "string", description: "UUID returned by UX Audit when the lesson was saved." },
       action: { type: "string", enum: ["approve", "reject", "archive"] },
@@ -182,53 +181,64 @@ async function runTool(name: string, args: any, request: Request) {
 
 
   if (name === "uxaudit_save_coaching_lesson") {
-    const saved = await saveCoachingLesson({
-      rawFeedback: args.rawFeedback, title: args.title, rule: args.rule,
-      rationale: args.rationale, scope: args.scope, keywords: args.keywords,
-      examples: args.examples, sourceLanguage: args.sourceLanguage,
-      feedbackKind: args.feedbackKind, sourceAuditId: args.sourceAuditId,
-      sourceFindingTitle: args.sourceFindingTitle,
-      sourceType: "chatgpt_mcp", activate: args.activate,
+    const saved = await saveSharedBrainFeedback({
+      rawFeedback: typeof args.rawFeedback === "string" ? args.rawFeedback : "",
+      title: typeof args.title === "string" ? args.title : "",
+      rule: typeof args.rule === "string" ? args.rule : "",
+      rationale: typeof args.rationale === "string" ? args.rationale : undefined,
+      scope: typeof args.scope === "string" ? args.scope : "all audits",
+      keywords: Array.isArray(args.keywords) ? args.keywords.filter((v:unknown): v is string => typeof v === "string") : [],
+      examples: Array.isArray(args.examples) ? args.examples : [],
+      sourceLanguage: typeof args.sourceLanguage === "string" ? args.sourceLanguage : "unknown",
+      feedbackKind: typeof args.feedbackKind === "string" ? args.feedbackKind : "general",
+      sourceAuditId: typeof args.sourceAuditId === "string" ? args.sourceAuditId : undefined,
+      sourceFindingTitle: typeof args.sourceFindingTitle === "string" ? args.sourceFindingTitle : undefined,
     });
     return {
-      id: saved.id, title: saved.title, rule: saved.rule, scope: saved.scope,
-      status: saved.status, activeForFutureAudits: saved.status === "approved",
-      message: saved.status === "approved"
-        ? "Coaching lesson approved and available to relevant future audits."
-        : "Coaching lesson saved as a draft. Approve it before it influences future audits.",
+      id: saved?.id, title: saved?.title, rule: saved?.normalized_rule,
+      scope: saved?.scope_key || mapBrainScope(args.scope),
+      status: saved?.status || "draft", activeForFutureAudits: false,
+      sourceProduct: "ux-audit", sharedBrain: true,
+      message: "Feedback is saved as a draft in UX Direct’s shared brain. It will not affect either product until the owner explicitly approves it.",
     };
   }
 
   if (name === "uxaudit_list_coaching_lessons") {
-    const lessons = await listCoachingLessons(
-      typeof args.status === "string" ? args.status : "all",
-      typeof args.limit === "number" ? args.limit : 30,
-    );
+    const lessons = await listSharedBrainFeedback({
+      status: typeof args.status === "string" ? args.status : "all",
+      limit: typeof args.limit === "number" ? args.limit : 30,
+    });
     return {
       count: lessons.length,
-      lessons: lessons.map((lesson) => ({
-        id: lesson.id, title: lesson.title, rule: lesson.rule, rationale: lesson.rationale,
-        scope: lesson.scope, keywords: lesson.keywords, sourceLanguage: lesson.source_language,
-        status: lesson.status, rawFeedback: String(lesson.raw_feedback || "").slice(0, 1200),
-        feedbackKind: lesson.feedback_kind, sourceAuditId: lesson.source_audit_id,
-        sourceFindingTitle: lesson.source_finding_title,
-        reviewNote: lesson.review_note, createdAt: lesson.created_at, updatedAt: lesson.updated_at,
-        approvedAt: lesson.approved_at, usageCount: lesson.usage_count, lastUsedAt: lesson.last_used_at,
+      sharedBrain: true,
+      lessons: lessons.map((lesson: any) => ({
+        id: lesson.id, title: lesson.title, rule: lesson.normalized_rule, rationale: lesson.rationale,
+        scope: lesson.scope_key, keywords: lesson.keywords, sourceLanguage: lesson.original_language,
+        sourceProduct: lesson.source_product, status: lesson.status,
+        rawFeedback: String(lesson.raw_feedback || "").slice(0, 1200),
+        feedbackKind: lesson.feedback_kind, sourceAuditId: lesson.source_audit_ref,
+        sourceFindingTitle: lesson.source_finding_title, reviewNote: lesson.review_note,
+        createdAt: lesson.created_at, updatedAt: lesson.updated_at, approvedAt: lesson.reviewed_at,
+        memoryItemId: lesson.memory_item_id,
       })),
     };
   }
 
   if (name === "uxaudit_review_coaching_lesson") {
-    const updated = await reviewCoachingLesson(args.lessonId, args.action, args.reviewNote);
+    const decision = args.action;
+    if (!["approve", "reject", "archive"].includes(String(decision))) throw new Error("action must be approve, reject, or archive.");
+    const result = await reviewSharedBrainFeedback({
+      feedbackId: String(args.lessonId || ""),
+      action: decision as "approve" | "reject" | "archive",
+      reviewNote: typeof args.reviewNote === "string" ? args.reviewNote : undefined,
+    });
     return {
-      id: updated.id, title: updated.title, rule: updated.rule, scope: updated.scope,
-      status: updated.status, approvedAt: updated.approved_at,
-      activeForFutureAudits: updated.status === "approved",
-      message: updated.status === "approved"
-        ? "Lesson approved. It can now be retrieved by relevant future audits."
-        : updated.status === "rejected"
-          ? "Lesson rejected. It will not influence audits."
-          : "Lesson archived. It will no longer influence audits.",
+      ...result, sharedBrain: true,
+      message: decision === "approve"
+        ? "Lesson approved in UX Direct’s shared brain. Relevant future audits and design tasks can now retrieve it."
+        : decision === "reject"
+          ? "Lesson rejected. It will not influence future retrieval."
+          : "Lesson archived in the shared brain and removed from future retrieval.",
     };
   }
 
@@ -358,7 +368,7 @@ export async function POST(request: Request) {
       protocolVersion: typeof rpc.params?.protocolVersion === "string" ? rpc.params.protocolVersion : "2025-06-18",
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: "uxaudit", title: "UX Audit", version: "1.0.0", websiteUrl: "https://github.com/Zunaidscreenroot/uxaudit" },
-      instructions: "Discover public websites, run evidence-led desktop/mobile screenshot audits, retrieve findings, generate improved IA proposals, and coach UX Audit using reusable learning rules. When the owner gives Hindi/Hinglish feedback, preserve it, distil a concise scoped rule, save it as a draft by default, and activate it only with explicit approval. Approved rules guide later audits but never override screenshot evidence. AI audits and IA generation may incur OpenRouter costs.",
+      instructions: "Discover public websites, run evidence-led desktop/mobile screenshot audits, retrieve findings, and generate improved IA proposals. UX Audit and UX Direct’s Figma plugin use UX Direct’s common shared brain. When the owner naturally corrects an audit in Hindi, Hinglish, voice transcript or English, interpret the correction yourself, preserve their original words, classify it, and save a short scoped rule to the central brain; never ask the owner to paste a special coaching prompt. Keep feedback as a draft by default, and approve it only when the owner explicitly asks to store/train it for future reuse. Shared reusable knowledge and local client past findings remain separate. Approved rules never override current screenshot evidence. AI audits and IA generation may incur OpenRouter costs.",
     });
   }
   if (rpc.method === "tools/list") {
