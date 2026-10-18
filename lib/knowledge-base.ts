@@ -141,11 +141,11 @@ export async function retrieveRelevantAuditKnowledge(query: string, limit = 6, s
     scopeKey: effectiveScope,
     relatedScopes,
     limit: Math.max(1, Math.min(limit, 8)),
-    maxContextChars: 2800,
+    maxContextChars: 1800,
     includeKnowledge: true,
   });
   const ranked = candidates.sort((a,b)=>b.score-a.score).slice(0,Math.max(1,Math.min(limit,6)));
-  const localContext = ranked.map((item:any)=>item.text).join("\n").slice(0,1800);
+  const localContext = ranked.map((item:any)=>item.text).join("\n").slice(0,1100);
   const sections = [
     shared.context ? "SHARED PRODUCT BRAIN (approved reusable rules and source-backed references; apply only in their scope; current screenshot evidence is mandatory):\n" + shared.context : "",
     localContext ? "UX AUDIT CLIENT HISTORY / LOCAL REFERENCES (examples only; do not copy findings or infer that they apply to this page):\n" + localContext : "",
@@ -155,5 +155,5 @@ export async function retrieveRelevantAuditKnowledge(query: string, limit = 6, s
     memoryCount: shared.memoryCount, knowledgeCount: shared.knowledgeCount,
     contextCharacters: shared.contextCharacters, localExamples: ranked.length,
   }));
-  return sections.join("\n\n").slice(0,4800);
+  return sections.join("\n\n").slice(0,3100);
 }
