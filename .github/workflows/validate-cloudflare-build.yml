@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+# Cancel obsolete builds when a newer commit for the same PR or branch arrives.
+concurrency:
+  group: uxaudit-cloudflare-build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate:
     runs-on: ubuntu-latest
