@@ -34,9 +34,15 @@ export async function POST(req: Request) {
 
 
     const models = Array.isArray(body?.verifiedModels)
-      ? body.verifiedModels.filter((m: any) => m?.provider === "OpenRouter" && typeof m.model === "string").slice(0, 3)
+      ? body.verifiedModels.filter((m: any) =>
+          m?.provider === "OpenRouter" &&
+          m?.tier === "paid" &&
+          typeof m.model === "string" &&
+          !m.model.endsWith(":free") &&
+          m.model !== "openrouter/auto"
+        ).slice(0, 3)
       : [];
-    if (!models.length) return Response.json({ error: "No verified model is available." }, { status: 503 });
+    if (!models.length) return Response.json({ error: "No verified paid OpenRouter model is available. Refresh model verification; free and auto-routed models are disabled for audits." }, { status: 503 });
 
     const auditMode = body?.auditMode === "mobile" ? "mobile" : "desktop";
     const viewport = auditMode === "mobile" ? { width: 393, height: 852 } : { width: 1440, height: 900 };
