@@ -16,7 +16,7 @@ export async function GET(request: Request) {
       token_endpoint_auth_methods_supported: ["none"],
       code_challenge_methods_supported: ["S256"],
       authorization_response_iss_parameter_supported: true,
-      scopes_supported: ["audit:read", "audit:run", "ia:generate", "offline_access"],
+      scopes_supported: ["audit:read", "audit:run", "ia:generate", "audit:coach", "offline_access"],
       service_documentation: "https://github.com/Zunaidscreenroot/uxaudit",
     },
     { headers: { "Cache-Control": "public, max-age=300" } },
