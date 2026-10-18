@@ -1,5 +1,5 @@
 import type { AuditPage, AuditResult } from "@/lib/audit";
-import { listApprovedCoachLearnings, type CoachLearning } from "@/lib/coach-learning";
+import { retrieveSharedBrainContext } from "@/lib/shared-brain-client";
 import { queryDb } from "@/lib/db";
 import { readImageDataUri, storeImageDataUri } from "@/lib/r2-assets";
 
@@ -100,86 +100,66 @@ export async function getAudit(auditId: string) {
 }
 
 export async function retrieveRelevantAuditKnowledge(query: string, limit = 6): Promise<string> {
-  try {
-    const [findingRows, documents, coachLessons] = await Promise.all([
-      queryDb(
-        `SELECT f.finding, f.created_at, a.client_name, a.title AS audit_title, a.created_at AS audit_created_at
-         FROM public.audit_findings f
-         LEFT JOIN public.audits a ON a.id = f.audit_id
-         ORDER BY f.created_at DESC
-         LIMIT 120`,
-      ),
-      queryDb(
-        `SELECT title, source_name, source_url, topic, content, keywords, reviewed_at
-         FROM public.ux_knowledge_documents
-         ORDER BY reviewed_at DESC
-         LIMIT 100`,
-      ),
-      listApprovedCoachLearnings(100),
-    ]);
-    const stop = new Set(["the","and","for","with","from","that","this","into","your","have","has","are","was","were","will","their","they","them","page","site","website","user","users","visible","issue","finding","because","could","should","would","about","when","where","what","how","not","can","may","more","less"]);
-    const terms = (value: string) => [...new Set(value.toLowerCase().replace(/[^a-z0-9]+/g," ").split(" ").filter(w=>w.length>2&&!stop.has(w)))];
-    const queryTerms = terms(query);
-    const candidates:any[] = [];
-    for (const row of Array.isArray(findingRows)?findingRows:[]) {
-      const finding = row.finding && typeof row.finding === "object" ? row.finding : {};
-      const audit = row;
-      const text = [audit.client_name,audit.title,finding.category,finding.title,finding.description,finding.recommendation,...(finding.evidence||[]).map((e:any)=>[e.section,e.element,e.detail].join(" "))].filter(Boolean).join(" ");
-      const tokens = new Set(terms(text));
-      const overlap = queryTerms.filter(t=>tokens.has(t)).length;
-      const sameClient = queryTerms.some(t=>String(audit.client_name||"").toLowerCase().includes(t)) ? 2 : 0;
-      const severity = finding.severity === "high" ? 0.5 : 0;
-      if(overlap+sameClient+severity>0)candidates.push({kind:"prior finding",score:overlap+sameClient+severity,text:`[Prior finding; client ${audit.client_name||"unknown"}; audit ${audit.audit_title||"untitled"}; saved ${audit.audit_created_at||row.created_at||"date unavailable"}] ${finding.severity||"unrated"} · ${finding.category||"UX"} — ${finding.title||"Finding"}. Evidence: ${(finding.evidence||[]).map((e:any)=>e.detail).filter(Boolean).join("; ")||finding.description||"not supplied"}. Recommendation: ${finding.recommendation||"not supplied"}.`});
-    }
-    for (const doc of Array.isArray(documents)?documents:[]) {
-      const text = [doc.title,doc.source_name,doc.topic,doc.content,...(Array.isArray(doc.keywords)?doc.keywords:[])].filter(Boolean).join(" ");
-      const tokens = new Set(terms(text));
-      const overlap = queryTerms.filter(t=>tokens.has(t)).length;
-      if(overlap>0)candidates.push({kind:"standard",score:overlap+1,text:`[Reference: ${doc.title}; source: ${doc.source_name}; topic: ${doc.topic}; URL: ${doc.source_url}; reviewed: ${doc.reviewed_at}] ${doc.content}`});
-    }
-    const isBfsiContext = /\b(bfsi|bank|banking|finance|financial|insurance|nbfc|lender|loan|credit|upi|deposit|wealth|ujjivan|dmi|equitas|suryoday|hdfc|icici|sbi|axis|kotak|india|indian)\b/i.test(query);
-    const learningCandidates: Array<{ id: string; score: number; usageCount: number; text: string }> = [];
-    for (const lesson of Array.isArray(coachLessons) ? coachLessons : []) {
-      const learning = lesson as CoachLearning;
-      const scope = String(learning.scope || "all audits");
-      const keywordList = Array.isArray(learning.keywords) ? learning.keywords : [];
-      const example = Array.isArray(learning.examples) ? learning.examples.find((value): value is string => typeof value === "string") : undefined;
-      const searchable = [learning.title, learning.rule, learning.rationale, scope, ...keywordList].filter(Boolean).join(" ");
-      const tokenSet = new Set(terms(searchable));
-      const overlap = queryTerms.filter((term) => tokenSet.has(term)).length;
-      const scopeTokens = new Set(terms(scope));
-      const scopeOverlap = queryTerms.filter((term) => scopeTokens.has(term)).length;
-      const globalScope = /^(all|global)(\s+audits?)?$/i.test(scope.trim());
-      const bfsScope = /\b(bfsi|bank|finance|financial|insurance|nbfc|lender|indian)\b/i.test(scope);
-      const score = overlap + scopeOverlap * 0.75 + (globalScope ? 1.25 : 0) + (isBfsiContext && bfsScope ? 2.5 : 0);
-      if (score <= 0) continue;
-      learningCandidates.push({
-        id: learning.id,
-        score,
-        usageCount: Number(learning.usage_count || 0),
-        text: `[APPROVED COACHING RULE; scope: ${scope}] ${String(learning.title || "UX rule").slice(0, 140)}: ${String(learning.rule || "").slice(0, 600)}${learning.rationale ? " Why it matters: " + String(learning.rationale).slice(0, 180) : ""}${example ? " Calibration example (preference only, not evidence): " + example.slice(0, 220) : ""}`,
-      });
-    }
-    const rankedLessons = learningCandidates.sort((a,b)=>b.score-a.score).slice(0,3);
-    if (rankedLessons.length) {
-      const usedAt = new Date().toISOString();
-      await Promise.all(rankedLessons.map(async (lesson) => {
-        try {
-          await queryDb(
-            "UPDATE public.ux_coach_learnings SET usage_count = $1, last_used_at = $2::timestamptz WHERE id = $3::uuid",
-            [lesson.usageCount + 1, usedAt, lesson.id],
-          );
-        } catch { /* Usage metrics are non-critical; never fail an audit because a counter could not be updated. */ }
-      }));
-    }
-    const ranked = candidates.sort((a,b)=>b.score-a.score).slice(0,Math.max(1,Math.min(limit,10)));
-    const sections = [
-      rankedLessons.length ? "APPROVED COACHING RULES (apply only within the stated scope; current screenshot evidence remains mandatory):\n" + rankedLessons.map((item) => item.text).join("\n").slice(0, 2400) : "",
-      ranked.length ? "RELEVANT HISTORICAL FINDINGS AND REFERENCE MATERIAL (examples only; never assume the current page has the same issue):\n" + ranked.map((item:any)=>item.text).join("\n") : "",
-    ].filter(Boolean);
-    return sections.join("\n\n");
-  } catch (error) {
-    console.warn("[uxaudit] knowledge_retrieval_skipped", error instanceof Error ? error.message : "Knowledge base unavailable");
-    return "";
+  const stop = new Set([
+    "the","and","for","with","from","that","this","into","your","have","has","are","was","were",
+    "will","their","they","them","page","site","website","user","users","visible","issue","finding",
+    "because","could","should","would","about","when","where","what","how","not","can","may","more","less",
+  ]);
+  const terms = (value: string) => [...new Set(
+    value.toLowerCase().replace(/[^a-z0-9]+/g, " ").split(" ").filter((word) => word.length > 2 && !stop.has(word)),
+  )];
+  const queryTerms = terms(query);
+  const [findingRows, sharedBrain] = await Promise.all([
+    queryDb<Record<string, unknown>>(
+      `SELECT f.finding, f.created_at, a.client_name, a.title AS audit_title, a.created_at AS audit_created_at
+       FROM public.audit_findings f
+       LEFT JOIN public.audits a ON a.id = f.audit_id
+       ORDER BY f.created_at DESC
+       LIMIT 120`,
+    ).catch((error) => {
+      console.warn("[uxaudit] past_findings_retrieval_skipped", error instanceof Error ? error.message.slice(0, 160) : "Past Findings unavailable");
+      return [];
+    }),
+    retrieveSharedBrainContext(query, ["UX_SHARED_BRAIN", "indian-bfsi", "project:ux-audit"], Math.max(1, Math.min(limit, 8)))
+      .catch((error) => {
+        console.warn("[uxaudit] shared_brain_retrieval_skipped", error instanceof Error ? error.message.slice(0, 160) : "Shared brain unavailable");
+        return { contextText: "", retrieval: { status: "degraded" as const } };
+      }),
+  ]);
+
+  const candidates: Array<{ score: number; text: string }> = [];
+  for (const row of findingRows) {
+    const finding = row.finding && typeof row.finding === "object" && !Array.isArray(row.finding)
+      ? row.finding as Record<string, unknown>
+      : {};
+    const evidence = Array.isArray(finding.evidence) ? finding.evidence as Array<Record<string, unknown>> : [];
+    const clientName = String(row.client_name || "unknown client");
+    const auditTitle = String(row.audit_title || "untitled");
+    const searchable = [
+      clientName, auditTitle, finding.category, finding.title, finding.description, finding.recommendation,
+      ...evidence.flatMap((item) => [item.section, item.element, item.detail]),
+    ].filter((item): item is string => typeof item === "string").join(" ");
+    const tokenSet = new Set(terms(searchable));
+    const overlap = queryTerms.filter((term) => tokenSet.has(term)).length;
+    const sameClient = queryTerms.some((term) => clientName.toLowerCase().includes(term)) ? 2 : 0;
+    const severity = finding.severity === "high" ? 0.5 : 0;
+    const score = overlap + sameClient + severity;
+    if (score <= 0) continue;
+    const evidenceText = evidence.map((item) => item.detail).filter((item): item is string => typeof item === "string").join("; ");
+    candidates.push({
+      score,
+      text: `[Past Finding; client: ${clientName}; audit: ${auditTitle}; saved: ${String(row.audit_created_at || row.created_at || "date unavailable")}] ${String(finding.severity || "unrated")} · ${String(finding.category || "UX")} — ${String(finding.title || "Finding")}. Evidence: ${evidenceText || String(finding.description || "not supplied")}. Recommendation: ${String(finding.recommendation || "not supplied")}.`,
+    });
   }
+
+  const rankedPastFindings = candidates.sort((a, b) => b.score - a.score).slice(0, Math.max(1, Math.min(limit, 10)));
+  const sections = [
+    sharedBrain.contextText.trim()
+      ? "SHARED KNOWLEDGE BASE (approved reusable rules and references; apply only within their scope. Current screenshot evidence takes precedence):\n" + sharedBrain.contextText.trim().slice(0, 3200)
+      : "",
+    rankedPastFindings.length
+      ? "PAST FINDINGS (client-specific historical examples only; never assume the current page has the same issue):\n" + rankedPastFindings.map((item) => item.text).join("\n").slice(0, 1800)
+      : "",
+  ].filter(Boolean);
+  return sections.join("\n\n").slice(0, 5000);
 }
