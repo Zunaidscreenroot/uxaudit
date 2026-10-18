@@ -91,7 +91,9 @@ export async function retrieveRelevantAuditKnowledge(query: string, limit = 6): 
     const learningCandidates: Array<{ id: string; score: number; usageCount: number; payload: KnowledgeMemory["model_payload"] }> = [];
 
     for (const memory of Array.isArray(memoryRows) ? memoryRows : []) {
-      const payload = memory.model_payload && typeof memory.model_payload === "object" ? memory.model_payload : { v: 1, k: "general", s: "all_audits", r: "", kw: [], ex: [], lang: "unknown" };
+      const payload: KnowledgeMemory["model_payload"] = memory.model_payload && typeof memory.model_payload === "object"
+        ? memory.model_payload
+        : { v: 1, k: "general", s: "all_audits", r: "", kw: [], ex: [], lang: "unknown" };
       const scope = String(payload.s || "all_audits");
       const keywords = Array.isArray(payload.kw) ? payload.kw : [];
       const searchable = [payload.k, payload.s, payload.r, ...keywords].filter(Boolean).join(" ");
