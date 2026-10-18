@@ -23,7 +23,7 @@ export async function POST(request: Request) {
           typeof (model as Record<string,unknown>).model === "string" &&
           !(model as {model:string}).model.endsWith(":free") &&
           (model as {model:string}).model !== "openrouter/auto"
-        ).slice(0, 3)
+        ).slice(0, 2)
       : [];
     if(!verifiedModels.length) return Response.json({error:"No verified paid image-capable OpenRouter model was supplied. Refresh model verification; free and auto-routed models are disabled for audits."},{status:503});
     const buffer = Buffer.from(await file.arrayBuffer());
