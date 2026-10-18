@@ -19,6 +19,8 @@ export type R2BucketLike = {
 export type RuntimeEnv = Record<string, unknown> & {
   NEON_DATABASE_URL?: string;
   DATABASE_URL?: string;
+  OPENROUTER_API_KEY?: string;
+  BROWSERLESS_API_TOKEN?: string;
   UX_SHARED_ASSETS?: R2BucketLike;
 };
 
