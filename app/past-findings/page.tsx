@@ -15,7 +15,7 @@ function formatDate(value: string) {
 const markerColors = ["pink", "purple", "orange", "blue", "green", "yellow", "violet", "teal", "rose", "cyan"];
 function markerColor(index: number) { return markerColors[index % markerColors.length]; }
 
-export default function KnowledgeBasePage() {
+export default function PastFindingsPage() {
   const [clients, setClients] = useState<Client[]>([]);
   const [audits, setAudits] = useState<Audit[]>([]);
   const [audit, setAudit] = useState<AuditDetail | null>(null);
