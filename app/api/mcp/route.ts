@@ -203,7 +203,7 @@ async function runTool(name: string, args: any, request: Request) {
   }
 
   if (name === "uxaudit_save_coaching_lesson") {
-    const queryScope = typeof args.scopeKey === "string" ? args.scopeKey : "UX_AUDIT";
+    const queryScope = typeof args.scopeKey === "string" ? args.scopeKey : inferSharedBrainScope([args.rawFeedback || "", args.title || "", args.normalizedRule || "", args.rationale || ""].join(" "));
     const saved = await sharedBrainRequest<any>("save-feedback", {
       sourceProduct: "ux-audit",
       scopeKey: queryScope,
@@ -234,7 +234,7 @@ async function runTool(name: string, args: any, request: Request) {
     return sharedBrainRequest("list-feedback", {
       scopeKey: args.scopeKey,
       status: args.status || "all",
-      sourceProduct: args.sourceProduct || "ux-audit",
+      sourceProduct: args.sourceProduct,
       limit: args.limit,
     });
   }
