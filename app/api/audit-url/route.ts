@@ -40,7 +40,7 @@ export async function POST(req: Request) {
           typeof m.model === "string" &&
           !m.model.endsWith(":free") &&
           m.model !== "openrouter/auto"
-        ).slice(0, 3)
+        ).slice(0, 2)
       : [];
     if (!models.length) return Response.json({ error: "No verified paid OpenRouter model is available. Refresh model verification; free and auto-routed models are disabled for audits." }, { status: 503 });
 
