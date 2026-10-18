@@ -11,8 +11,8 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     <html lang="en">
       <body>
         {children}
-        <a href="/knowledge-base" style={{ position: "fixed", right: 20, bottom: 20, zIndex: 50, padding: "11px 15px", borderRadius: 999, background: "#111", color: "#fff", textDecoration: "none", fontSize: 12, fontWeight: 800, boxShadow: "0 8px 22px rgba(17,17,17,.18)" }}>
-          Knowledge base →
+        <a href="/past-findings" style={{ position: "fixed", right: 20, bottom: 20, zIndex: 50, padding: "11px 15px", borderRadius: 999, background: "#111", color: "#fff", textDecoration: "none", fontSize: 12, fontWeight: 800, boxShadow: "0 8px 22px rgba(17,17,17,.18)" }}>
+          Past findings →
         </a>
       </body>
     </html>
