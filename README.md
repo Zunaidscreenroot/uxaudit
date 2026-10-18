@@ -8,7 +8,9 @@ AI-assisted UX auditing platform for turning website experiences into prioritize
 - Desktop and mobile screenshot capture with server-side Chromium
 - Evidence-led UX findings, severity, recommendations and screenshot markers
 - OpenRouter model connection and cost status
-- Saved IA sessions, findings, and improved IA proposals
+- Past Findings archive retaining original client findings and audit evidence
+- Private Knowledge Base memory for compact, approved model-readable UX rules
+- Separate local-training JSONL exports for approved learning records and historical findings
 - Remote MCP server with OAuth authorization for ChatGPT-compatible clients
 
 ## Remote MCP connection
@@ -29,8 +31,8 @@ Available MCP tools include:
 - `uxaudit_run_page_audit` — run a desktop or mobile page audit; may incur model API costs
 - `uxaudit_get_session_report` and `uxaudit_get_findings` — retrieve saved session results
 - `uxaudit_generate_improved_ia` — generate a reviewable IA proposal
-- `uxaudit_save_coaching_lesson` — preserve owner feedback (including Hindi/Hinglish) as a scoped draft or explicitly approved rule
-- `uxaudit_list_coaching_lessons` and `uxaudit_review_coaching_lesson` — review stored lessons and approve/reject/archive them
+- `uxaudit_save_coaching_lesson` — preserve feedback as a compact, scoped Knowledge Base memory record (draft by default)
+- `uxaudit_list_coaching_lessons` and `uxaudit_review_coaching_lesson` — list or approve/reject/archive compact memory records
 
 For a preview test, use that preview deployment's host and append `/api/mcp`.
 
@@ -61,3 +63,31 @@ Open `http://localhost:3000`. The local MCP endpoint is `http://localhost:3000/a
 4. Improve saved project history
 5. Refine AI prioritization and recommendations
 6. Add report export and shareable audit links
+
+
+## Memory and training-data separation
+
+- **Past Findings** (`/past-findings`) is the user-facing audit archive. Findings remain stored in their original JSON form.
+- **Knowledge Base** is backend-only memory. Only approved compact JSON payloads are included as generalized rules during future audit retrieval. Prior client findings may also be retrieved as examples, but are labeled as archive evidence and are never automatically promoted into general rules.
+- The old `/knowledge-base` findings page and `/coach` learning page are not used by this architecture; internal Knowledge Base representations are not presented as client-facing natural-language reports.
+
+### Export for future local-model training
+
+Configure `KNOWLEDGE_BASE_EXPORT_TOKEN` as a **server-only** Vercel environment variable for the preview/production deployment you intend to use. Then call the endpoint with a bearer token:
+
+- Approved compact learnings: `GET /api/knowledge-base?dataset=learnings&format=jsonl`
+- Original client findings: `GET /api/knowledge-base?dataset=past-findings&format=jsonl`
+
+Example:
+
+```bash
+curl -H "Authorization: Bearer $KNOWLEDGE_BASE_EXPORT_TOKEN" \
+  "https://<your-deployment>/api/knowledge-base?dataset=learnings&format=jsonl" \
+  -o knowledge-base-learnings.jsonl
+
+curl -H "Authorization: Bearer $KNOWLEDGE_BASE_EXPORT_TOKEN" \
+  "https://<your-deployment>/api/knowledge-base?dataset=past-findings&format=jsonl" \
+  -o past-findings.jsonl
+```
+
+The outputs are intentionally separate. Learning records use a `messages` JSONL shape; Past Findings records contain source metadata plus the saved finding JSON unchanged. Adapt the JSONL shape to the particular local model trainer you select. Storing or approving a memory does not itself change model weights.
