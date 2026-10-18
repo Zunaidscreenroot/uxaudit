@@ -1,15 +1,18 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./embedded-mode.css";
+import EmbeddedMode from "./embedded-mode";
 
 export const metadata: Metadata = {
-  title: "UX Audit",
-  description: "AI-assisted UX audits for websites.",
+  title: "UX Audit · UX Direct engine",
+  description: "Evidence-led information architecture, UX audits, and competitive benchmarking inside UX Direct.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
       <body>
+        <EmbeddedMode />
         {children}
         <a href="/knowledge-base" style={{ position: "fixed", right: 20, bottom: 20, zIndex: 50, padding: "11px 15px", borderRadius: 999, background: "#111", color: "#fff", textDecoration: "none", fontSize: 12, fontWeight: 800, boxShadow: "0 8px 22px rgba(17,17,17,.18)" }}>
           Knowledge base →
