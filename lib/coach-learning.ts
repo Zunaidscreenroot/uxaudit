@@ -174,8 +174,8 @@ export async function saveCoachingLesson(input: {
 
   return mapFeedback({
     ...saved,
-    status: input.activate === true ? "approved" : "draft",
-    reviewed_at: input.activate === true ? now : null,
+    status: input.activate === true ? "approved" : saved.status,
+    ...(input.activate === true ? { reviewed_at: now } : {}),
     metadata: { sourceType, scopeDescription: scope },
   });
 }
