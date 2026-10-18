@@ -40,50 +40,9 @@ function extractJson(text: string): unknown | null {
 }
 
 type VerifiedModel = {provider:"OpenRouter";model:string;tier:"paid"};
-type OpenRouterPrice = { prompt: number; completion: number };
-let paidModelCatalogCache: { expiresAt: number; entries: Map<string, OpenRouterPrice> } | null = null;
-let paidModelCatalogPending: Promise<Map<string, OpenRouterPrice>> | null = null;
-
-async function getPaidModelCatalog(): Promise<Map<string, OpenRouterPrice>> {
- if (paidModelCatalogCache && paidModelCatalogCache.expiresAt > Date.now()) return paidModelCatalogCache.entries;
- if (paidModelCatalogPending) return paidModelCatalogPending;
- paidModelCatalogPending = (async () => {
-  const key = process.env.OPENROUTER_API_KEY;
-  if (!key) throw new Error("Configure OPENROUTER_API_KEY before running an audit.");
-  const response = await fetch("https://openrouter.ai/api/v1/models", {
-   headers: { Authorization: "Bearer " + key },
-   signal: AbortSignal.timeout(7000),
-   cache: "no-store",
-  });
-  const payload = await response.json().catch(() => ({})) as { data?: Array<{ id?: unknown; pricing?: { prompt?: unknown; completion?: unknown } }> };
-  if (!response.ok || !Array.isArray(payload.data)) throw new Error("Could not verify paid-model pricing from OpenRouter.");
-  const entries = new Map<string, OpenRouterPrice>();
-  for (const item of payload.data) {
-   if (typeof item.id !== "string") continue;
-   entries.set(item.id, {
-    prompt: Number(item.pricing?.prompt ?? 0),
-    completion: Number(item.pricing?.completion ?? 0),
-   });
-  }
-  paidModelCatalogCache = { expiresAt: Date.now() + 15 * 60 * 1000, entries };
-  return entries;
- })();
- try { return await paidModelCatalogPending; }
- finally { paidModelCatalogPending = null; }
-}
-
-async function assertVerifiedPaidModel(model: VerifiedModel) {
- if (model.provider !== "OpenRouter" || model.tier !== "paid" || model.model.endsWith(":free") || model.model === "openrouter/auto") {
-  throw new Error("UX Audit requires an explicit, verified paid OpenRouter model. Automatic routing and free models are disabled.");
- }
- const catalogue = await getPaidModelCatalog();
- const price = catalogue.get(model.model);
- if (!price) throw new Error("Selected audit model is not present in the current OpenRouter catalogue: " + model.model);
- if (!(price.prompt > 0 || price.completion > 0)) throw new Error("Selected audit model has zero-priced inference and is not allowed for paid audit workloads.");
-}
-
 async function modelGenerate(model: VerifiedModel, parts: Array<Record<string, unknown>>, maxOutputTokens = 4500, timeoutMs = 12000) {
- await assertVerifiedPaidModel(model);
+ if (model.provider !== "OpenRouter" || model.tier !== "paid") throw new Error("UX Audit requires a paid OpenRouter model.");
+ await assertPaidOpenRouterModel(model.model);
  const key=process.env.OPENROUTER_API_KEY;if(!key)throw new Error("Configure OPENROUTER_API_KEY before running an audit.");
  const content:any[]=[];for(const part of parts){if(typeof part.text==="string")content.push({type:"text",text:part.text});else if(part.inline_data&&typeof part.inline_data==="object"){const im=part.inline_data as {mime_type?:string;data?:string};if(im.data)content.push({type:"image_url",image_url:{url:"data:"+(im.mime_type||"image/jpeg")+";base64,"+im.data}});}}
  let lastError="OpenRouter model request failed.";const started=Date.now();
