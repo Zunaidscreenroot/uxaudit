@@ -31,7 +31,7 @@ async function testModel(item: ModelDef) {
    payload = await response.json().catch(()=>({}));
    if (!response.ok && [429,500,502,503,504].includes(response.status)) {
     await new Promise(resolve=>setTimeout(resolve,1200));
-    response = await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:`Bearer ${key}`,"Content-Type":"application/json","HTTP-Referer":"https://uxauditscreenroot.vercel.app","X-Title":"UX Audit Availability Check"},body:JSON.stringify({model:item.model,messages:[{role:"user",content:"Reply OK"}],max_tokens:2,temperature:0,provider:{allow_fallbacks:false}}),signal:AbortSignal.timeout(7000),cache:"no-store"});
+    response = await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:`Bearer ${key}`,"Content-Type":"application/json","HTTP-Referer":"https://uxauditscreenroot.vercel.app","X-Title":"UX Audit Availability Check"},body:JSON.stringify({model:item.model,messages:[{role:"user",content:"Reply OK"}],max_tokens:2,temperature:0,provider:{allow_fallbacks:false,max_price:{prompt:0.5,completion:2}}}),signal:AbortSignal.timeout(7000),cache:"no-store"});
     payload = await response.json().catch(()=>({}));
    }
    if (!response.ok) return {...item,ok:false,latencyMs:Date.now()-started,error:`HTTP ${response.status}: ${payload?.error?.message ?? "Provider unavailable"}`};
