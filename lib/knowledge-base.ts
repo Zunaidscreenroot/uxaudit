@@ -129,7 +129,7 @@ export async function retrieveRelevantAuditKnowledge(query: string, limit = 6): 
       const overlap = queryTerms.filter(t=>tokens.has(t)).length;
       if(overlap>0)candidates.push({kind:"standard",score:overlap+1,text:`[Reference: ${doc.title}; source: ${doc.source_name}; topic: ${doc.topic}; URL: ${doc.source_url}; reviewed: ${doc.reviewed_at}] ${doc.content}`});
     }
-    const isBfsiContext = /\\b(bfsi|bank|banking|finance|financial|insurance|nbfc|lender|loan|credit|upi|deposit|wealth|ujjivan|dmi|equitas|suryoday|hdfc|icici|sbi|axis|kotak|india|indian)\\b/i.test(query);
+    const isBfsiContext = /\b(bfsi|bank|banking|finance|financial|insurance|nbfc|lender|loan|credit|upi|deposit|wealth|ujjivan|dmi|equitas|suryoday|hdfc|icici|sbi|axis|kotak|india|indian)\b/i.test(query);
     const learningCandidates: Array<{ id: string; score: number; usageCount: number; text: string }> = [];
     for (const lesson of Array.isArray(coachLessons) ? coachLessons : []) {
       const learning = lesson as CoachLearning;
@@ -140,8 +140,8 @@ export async function retrieveRelevantAuditKnowledge(query: string, limit = 6): 
       const overlap = queryTerms.filter((term) => tokenSet.has(term)).length;
       const scopeTokens = new Set(terms(scope));
       const scopeOverlap = queryTerms.filter((term) => scopeTokens.has(term)).length;
-      const globalScope = /^(all|global)(\\s+audits?)?$/i.test(scope.trim());
-      const bfsScope = /\\b(bfsi|bank|finance|financial|insurance|nbfc|lender|indian)\\b/i.test(scope);
+      const globalScope = /^(all|global)(\s+audits?)?$/i.test(scope.trim());
+      const bfsScope = /\b(bfsi|bank|finance|financial|insurance|nbfc|lender|indian)\b/i.test(scope);
       const score = overlap + scopeOverlap * 0.75 + (globalScope ? 1.25 : 0) + (isBfsiContext && bfsScope ? 2.5 : 0);
       if (score <= 0) continue;
       learningCandidates.push({
@@ -166,10 +166,10 @@ export async function retrieveRelevantAuditKnowledge(query: string, limit = 6): 
     }
     const ranked = candidates.sort((a,b)=>b.score-a.score).slice(0,Math.max(1,Math.min(limit,10)));
     const sections = [
-      rankedLessons.length ? "APPROVED COACHING RULES (apply only within the stated scope; current screenshot evidence remains mandatory):\\n" + rankedLessons.map((item) => item.text).join("\\n") : "",
-      ranked.length ? "RELEVANT HISTORICAL FINDINGS AND REFERENCE MATERIAL (examples only; never assume the current page has the same issue):\\n" + ranked.map((item:any)=>item.text).join("\\n") : "",
+      rankedLessons.length ? "APPROVED COACHING RULES (apply only within the stated scope; current screenshot evidence remains mandatory):\n" + rankedLessons.map((item) => item.text).join("\n") : "",
+      ranked.length ? "RELEVANT HISTORICAL FINDINGS AND REFERENCE MATERIAL (examples only; never assume the current page has the same issue):\n" + ranked.map((item:any)=>item.text).join("\n") : "",
     ].filter(Boolean);
-    return sections.join("\\n\\n");
+    return sections.join("\n\n");
   } catch (error) {
     console.warn("[uxaudit] knowledge_retrieval_skipped", error instanceof Error ? error.message : "Knowledge base unavailable");
     return "";
