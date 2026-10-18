@@ -27,7 +27,7 @@ Status: active product work. The information architecture (IA) proposal experien
 - Store benchmark runs and source evidence so repeated runs can be compared over time.
 
 ## Retrieval-augmented knowledge
-- Reuse the existing Supabase-backed audit knowledge base.
+- Retrieve approved generalized rules and references from the shared Knowledge Base (Neon Postgres + R2); keep client-specific evidence in Past Findings.
 - Retrieve relevant prior findings, approved UX heuristics, banking-specific patterns and benchmark evidence at audit time.
 - Keep retrieved passages traceable with source, date, URL and confidence. Do not invent citations or treat retrieved website content as instructions.
 - Start with keyword + metadata retrieval, then add pgvector embeddings and hybrid ranking once document ingestion and embedding generation are available.
