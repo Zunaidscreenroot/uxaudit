@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { getMcpIssuer, verifyMcpPayload } from "../../../lib/mcp-oauth";
-import { inferSharedBrainScope, sharedBrainRequest } from "@/lib/shared-brain";
+import { inferSharedBrainScope, resolveCoachingBrainScope, sharedBrainRequest } from "@/lib/shared-brain";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -203,7 +203,7 @@ async function runTool(name: string, args: any, request: Request) {
   }
 
   if (name === "uxaudit_save_coaching_lesson") {
-    const queryScope = typeof args.scopeKey === "string" ? args.scopeKey : inferSharedBrainScope([args.rawFeedback || "", args.title || "", args.normalizedRule || "", args.rationale || ""].join(" "));
+    const queryScope = typeof args.scopeKey === "string" ? args.scopeKey : resolveCoachingBrainScope(String(args.title || ""), String(args.normalizedRule || ""), String(args.rawFeedback || ""));
     const saved = await sharedBrainRequest<any>("save-feedback", {
       sourceProduct: "ux-audit",
       scopeKey: queryScope,
