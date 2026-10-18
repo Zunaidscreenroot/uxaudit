@@ -1,3 +1,4 @@
+import { getRuntimeEnv } from "@/lib/neon-db";
 import { randomUUID } from "node:crypto";
 import { getMcpIssuer, verifyMcpPayload } from "../../../lib/mcp-oauth";
 import { listCoachingLessons, reviewCoachingLesson, saveCoachingLesson } from "@/lib/coach-learning";
@@ -166,7 +167,7 @@ async function runTool(name: string, args: any, request: Request) {
   const origin = new URL(request.url).origin;
 
   if (name === "uxaudit_get_connection_status") {
-    const key = process.env.OPENROUTER_API_KEY?.trim();
+    const key = getRuntimeEnv().OPENROUTER_API_KEY?.trim();
     if (!key) return { service: "UX Audit", mcpServer: "connected", openRouterKeyConfigured: false, openRouterConnected: false, checkedAt: new Date().toISOString() };
     try {
       const response = await fetch("https://openrouter.ai/api/v1/key", {
