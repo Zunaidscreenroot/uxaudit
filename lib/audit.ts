@@ -1,3 +1,4 @@
+import { assertPaidOpenRouterModel } from "@/lib/openrouter-paid";
 import { retrieveRelevantAuditKnowledge } from "@/lib/knowledge-base";
 import { inspectImage } from "@/lib/image-utils";
 
