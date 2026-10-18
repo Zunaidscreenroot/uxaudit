@@ -62,7 +62,7 @@ export async function POST(req:Request){try{
  let lastModelIssue="The model did not return valid JSON.";
  for(let attempt=0;attempt<2&&!parsed;attempt++){
   const requestPrompt=attempt===0?prompt:prompt+"\n\nREPAIR: Your previous response was not valid JSON. Return one compact, syntactically valid JSON object only. No Markdown, no comments, no trailing commas, no extra prose. Keep every required top-level key. Keep each resolution/rationale to one concise sentence and preserve every supplied URL.";
-  const requestBody:any={model:"openrouter/auto",messages:[{role:"user",content:requestPrompt}],max_tokens:6000,temperature:0.1,reasoning:{effort:"low"}};
+  const requestBody:any={model:process.env.UX_AUDIT_TEXT_MODEL?.trim()||"deepseek/deepseek-v4-flash-0731",messages:[{role:"user",content:requestPrompt}],max_tokens:attempt===0?5000:2800,temperature:0.1,reasoning:{effort:"low"},provider:{allow_fallbacks:false,max_price:{prompt:0.5,completion:2}}};
   if(attempt===0)requestBody.response_format={type:"json_object"};
   try{
    const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:"Bearer "+key,"Content-Type":"application/json","HTTP-Referer":"https://uxaudit.vercel.app","X-Title":"UX Audit improved IA proposal"},body:JSON.stringify(requestBody),signal:AbortSignal.timeout(22000),cache:"no-store"});
