@@ -10,7 +10,7 @@ function getInput(values: URLSearchParams | FormData): AuthorizeInput | null {
   const scope = val("scope") || "audit:read audit:run ia:generate audit:coach offline_access";
   const challenge = val("code_challenge"), method = val("code_challenge_method"), resource = val("resource");
   const redirects = Array.isArray(client?.redirect_uris) ? client.redirect_uris.filter((x): x is string => typeof x === "string") : [];
-  const requested = scope.split(/\s+/).filter(Boolean);
+  const requested = [...new Set([...scope.split(/\s+/).filter(Boolean), "audit:coach"])];
   if (!client || !redirects.includes(redirectUri) || val("response_type") !== "code" || method !== "S256" ||
       !/^[A-Za-z0-9_-]{43,128}$/.test(challenge) || state.length > 2048 ||
       requested.some(value => !(MCP_SCOPES as readonly string[]).includes(value))) return null;
