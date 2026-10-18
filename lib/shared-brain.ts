@@ -19,13 +19,13 @@ export function inferSharedBrainScope(query: string): SharedBrainScope {
 
 export function resolveCoachingBrainScope(scopeText: string, ruleText = "", rawFeedback = ""): SharedBrainScope {
   const value = (scopeText + " " + ruleText + " " + rawFeedback).toLowerCase();
-  if (/\\b(express computers|express-computers)\\b/i.test(value)) return "EXPRESS_COMPUTERS";
-  if (/\\b(dmi|dmi hfc|dmi finance|dmi housing finance)\\b/i.test(value)) return "DMI_HFC";
-  if (/\\b(ujjivan|ujjivan sfb|ujjivan small finance)\\b/i.test(value)) return "UJJIVAN_SFB";
-  if (/\\b(bfsi|indian bank|india banking|banking|banks?|nbfc|lender|insurance|loans?|credit|upi|deposit|financial services|small finance bank|sfb)\\b/i.test(value)) return "INDIA_BFCI_SHARED";
-  if (/\\b(all products|all tools|all agents|global|cross.product|shared brain|all audits|every audit)\\b/i.test(value)) return "UX_SHARED_BRAIN";
-  if (/\\b(ux direct|wirefram|design system|figma plugin|design execution)\\b/i.test(value)) return "UX_DIRECT";
-  if (/\\b(ux audit|audit only|auditing|audit finding|false positive|severity calibration|screenshot evidence)\\b/i.test(value)) return "UX_AUDIT";
+  if (/\b(express computers|express-computers)\b/i.test(value)) return "EXPRESS_COMPUTERS";
+  if (/\b(dmi|dmi hfc|dmi finance|dmi housing finance)\b/i.test(value)) return "DMI_HFC";
+  if (/\b(ujjivan|ujjivan sfb|ujjivan small finance)\b/i.test(value)) return "UJJIVAN_SFB";
+  if (/\b(bfsi|indian bank|india banking|banking|banks?|nbfc|lender|insurance|loans?|credit|upi|deposit|financial services|small finance bank|sfb)\b/i.test(value)) return "INDIA_BFCI_SHARED";
+  if (/\b(all products|all tools|all agents|global|cross.product|shared brain|all audits|every audit)\b/i.test(value)) return "UX_SHARED_BRAIN";
+  if (/\b(ux direct|wirefram|design system|figma plugin|design execution)\b/i.test(value)) return "UX_DIRECT";
+  if (/\b(ux audit|audit only|auditing|audit finding|false positive|severity calibration|screenshot evidence)\b/i.test(value)) return "UX_AUDIT";
   return "UX_AUDIT";
 }
 
