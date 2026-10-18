@@ -1,3 +1,4 @@
+import { getRuntimeEnv } from "@/lib/neon-db";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 const CACHE_TTL_MS = 30 * 60 * 1000;
@@ -21,7 +22,7 @@ async function testModel(item: ModelDef) {
   let response: Response;
   let payload: any;
   if (item.provider === "OpenRouter") {
-   const key = process.env.OPENROUTER_API_KEY;
+   const key = getRuntimeEnv().OPENROUTER_API_KEY?.trim();
    if (!key) return {...item,ok:false,latencyMs:0,error:"OpenRouter API key missing"};
    response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method:"POST",headers:{Authorization:`Bearer ${key}`,"Content-Type":"application/json","HTTP-Referer":"https://uxauditscreenroot.vercel.app","X-Title":"UX Audit Availability Check"},
@@ -38,7 +39,7 @@ async function testModel(item: ModelDef) {
    const answer = extractText(payload?.choices?.[0]?.message?.content);
    const usage=payload?.usage??{};const promptTokens=Number(usage.prompt_tokens??0),completionTokens=Number(usage.completion_tokens??0);const estimatedCostUsd=typeof usage.cost==="number"?usage.cost:(promptTokens*(item.promptPrice??0)+completionTokens*(item.completionPrice??0));return {...item,ok:Boolean(answer),latencyMs:Date.now()-started,responsePreview:answer.slice(0,30),promptTokens,completionTokens,totalTokens:usage.total_tokens??(promptTokens+completionTokens),estimatedCostUsd,error:answer ? undefined : "Provider returned no text content"};
   }
-  const key = process.env.GEMINI_API_KEY;
+  const key = getRuntimeEnv().GEMINI_API_KEY?.trim();
   if (!key) return {...item,ok:false,latencyMs:0,error:"Gemini API key missing"};
   response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${item.model}:generateContent`,{
    method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":key},
@@ -59,7 +60,7 @@ async function testModel(item: ModelDef) {
  }
 }
 async function getPopularModels(): Promise<ModelDef[]> {
- const key=process.env.OPENROUTER_API_KEY;
+ const key=getRuntimeEnv().OPENROUTER_API_KEY?.trim();
  if(!key)throw new Error("OPENROUTER_API_KEY is not configured.");
  const response=await fetch("https://openrouter.ai/api/v1/models",{headers:{Authorization:`Bearer ${key}`},signal:AbortSignal.timeout(10000),cache:"no-store"});
  const payload:any=await response.json().catch(()=>({}));
