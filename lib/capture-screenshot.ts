@@ -6,7 +6,7 @@ export async function captureWebsiteScreenshot({ url, width, height }: CaptureOp
   const errors: string[] = [];
   const token = process.env.BROWSERLESS_API_TOKEN;
 
-  // Prefer a real browser for full-page capture. Scroll the page first so lazy-loaded
+  // Give slower long-form pages time to navigate and finish a full-page render. Scroll the page first so lazy-loaded
   // images and below-the-fold sections have a chance to render before the screenshot.
   if (token) {
     try {
@@ -17,12 +17,12 @@ export async function captureWebsiteScreenshot({ url, width, height }: CaptureOp
           url,
           options: { type: "jpeg", quality: 80, fullPage: true, captureBeyondViewport: true, waitForImages: false },
           viewport: { width, height, deviceScaleFactor: 1 },
-          gotoOptions: { waitUntil: "domcontentloaded", timeout: 9000 },
-          waitForTimeout: 650,
+          gotoOptions: { waitUntil: "domcontentloaded", timeout: 20000 },
+          waitForTimeout: 400,
           scrollPage: true,
           bestAttempt: true
         }),
-        signal: AbortSignal.timeout(13000),
+        signal: AbortSignal.timeout(26000),
         cache: "no-store"
       });
       const type = response.headers.get("content-type") || "";
@@ -45,13 +45,13 @@ export async function captureWebsiteScreenshot({ url, width, height }: CaptureOp
     errors.push("Browserless fallback is not configured");
   }
 
-  // Secondary provider. Keep a small render delay here too, but prefer Browserless
+  // Secondary provider gets its own budget if Browserless is slow or blocked. Prefer Browserless
   // because it explicitly scrolls the page to trigger lazy-loaded media.
   const thumUrl = "https://image.thum.io/get/fullpage/width/" + width + "/viewportWidth/" + width + "/wait/2/maxAge/60/noanimate/" + url;
   try {
     const response = await fetch(thumUrl, {
       headers: { Accept: "image/*" },
-      signal: AbortSignal.timeout(9000),
+      signal: AbortSignal.timeout(15000),
       cache: "no-store"
     });
     const type = response.headers.get("content-type") || "";
