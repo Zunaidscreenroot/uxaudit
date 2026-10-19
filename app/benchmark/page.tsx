@@ -103,11 +103,14 @@ export default function BenchmarkPage(){
     <a className="bm-open-site" href={activeReport.url} target="_blank" rel="noreferrer">Open live site ↗</a>
    </div>
    {activeReport.screenshot?<iframe className="bm-screenshot-iframe" title={"Scrollable screenshot of "+activeReport.name} srcDoc={screenshotDocument(activeReport.screenshot)} sandbox="" loading="lazy"/>:
-    <div className={"bm-no-capture "+(activeReport.error||activeReport.status==="failed"?"failed":"")}>
-     <strong>{activeReport.error||activeReport.status==="failed"?"Screenshot capture unavailable":activeReport.status==="running"?"Capturing and auditing this website…":"No screenshot was included in the audit response."}</strong>
-     <p>{activeReport.error||activeReport.qualityWarnings?.join(" ")||"This page does not have a usable screenshot preview. Do not draw a visual benchmark conclusion from this report."}</p>
-     <a href={activeReport.url} target="_blank" rel="noreferrer">Open the site directly ↗</a>
-    </div>}
+    <>
+     <iframe className="bm-screenshot-iframe bm-live-fallback" title={"Live website frame for "+activeReport.name} src={activeReport.url} sandbox="allow-forms allow-scripts allow-same-origin allow-popups" referrerPolicy="strict-origin-when-cross-origin" loading="lazy"/>
+     <div className={"bm-no-capture "+(activeReport.error||activeReport.status==="failed"?"failed":"")}>
+      <strong>{activeReport.error||activeReport.status==="failed"?"Screenshot capture unavailable":activeReport.status==="running"?"Capturing and auditing this website…":"No screenshot was included in the audit response."}</strong>
+      <p>{activeReport.error||activeReport.qualityWarnings?.join(" ")||"This page does not have a usable screenshot preview. Do not draw a visual benchmark conclusion from this report."} A live embed may also be blocked by the bank’s frame policy.</p>
+      <a href={activeReport.url} target="_blank" rel="noreferrer">Open the site directly ↗</a>
+     </div>
+    </>}
    <div className="bm-iframe-footnote">The iframe shows the actual screenshot used for the audit, in a scrollable frame. Use “Open live site” to inspect interactive behaviour; some banking websites block live embedding.</div>
   </section>
   <aside className="bm-benchmark-panel">
