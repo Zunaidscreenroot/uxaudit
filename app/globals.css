@@ -224,3 +224,24 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible{
 .ca-evidence summary{color:#c7f36b;font-size:10px;font-weight:750;cursor:pointer}
 .ca-evidence img{display:block;width:100%;max-height:360px;object-fit:contain;object-position:top;margin-top:10px;border:1px solid #30382d;border-radius:7px;background:#101310}
 @media(max-width:700px){.ca-shell{padding:17px 12px}.ca-nav{align-items:flex-start;flex-direction:column}.ca-nav-links{gap:11px}.ca-hero{padding-top:22px}.ca-site-grid{grid-template-columns:1fr}.ca-site-card{padding:13px}.ca-url-row{flex-direction:column}.ca-url-row button{width:100%}.ca-run-panel{align-items:stretch;flex-direction:column}.ca-run-actions{width:100%;flex-direction:column}.ca-run-actions button{width:100%}.ca-results-heading{align-items:flex-start;flex-direction:column}.ca-report-grid{grid-template-columns:1fr}.ca-viewport{align-items:stretch}.ca-viewport>span{width:100%}}
+
+
+/* Page-level result tabs for independent competitor audits */
+.ca-result-tabs{display:flex;gap:8px;overflow-x:auto;padding:3px 2px 12px;margin:0 0 4px;scrollbar-color:#596650 #101310}
+.ca-result-tab{display:grid;grid-template-columns:minmax(105px,1fr);gap:5px;flex:0 0 190px;min-width:0;text-align:left;padding:12px;border:1px solid #30382d;border-radius:10px;background:#171b17;color:#e9eee7;cursor:pointer}
+.ca-result-tab:hover{border-color:#64735b;background:#1b2119}
+.ca-result-tab.active{border-color:#c7f36b;background:#20271d;box-shadow:inset 0 0 0 1px #c7f36b}
+.ca-tab-page-title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#f1f5ed;font-size:12px;font-weight:850}
+.ca-tab-site-title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#9aa497;font-size:9px;line-height:1.4}
+.ca-tab-state{display:inline-flex;justify-self:start;max-width:100%;margin-top:3px;border-radius:999px;padding:4px 7px;background:#252c23;color:#c7f36b;font-size:8px;font-weight:850;line-height:1.25}
+.ca-tab-state.queued{background:#242b20;color:#a3ada0}
+.ca-tab-state.auditing{background:#352f1c;color:#e7d48d}
+.ca-tab-state.review{background:#352f1c;color:#e7d48d}
+.ca-tab-state.failed{background:#3a211d;color:#ffb8ad}
+.ca-active-report{min-width:0;padding:18px;border:1px solid #30382d;border-radius:12px;background:#171b17}
+.ca-active-page-title{margin:12px 0 4px;color:#f1f5ed;font-size:20px;line-height:1.25;letter-spacing:-.4px;overflow-wrap:anywhere}
+.ca-report-pending{min-height:170px;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:8px}
+.ca-report-pending h3{margin:7px 0 0;color:#f1f5ed;font-size:17px}
+.ca-report-pending p{max-width:720px;margin:0;color:#a3ada0;font-size:11px;line-height:1.65}
+.ca-no-findings{padding:12px;border:1px solid #5b4d2c;border-radius:8px;background:#292719;color:#e7d48d;font-size:10px;line-height:1.55}
+@media(max-width:700px){.ca-result-tab{flex-basis:164px;padding:10px}.ca-active-report{padding:13px}.ca-active-page-title{font-size:18px}}
