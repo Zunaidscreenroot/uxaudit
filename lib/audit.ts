@@ -154,7 +154,7 @@ function evidenceSpecificRecommendation(observation: VisualObservation, category
   switch (category) {
     case "Navigation": return "Make " + element + " easier to find in " + section + ": use a descriptive label, place it beside related destinations, and link directly to the relevant page instead of forcing users to infer where “" + capWords(issue, 70) + "” is resolved.";
     case "Information hierarchy": return "Restructure " + section + " so " + element + " has a clear priority: use a specific heading, group supporting information nearby, and reduce competing messages around the decision this element supports.";
-    case "Usability & interaction": return "Revise " + element + " in " + section + " with an explicit action label, a clear interactive affordance, an adequate target size, and visible feedback or a next state after the action.";
+    case "Usability & interaction": if (/\b(skip link|contrast|low vision|keyboard|focus indicator|accessibility|screen reader|small text|font size|tap target)\b/i.test([section, element, issue, observation.whyItMatters].join(" "))) return "Improve the accessibility of " + element + " in " + section + ": make the text and icons readable at the intended viewport, provide sufficient foreground/background contrast and a clearly visible keyboard-focus state, and verify the result with WCAG 2.2 AA contrast checks plus keyboard and zoom testing."; return "Revise " + element + " in " + section + " with an explicit action label, a clear interactive affordance, an adequate target size, and visible feedback or a next state after the action.";
     case "Content & tone": return "Rewrite the copy for " + element + " in " + section + " to state the product or task and expected next step in plain language; replace wording that creates “" + capWords(issue, 70) + "” with concise, specific, scannable content.";
     case "Visual design": return "Update " + element + " in " + section + " to use consistent typography, spacing, alignment, and contrast while giving this element a purposeful treatment that fits the established brand system.";
     case "Responsiveness": return "Rework " + element + " in " + section + " for the 393 × 852 CSS-pixel mobile viewport: prevent clipping and horizontal overflow, preserve readable type and logical stacking, and provide comfortably spaced touch targets.";
@@ -210,7 +210,13 @@ function normalizeFinding(raw: unknown, observation: VisualObservation, index: n
   const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
   const ux = item.uxPerspective && typeof item.uxPerspective === "object" ? item.uxPerspective as Record<string, unknown> : {};
   const business = item.businessAnalysis && typeof item.businessAnalysis === "object" ? item.businessAnalysis as Record<string, unknown> : {};
-  const category = categoryFor(item.category, observation);
+  const modelCategory = categoryFor(item.category, observation);
+  const observedText = normalizeIssueText([observation.section, observation.element, observation.issue, observation.whyItMatters].join(" "));
+  const accessibilityUiIssue = /\b(skip link|keyboard|low vision|screen reader|low contrast|contrast ratio|focus indicator|focus state|accessibility|text too small|small text|font size|tap target|unreadable)\b/.test(observedText);
+  const hierarchyIssue = /\b(competing calls to action|competing emphasis|flat hierarchy|choice overload|primary action|hierarchy|prominence|clutter|dense labels|hard to scan|difficult to scan|visual priority|equally prominent)\b/.test(observedText);
+  const observedPerformanceIssue = /\b(slow|loading|load time|page speed|performance|latency|lcp|cls|inp|contentful paint|rendering delay|core web vitals)\b/.test(observedText);
+  const category = accessibilityUiIssue ? "Usability & interaction" : hierarchyIssue && modelCategory !== "Web performance" ? "Information hierarchy" : modelCategory === "Web performance" && !observedPerformanceIssue ? inferredCategory(observation) : modelCategory;
+  const categoryWasOverridden = category !== modelCategory;
   const uniqueTitle = evidenceSpecificTitle(observation, index, prior);
   const suppliedTitle = textValue(item.title, "");
   const title = !suppliedTitle || isGenericTitle(suppliedTitle) || isRepeated(suppliedTitle, prior, (finding) => finding.title) ? uniqueTitle : capWords(suppliedTitle, 130);
@@ -221,7 +227,8 @@ function normalizeFinding(raw: unknown, observation: VisualObservation, index: n
   const issueText = normalizeIssueText([observation.section, observation.element, observation.issue, observation.whyItMatters].join(" "));
   const issueLooksLikePerformance = /\b(slow|loading|load time|page speed|performance|latency|lcp|cls|inp|contentful paint|spinner|skeleton|rendering delay)\b/i.test(issueText);
   const categoryMismatch = category === "Web performance" && !issueLooksLikePerformance;
-  const unsupportedPerformanceAdvice = recommendationLooksLikePerformance && !issueLooksLikePerformance;
+  const accessibilityRecommendationMismatch = accessibilityUiIssue && !/\b(contrast|keyboard|focus|accessibility|screen reader|readable|zoom|wcag|text size)\b/i.test(recommendationValue);
+  const unsupportedPerformanceAdvice = (recommendationLooksLikePerformance && !issueLooksLikePerformance) || accessibilityRecommendationMismatch;
   const suppliedKpi = String(business.kpi ?? "");
   const unsupportedPerformanceKpi = !issueLooksLikePerformance && /\b(core web vitals|largest contentful paint|\blcp\b|\bcls\b|\binp\b|page speed|bounce rate|loading time|load time)\b/i.test(suppliedKpi);
   const footerNavigationIssue = /\bfooter\b/.test(normalizeIssueText(observation.section)) && /\b(accordion|collapsed sections|link list|navigation|rows|menu)\b/.test(issueText);
@@ -239,13 +246,13 @@ function normalizeFinding(raw: unknown, observation: VisualObservation, index: n
     const supplied = textValue(value, "");
     const generic = /^(consideration\s*\/\s*conversion|cta click through\s*\/\s*conversion rate|primary cta click through rate|users may take longer to understand the value proposition or choose the next action|the friction can reduce clarity and increase hesitation before the next funnel step)[.! ]*$/i.test(supplied);
     const repeated = isRepeated(supplied, prior, (finding) => String(finding.businessAnalysis[key] ?? ""));
-    if (key === "kpi" && unsupportedPerformanceKpi) return businessDefaults.kpi;
-    if ((key === "impact" || key === "mechanism") && categoryMismatch && !issueLooksLikePerformance) return businessDefaults[key];
+    if (key === "kpi" && (unsupportedPerformanceKpi || categoryWasOverridden)) return businessDefaults.kpi;
+    if ((key === "impact" || key === "mechanism") && (categoryMismatch || categoryWasOverridden) && !issueLooksLikePerformance) return businessDefaults[key];
     return !supplied || generic || repeated ? businessDefaults[key] : supplied;
   }
   return {
     id: textValue(item.id, "finding-" + (index + 1)),
-    severity: severityFor(item.severity),
+    severity: accessibilityUiIssue && severityFor(item.severity) === "low" ? "medium" : severityFor(item.severity),
     category: resolvedCategory, title, description, recommendation,
     // Keep good model-generated UX research as-is; only fill missing fields.
     uxPerspective: {
