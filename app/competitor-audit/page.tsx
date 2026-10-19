@@ -24,6 +24,12 @@ type Finding = {
   description?: string;
   recommendation?: string;
 };
+type AuditTarget = {
+  key: string;
+  siteId: string;
+  siteTitle: string;
+  page: Page;
+};
 type Report = {
   key: string;
   siteId: string;
@@ -74,6 +80,8 @@ export default function CompetitorPageAudit() {
   const [runStatus, setRunStatus] = useState("");
   const [reports, setReports] = useState<Report[]>([]);
   const [pageStatuses, setPageStatuses] = useState<Record<string, string>>({});
+  const [resultTargets, setResultTargets] = useState<AuditTarget[]>([]);
+  const [activeResultKey, setActiveResultKey] = useState("");
   const [nextSiteNumber, setNextSiteNumber] = useState(3);
 
   const selectedTargets = useMemo(
@@ -89,6 +97,10 @@ export default function CompetitorPageAudit() {
     ),
     [sites],
   );
+
+  const activeResultTarget = resultTargets.find((target) => target.key === activeResultKey) || resultTargets[0];
+  const activeReport = activeResultTarget ? reports.find((report) => report.key === activeResultTarget.key) : undefined;
+  const activeResultStatus = activeResultTarget ? pageStatuses[activeResultTarget.key] : undefined;
 
   function updateSite(id: string, updater: (site: Site) => Site) {
     setSites((previous) => previous.map((site) => site.id === id ? updater(site) : site));
@@ -206,6 +218,14 @@ export default function CompetitorPageAudit() {
     setRunning(true);
     setRunStatus("");
     const targets = [...selectedTargets];
+    setResultTargets(targets);
+    setActiveResultKey(targets[0].key);
+    setReports((previous) => previous.filter((report) => !targets.some((target) => target.key === report.key)));
+    setPageStatuses((previous) => {
+      const next = { ...previous };
+      targets.forEach((target) => { next[target.key] = "queued"; });
+      return next;
+    });
     let completed = 0;
     let review = 0;
     let failed = 0;
@@ -239,7 +259,7 @@ export default function CompetitorPageAudit() {
             key: target.key,
             siteId: target.siteId,
             siteTitle: target.siteTitle,
-            pageTitle: data.page.title || target.page.title,
+            pageTitle: target.page.title || data.page.title || pagePath(url),
             url: data.page.url || url,
             auditId: data.auditId,
             status,
@@ -405,55 +425,94 @@ export default function CompetitorPageAudit() {
           {runStatus && <div className="ca-run-status" role="status">{runStatus}</div>}
         </section>
 
-        {reports.length > 0 && (
+        {resultTargets.length > 0 && (
           <section className="ca-results">
             <div className="ca-results-heading">
               <div>
                 <span className="ca-overline">AUDIT RESULTS</span>
-                <h2>Individual page reports</h2>
-                <p>Reports remain separate by website and page; this view does not rank or compare competitors.</p>
+                <h2>Page-by-page findings</h2>
+                <p>Choose a page tab to inspect its findings and screenshot evidence. Reports remain separate; this is not a competitor ranking.</p>
               </div>
-              <button type="button" className="ca-clear-results" onClick={() => { if (!running) { setReports([]); setPageStatuses({}); } }} disabled={running}>Clear reports</button>
+              <button type="button" className="ca-clear-results" onClick={() => { if (!running) { setReports([]); setPageStatuses({}); setResultTargets([]); setActiveResultKey(""); } }} disabled={running}>Clear reports</button>
             </div>
 
-            <div className="ca-report-grid">
-              {reports.map((report) => (
-                <article className="ca-report-card" key={report.key}>
-                  <div className="ca-report-topline">
-                    <span className={"ca-quality " + report.status}>{statusLabel(report.status)}</span>
-                    {report.auditId && <span className="ca-audit-id">Saved audit</span>}
-                  </div>
-                  <h3>{report.pageTitle}</h3>
-                  <p className="ca-report-site">{report.siteTitle}</p>
-                  <a className="ca-report-url" href={report.url} target="_blank" rel="noreferrer">{report.url} ↗</a>
-                  {report.status === "failed" ? (
-                    <div className="ca-report-error">{report.error || "The audit could not be completed."}</div>
-                  ) : (
-                    <>
-                      <div className="ca-report-stats"><strong>{report.findings.length}</strong><span>finding(s)</span><span>·</span><span>{report.auditMode === "mobile" ? "Mobile" : "Desktop"} audit</span></div>
-                      {report.status === "review" && <p className="ca-review-note">No findings were returned. Review the captured page and audit evidence before treating this as a clean result.</p>}
-                      {report.findings.map((finding, index) => (
-                        <div className="ca-finding" key={finding.id || report.key + "-" + index}>
-                          <div className="ca-finding-labels">
-                            <span className={"ca-severity " + String(finding.severity || "medium").toLowerCase()}>{finding.severity || "Unspecified"}</span>
-                            <span>{finding.category || "UX observation"}</span>
-                          </div>
-                          <strong>{finding.title || "UX finding " + (index + 1)}</strong>
-                          {finding.description && <p>{finding.description}</p>}
-                          {finding.recommendation && <p className="ca-recommendation"><b>Recommendation:</b> {finding.recommendation}</p>}
-                        </div>
-                      ))}
-                      {report.screenshot && report.screenshot.startsWith("data:image/") && (
-                        <details className="ca-evidence">
-                          <summary>View captured screenshot evidence</summary>
-                          <img src={report.screenshot} alt={"Captured screenshot for " + report.pageTitle} />
-                        </details>
-                      )}
-                    </>
-                  )}
-                </article>
-              ))}
+            <div className="ca-result-tabs" role="tablist" aria-label="Audited pages">
+              {resultTargets.map((target) => {
+                const report = reports.find((item) => item.key === target.key);
+                const state = pageStatuses[target.key] || "queued";
+                const active = target.key === (activeResultTarget?.key || activeResultKey);
+                const label = report?.pageTitle || target.page.title || pagePath(target.page.url);
+                return (
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    aria-controls="ca-active-result-panel"
+                    id={"ca-tab-" + resultTargets.indexOf(target)}
+                    className={"ca-result-tab" + (active ? " active" : "")}
+                    key={target.key}
+                    onClick={() => setActiveResultKey(target.key)}
+                  >
+                    <span className="ca-tab-page-title">{label}</span>
+                    <span className="ca-tab-site-title">{target.siteTitle}</span>
+                    <span className={"ca-tab-state " + state}>
+                      {state === "auditing" ? "Running" : state === "queued" ? "Queued" : state === "complete" ? (report?.findings.length || 0) + " findings" : state === "review" ? "Review" : "Failed"}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
+
+            {activeResultTarget && (
+              <article className="ca-active-report" role="tabpanel" id="ca-active-result-panel" aria-labelledby={"ca-tab-" + resultTargets.findIndex((target) => target.key === activeResultTarget.key)}>
+                {!activeReport ? (
+                  <div className="ca-report-pending">
+                    <span className={"ca-quality " + (activeResultStatus === "failed" ? "failed" : "review")}>
+                      {activeResultStatus === "auditing" ? "Audit in progress" : activeResultStatus === "failed" ? "Audit failed" : "Waiting in queue"}
+                    </span>
+                    <h3>{activeResultTarget.page.title || pagePath(activeResultTarget.page.url)}</h3>
+                    <p>{activeResultStatus === "auditing" ? "The page is being captured and analysed. Its findings will appear here when the audit completes." : activeResultStatus === "failed" ? "The audit failed; see the tab status and retry the selected pages." : "This page has not been processed yet. Its own findings will appear here once its audit finishes."}</p>
+                    <a className="ca-report-url" href={activeResultTarget.page.url} target="_blank" rel="noreferrer">{activeResultTarget.page.url} ↗</a>
+                  </div>
+                ) : (
+                  <>
+                    <div className="ca-report-topline">
+                      <span className={"ca-quality " + activeReport.status}>{statusLabel(activeReport.status)}</span>
+                      {activeReport.auditId && <span className="ca-audit-id">Saved audit</span>}
+                    </div>
+                    <h3 className="ca-active-page-title">{activeReport.pageTitle}</h3>
+                    <p className="ca-report-site">{activeReport.siteTitle}</p>
+                    <a className="ca-report-url" href={activeReport.url} target="_blank" rel="noreferrer">{activeReport.url} ↗</a>
+                    {activeReport.status === "failed" ? (
+                      <div className="ca-report-error">{activeReport.error || "The audit could not be completed."}</div>
+                    ) : (
+                      <>
+                        <div className="ca-report-stats"><strong>{activeReport.findings.length}</strong><span>finding(s)</span><span>·</span><span>{activeReport.auditMode === "mobile" ? "Mobile" : "Desktop"} audit</span></div>
+                        {activeReport.status === "review" && <p className="ca-review-note">No findings were returned. Review the captured page and audit evidence before treating this as a clean result.</p>}
+                        {activeReport.findings.length === 0 && activeReport.status !== "review" && <p className="ca-no-findings">No findings were returned for this page.</p>}
+                        {activeReport.findings.map((finding, index) => (
+                          <div className="ca-finding" key={finding.id || activeReport.key + "-" + index}>
+                            <div className="ca-finding-labels">
+                              <span className={"ca-severity " + String(finding.severity || "medium").toLowerCase()}>{finding.severity || "Unspecified"}</span>
+                              <span>{finding.category || "UX observation"}</span>
+                            </div>
+                            <strong>{finding.title || "UX finding " + (index + 1)}</strong>
+                            {finding.description && <p>{finding.description}</p>}
+                            {finding.recommendation && <p className="ca-recommendation"><b>Recommendation:</b> {finding.recommendation}</p>}
+                          </div>
+                        ))}
+                        {activeReport.screenshot && activeReport.screenshot.startsWith("data:image/") && (
+                          <details className="ca-evidence">
+                            <summary>View captured screenshot evidence</summary>
+                            <img src={activeReport.screenshot} alt={"Captured screenshot for " + activeReport.pageTitle} />
+                          </details>
+                        )}
+                      </>
+                    )}
+                  </>
+                )}
+              </article>
+            )}
           </section>
         )}
       </div>
