@@ -247,34 +247,49 @@ export default function BenchmarkPage(){
    setStatus("Checking paid vision models…");
    const verifiedModels=await loadVerifiedModels();
    setReports(pendingReports);setActiveReportUrl(entries[0].url);
-   const output:Report[]=new Array(entries.length);let nextIndex=0;
-   await Promise.all(Array.from({length:Math.min(2,entries.length)},async()=>{
+   const output:Report[]=new Array(entries.length);
+   const baselineEntry=entries[0];
+   setStatus("Auditing Ujjivan baseline for revamp context…");
+   try{
+    const baselineResponse=await fetch("/api/audit-url",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:baselineEntry.url,projectName:baselineEntry.name,auditMode,verifiedModels})});
+    const baselineData=await baselineResponse.json().catch(()=>({}));
+    if(!baselineResponse.ok)throw new Error(baselineData.error||"Ujjivan baseline audit failed.");
+    const baselineFindings:Finding[]=Array.isArray(baselineData.page?.findings)?baselineData.page.findings:[];
+    const baselineQuality=assessReportQuality(baselineFindings);
+    output[0]={name:baselineEntry.name,url:baselineEntry.url,mode:auditMode,auditId:typeof baselineData.auditId==="string"?baselineData.auditId:undefined,findings:baselineFindings,screenshot:typeof baselineData.page?.screenshot==="string"?baselineData.page.screenshot:undefined,screenshotWidth:Number(baselineData.page?.screenshotWidth)||0,screenshotHeight:Number(baselineData.page?.screenshotHeight)||0,captureMethod:typeof baselineData.page?.captureMethod==="string"?baselineData.page.captureMethod:undefined,status:baselineQuality.qualityStatus==="review"?"review":"complete",...baselineQuality};
+   }catch(cause){
+    output[0]={name:baselineEntry.name,url:baselineEntry.url,mode:auditMode,findings:[],status:"failed",error:cause instanceof Error?cause.message:"Ujjivan baseline audit failed."};
+   }
+   setReports(entries.map((entry,i)=>output[i]||pendingReports[i]));
+   let nextIndex=1;
+   await Promise.all(Array.from({length:Math.min(2,Math.max(0,entries.length-1))},async()=>{
     while(true){
      const index=nextIndex++;if(index>=entries.length)return;
-     const entry=entries[index];setStatus("Auditing "+(index+1)+" of "+entries.length+" ("+auditMode+"): "+entry.name);
+     const entry=entries[index];
+     setStatus("Capturing competitor evidence ("+index+" of "+(entries.length-1)+"): "+entry.name+"…");
      try{
-      const response=await fetch("/api/audit-url",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:entry.url,projectName:entry.name,auditMode,verifiedModels})});
+      const response=await fetch("/api/benchmark-capture",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:entry.url,auditMode})});
       const data=await response.json().catch(()=>({}));
-      if(!response.ok)throw new Error(data.error||"Audit request failed.");
-      const findings:Finding[]=Array.isArray(data.page?.findings)?data.page.findings:[];const quality=assessReportQuality(findings);output[index]={name:entry.name,url:entry.url,mode:auditMode,auditId:typeof data.auditId==="string"?data.auditId:undefined,findings,screenshot:typeof data.page?.screenshot==="string"?data.page.screenshot:undefined,screenshotWidth:Number(data.page?.screenshotWidth)||0,screenshotHeight:Number(data.page?.screenshotHeight)||0,captureMethod:typeof data.page?.captureMethod==="string"?data.page.captureMethod:undefined,status:quality.qualityStatus==="review"?"review":"complete",...quality};
-     }catch(e){output[index]={name:entry.name,url:entry.url,mode:auditMode,findings:[],status:"failed",error:e instanceof Error?e.message:"Audit failed"};}
-     setReports(entries.map((entry,i)=>output[i]||pendingReports[i]));
+      if(!response.ok)throw new Error(data.error||"Competitor screenshot capture failed.");
+      if(typeof data.screenshot!=="string")throw new Error("Competitor capture returned no usable screenshot.");
+      output[index]={name:entry.name,url:entry.url,mode:auditMode,findings:[],screenshot:data.screenshot,screenshotWidth:Number(data.screenshotWidth)||0,screenshotHeight:Number(data.screenshotHeight)||0,captureMethod:typeof data.captureMethod==="string"?data.captureMethod:undefined,status:"complete",qualityStatus:"review",qualityWarnings:["Competitor screenshot is awaiting visual verification against the real homepage."],benchmarkStatus:"pending"};
+     }catch(cause){
+      output[index]={name:entry.name,url:entry.url,mode:auditMode,findings:[],status:"failed",qualityStatus:"review",qualityWarnings:["No verified competitor screenshot is available."],error:cause instanceof Error?cause.message:"Competitor screenshot capture failed.",benchmarkStatus:"failed",benchmarkError:"Pattern analysis cannot run without a competitor screenshot."};
+     }
+     setReports(entries.map((item,i)=>output[i]||pendingReports[i]));
     }
    }));
    let completed=output.filter((item)=>Boolean(item)) as Report[];
    setReports(completed);setActiveReportUrl(completed[0]?.url||entries[0].url);
-   if(completed.every(x=>x.error))throw new Error("None of the websites could be audited. Check capture access and OpenRouter configuration.");
    const baseline=completed[0];
    const insightIndexes=completed.map((report,index)=>({report,index})).filter(item=>item.index>0&&!item.report.error&&Boolean(item.report.screenshot)).map(item=>item.index);
    if(baseline?.screenshot&&!baseline.error&&insightIndexes.length){
-    for(const index of insightIndexes)output[index]={...output[index],benchmarkStatus:"pending",benchmarkError:undefined};
-    setReports(output.filter(Boolean) as Report[]);
     let cursor=0;
     await Promise.all(Array.from({length:Math.min(2,insightIndexes.length)},async()=>{
      while(true){
       const slot=cursor++;if(slot>=insightIndexes.length)return;
       const index=insightIndexes[slot];const peer=output[index];
-      setStatus("Learning from "+peer.name+" and mapping patterns to Ujjivan…");
+      setStatus("Comparing "+peer.name+" with Ujjivan to extract patterns for the revamp…");
       try{
        const insights=await createBenchmarkInsights(peer,baseline,verifiedModels);
        output[index]=applyBenchmarkInsights(peer,insights);
@@ -291,8 +306,8 @@ export default function BenchmarkPage(){
    setReports(completed);
    const readyPatterns=completed.slice(1).filter(x=>x.benchmarkStatus==="complete"&&x.benchmarkInsights?.captureValid).length;
    const reviewPatterns=completed.slice(1).filter(x=>x.benchmarkStatus==="review"||x.benchmarkStatus==="failed").length;
-   const failedCaptures=completed.filter(x=>Boolean(x.error)).length;
-   setStatus("Benchmark finished: "+readyPatterns+" competitor(s) produced screenshot-verified patterns for Ujjivan; "+reviewPatterns+" need capture/analysis review; "+failedCaptures+" website capture(s) failed. Competitor audit issues are secondary context.");
+   const failedCaptures=completed.slice(1).filter(x=>Boolean(x.error)).length;
+   setStatus("Benchmark finished: Ujjivan baseline "+(baseline?.error?"needs attention":"ready")+"; "+readyPatterns+" competitor(s) produced screenshot-verified patterns for the revamp; "+reviewPatterns+" need capture/analysis review; "+failedCaptures+" competitor capture(s) failed. Peer issue audits were not run.");
   }catch(e){setError(e instanceof Error?e.message:"Could not run benchmark.");}
   finally{setBusy(false);}
  }
@@ -338,11 +353,11 @@ export default function BenchmarkPage(){
    {activeReport.error&&<div className="bm-report-error">{activeReport.error}</div>}
    {activeReport.status==="running"&&!activeReport.error&&<div className="bm-report-pending">This website is being audited. Its report will populate here when capture and analysis finish.</div>}
    {!activeReport.error&&activeReport.status!=="running"&&<>
-    <div className="bm-metric-strip">
+    {activeIsClient&&<div className="bm-metric-strip">
      <div><span>High</span><strong>{activeReport.findings.filter(f=>f.severity.toLowerCase()==="high").length}</strong></div>
      <div><span>Medium</span><strong>{activeReport.findings.filter(f=>f.severity.toLowerCase()==="medium").length}</strong></div>
      <div><span>Low</span><strong>{activeReport.findings.filter(f=>f.severity.toLowerCase()==="low").length}</strong></div>
-    </div>
+    </div>}
     {activeReport.qualityStatus==="review"&&<div className="bm-quality-warning">This capture is not approved as a reliable design reference. Inspect it manually or rerun before using it to support a decision.</div>}
     {activeIsClient?<>
      <section className="bm-panel-section"><h4>Ujjivan issues to resolve</h4><p className="bm-panel-help">Prioritized from Ujjivan’s own screenshot evidence. These actions remain the source of truth for the remediation plan.</p>
@@ -377,7 +392,7 @@ export default function BenchmarkPage(){
      </details>
     </>}
    </>}
-   <p className="bm-method-note">Method: screenshot-grounded pattern mining first; translate every insight into a Ujjivan-specific adaptation, fit/trade-offs, and validation plan. Competitor audit findings and finding counts are secondary context.</p>
+   <p className="bm-method-note">Method: audit Ujjivan to establish redesign needs; capture competitor pages as design evidence, verify both screenshots, and extract transferable patterns with Ujjivan-specific adaptation and validation. Competitor issue audits are not run by default.</p>
   </aside>
  </div>}
  <div className="bm-caveat"><strong>Benchmarking method</strong><p>The primary output is screenshot-grounded competitor patterns and a concrete adaptation for Ujjivan: where it belongs in the revamp, what customer need it may support, trade-offs, and how to validate it. Competitor audit findings and counts are secondary; blocked or unverified captures cannot support design recommendations.</p></div>
