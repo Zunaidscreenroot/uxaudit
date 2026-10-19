@@ -188,9 +188,66 @@ export default function BenchmarkPage(){
    image.src=dataUrl;
   });
  }
+
+ function loadBenchmarkScreenshot(dataUrl:string):Promise<HTMLImageElement>{
+  return new Promise((resolve,reject)=>{
+   const image=new Image();
+   image.onload=()=>resolve(image);
+   image.onerror=()=>reject(new Error("Could not load one of the screenshots for side-by-side pattern analysis."));
+   image.src=dataUrl;
+  });
+ }
+ async function composeBenchmarkComparisonImage(baselineDataUrl:string,competitorDataUrl:string,baselineName:string,competitorName:string):Promise<string>{
+  const [leftImage,rightImage]=await Promise.all([loadBenchmarkScreenshot(baselineDataUrl),loadBenchmarkScreenshot(competitorDataUrl)]);
+  const panelWidth=Math.min(960,Math.max(leftImage.naturalWidth,rightImage.naturalWidth));
+  const maxPanelHeight=4000;
+  const labelHeight=68;
+  const fit=(image:HTMLImageElement)=>{
+   const scale=Math.min(1,panelWidth/image.naturalWidth,maxPanelHeight/image.naturalHeight);
+   return {width:Math.max(1,Math.round(image.naturalWidth*scale)),height:Math.max(1,Math.round(image.naturalHeight*scale))};
+  };
+  const leftSize=fit(leftImage),rightSize=fit(rightImage);
+  const panelHeight=Math.max(leftSize.height,rightSize.height);
+  const canvas=document.createElement("canvas");
+  canvas.width=panelWidth*2;
+  canvas.height=labelHeight+panelHeight;
+  const context=canvas.getContext("2d");
+  if(!context)throw new Error("Browser canvas is unavailable for side-by-side pattern analysis.");
+  context.fillStyle="#ffffff";
+  context.fillRect(0,0,canvas.width,canvas.height);
+  const drawLabel=(raw:string,x:number)=>{
+   context.fillStyle="#f0f3f7";
+   context.fillRect(x,0,panelWidth,labelHeight);
+   context.fillStyle="#1f2937";
+   context.font="700 20px system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+   let label=raw;
+   while(context.measureText(label).width>panelWidth-36&&label.length>12)label=label.slice(0,-4)+"…";
+   context.fillText(label,x+18,42);
+  };
+  drawLabel("BASELINE · "+baselineName,0);
+  drawLabel("COMPETITOR · "+competitorName,panelWidth);
+  context.drawImage(leftImage,(panelWidth-leftSize.width)/2,labelHeight,leftSize.width,leftSize.height);
+  context.drawImage(rightImage,panelWidth+(panelWidth-rightSize.width)/2,labelHeight,rightSize.width,rightSize.height);
+  context.fillStyle="#d7dde5";
+  context.fillRect(panelWidth,0,2,canvas.height);
+  let dataUrl=canvas.toDataURL("image/jpeg",0.82);
+  if(dataUrl.length>12*1024*1024){
+   const reduced=document.createElement("canvas");
+   reduced.width=Math.max(1,Math.round(canvas.width*0.72));
+   reduced.height=Math.max(1,Math.round(canvas.height*0.72));
+   const reducedContext=reduced.getContext("2d");
+   if(!reducedContext)throw new Error("Could not resize the combined benchmark screenshot.");
+   reducedContext.drawImage(canvas,0,0,reduced.width,reduced.height);
+   dataUrl=reduced.toDataURL("image/jpeg",0.72);
+  }
+  if(dataUrl.length>13*1024*1024)throw new Error("Combined benchmark screenshot is too large. Retry with a shorter homepage capture.");
+  return dataUrl;
+ }
+
  async function createBenchmarkInsights(peer:Report,baseline:Report,models:VerifiedModel[]):Promise<BenchmarkInsights>{
   if(!baseline.screenshot||!peer.screenshot)throw new Error("Both Ujjivan and competitor screenshots are required for pattern benchmarking.");
   const [baselineScreenshot,competitorScreenshot]=await Promise.all([prepareScreenshotForAnalysis(baseline.screenshot),prepareScreenshotForAnalysis(peer.screenshot)]);
+  const comparisonScreenshot=await composeBenchmarkComparisonImage(baselineScreenshot,competitorScreenshot,baseline.name,peer.name);
   const response=await fetch("/api/benchmark-insights",{
    method:"POST",
    headers:{"Content-Type":"application/json"},
@@ -198,8 +255,7 @@ export default function BenchmarkPage(){
     baselineName:baseline.name,
     competitorName:peer.name,
     competitorUrl:peer.url,
-    baselineScreenshot,
-    competitorScreenshot,
+    comparisonScreenshot,
     baselineFindings:baseline.findings.slice(0,8).map(f=>({category:f.category,title:f.title,evidence:f.evidence?.map(e=>[e.element,e.detail].filter(Boolean).join(": ")).filter(Boolean).join("; ")||f.description||"",recommendation:f.recommendation})),
     verifiedModels:models
    })

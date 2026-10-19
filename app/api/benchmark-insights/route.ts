@@ -1,6 +1,5 @@
 import { assertPaidOpenRouterModel } from "@/lib/openrouter-paid";
 import { inspectImage } from "@/lib/image-utils";
-import sharp from "sharp";
 import { privateHost, resolvesToPrivateAddress } from "@/lib/public-url";
 
 export const runtime = "nodejs";
@@ -55,56 +54,7 @@ function parseScreenshot(value: unknown, label: string) {
     throw new Error(label + " screenshot is empty or exceeds 10 MB for side-by-side analysis.");
   }
   const info = inspectImage(bytes);
-  return { bytes, mimeType: info.mimeType, width: info.width, height: info.height };
-}
-
-function escapeXml(value: string): string {
-  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
-}
-
-async function composeBenchmarkImage(
-  baseline: { bytes: Buffer; width: number; height: number },
-  competitor: { bytes: Buffer; width: number; height: number },
-  baselineName: string,
-  competitorName: string
-): Promise<string> {
-  // Some vision providers accept one image part per request. Merge the same-viewport screenshots
-  // into a single labelled image so the comparison remains visual while staying provider-compatible.
-  const panelWidth = Math.min(960, Math.max(baseline.width, competitor.width));
-  const maxPanelHeight = 4200;
-  const labelHeight = 68;
-  const [left, right] = await Promise.all([
-    sharp(baseline.bytes).rotate().resize({ width: panelWidth, height: maxPanelHeight, fit: "inside", withoutEnlargement: true }).png().toBuffer(),
-    sharp(competitor.bytes).rotate().resize({ width: panelWidth, height: maxPanelHeight, fit: "inside", withoutEnlargement: true }).png().toBuffer()
-  ]);
-  const [leftMeta, rightMeta] = await Promise.all([sharp(left).metadata(), sharp(right).metadata()]);
-  const panelHeight = Math.max(leftMeta.height || 1, rightMeta.height || 1);
-  const canvasWidth = panelWidth * 2;
-  const canvasHeight = labelHeight + panelHeight;
-  const label = (text: string) => Buffer.from(
-    '<svg xmlns="http://www.w3.org/2000/svg" width="' + panelWidth + '" height="' + labelHeight + '">' +
-    '<rect width="100%" height="100%" fill="#f0f3f7"/>' +
-    '<text x="18" y="42" font-family="Arial,Helvetica,sans-serif" font-size="21" font-weight="700" fill="#1f2937">' +
-    escapeXml(text.slice(0, 72)) + '</text></svg>'
-  );
-  const composite = sharp({
-    create: {
-      width: canvasWidth,
-      height: canvasHeight,
-      channels: 3,
-      background: { r: 255, g: 255, b: 255 }
-    }
-  }).composite([
-    { input: label("BASELINE · " + baselineName), left: 0, top: 0 },
-    { input: label("COMPETITOR · " + competitorName), left: panelWidth, top: 0 },
-    { input: left, left: 0, top: labelHeight },
-    { input: right, left: panelWidth, top: labelHeight }
-  ]);
-  const output = await composite.jpeg({ quality: 84, mozjpeg: true }).toBuffer();
-  if (!output.length || output.length > 15 * 1024 * 1024) {
-    throw new Error("The combined comparison image exceeds the 15 MB analysis limit.");
-  }
-  return "data:image/jpeg;base64," + output.toString("base64");
+  return { url: "data:" + info.mimeType + ";base64," + bytes.toString("base64"), bytes: bytes.length };
 }
 
 function normalizeResult(raw: any): InsightResult {
@@ -144,11 +94,7 @@ export async function POST(req: Request) {
       return Response.json({ error: "The competitor hostname did not resolve to a verified public address." }, { status: 400 });
     }
 
-    const baseline = parseScreenshot(body?.baselineScreenshot, baselineName);
-    const competitor = parseScreenshot(body?.competitorScreenshot, competitorName);
-    if (baseline.bytes.length + competitor.bytes.length > 18 * 1024 * 1024) {
-      return Response.json({ error: "The two screenshots together exceed 18 MB. Upload smaller screenshots or capture at the selected viewport." }, { status: 413 });
-    }
+    const comparison = parseScreenshot(body?.comparisonScreenshot, "Side-by-side comparison");
 
     const models: VerifiedModel[] = Array.isArray(body?.verifiedModels)
       ? body.verifiedModels.filter((item: any) =>
@@ -177,8 +123,6 @@ export async function POST(req: Request) {
         }))
       : [];
 
-    const comparisonImage = await composeBenchmarkImage(baseline, competitor, baselineName, competitorName);
-
     const prompt = [
       "You are a senior digital-banking UX benchmark strategist helping redesign " + baselineName + ".",
       "The user wants to learn from competitor experiences and decide what to adapt into the Ujjivan revamp. This task is NOT a competitor usability audit and NOT a scorecard.",
@@ -206,7 +150,7 @@ export async function POST(req: Request) {
           content: [
             { type: "text", text: prompt },
             { type: "text", text: "Attached image layout: left panel = " + baselineName + " baseline; right panel = " + competitorName + " (" + competitorUrl.origin + "). Each panel has its bank label above the screenshot." },
-            { type: "image_url", image_url: { url: comparisonImage } }
+            { type: "image_url", image_url: { url: comparison.url } }
           ]
         }],
         temperature: 0.1,
