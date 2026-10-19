@@ -208,17 +208,24 @@ function normalizeFinding(raw: unknown, observation: VisualObservation, index: n
   const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
   const ux = item.uxPerspective && typeof item.uxPerspective === "object" ? item.uxPerspective as Record<string, unknown> : {};
   const business = item.businessAnalysis && typeof item.businessAnalysis === "object" ? item.businessAnalysis as Record<string, unknown> : {};
-  const category = categoryFor(item.category, observation);
+  const modelCategory = categoryFor(item.category, observation);
+  const observedText = normalizeIssueText([observation.section, observation.element, observation.issue, observation.whyItMatters].join(" "));
+  const accessibilityUiIssue = /\b(skip link|keyboard|low vision|screen reader|low contrast|contrast ratio|focus indicator|focus state|accessibility|text too small|small text|font size|tap target|unreadable)\b/.test(observedText);
+  const hierarchyIssue = /\b(competing calls to action|competing emphasis|flat hierarchy|choice overload|primary action|hierarchy|prominence|clutter|dense labels|hard to scan|difficult to scan|visual priority|equally prominent)\b/.test(observedText);
+  const category = accessibilityUiIssue ? "Usability & interaction" : hierarchyIssue ? "Information hierarchy" : modelCategory;
+  const categoryWasOverridden = category !== modelCategory;
   const uniqueTitle = evidenceSpecificTitle(observation, index, prior);
   const suppliedTitle = textValue(item.title, "");
   const title = !suppliedTitle || isGenericTitle(suppliedTitle) || isRepeated(suppliedTitle, prior, (finding) => finding.title) ? uniqueTitle : capWords(suppliedTitle, 130);
   const descriptionValue = textValue(item.description, "");
   const description = !descriptionValue || normalizeIssueText(descriptionValue) === normalizeIssueText(title) || isRepeated(descriptionValue, prior, (finding) => finding.description) || /^(this issue|this finding|poor ux|visual design|high density|the design is poor)\b/i.test(descriptionValue) ? evidenceSpecificDescription(observation) : capWords(descriptionValue, 700);
   const recommendationValue = textValue(item.recommendation, "");
-  const recommendation = !recommendationValue || isRepeated(recommendationValue, prior, (finding) => finding.recommendation) || /^(improve the design|make it better|enhance usability|improve visual hierarchy|simplify the interface)[.! ]*$/i.test(recommendationValue) || /\b(use a specific heading, group supporting information nearby|reduce competing messages|improve visual hierarchy|make the design more consistent)\b/i.test(recommendationValue) ? evidenceSpecificRecommendation(observation, category) : capWords(recommendationValue, 850);
+  const accessibilityRecommendationMismatch = accessibilityUiIssue && !/\b(contrast|keyboard|focus|accessibility|screen reader|readable|zoom|wcag|text size)\b/i.test(recommendationValue);
+  const recommendation = !recommendationValue || isRepeated(recommendationValue, prior, (finding) => finding.recommendation) || /^(improve the design|make it better|enhance usability|improve visual hierarchy|simplify the interface)[.! ]*$/i.test(recommendationValue) || /\b(use a specific heading, group supporting information nearby|reduce competing messages|improve visual hierarchy|make the design more consistent)\b/i.test(recommendationValue) || accessibilityRecommendationMismatch ? evidenceSpecificRecommendation(observation, category) : capWords(recommendationValue, 850);
   const businessDefaults = evidenceSpecificBusinessAnalysis(observation, category);
   function businessField(key: "funnelStage" | "impact" | "kpi" | "mechanism" | "suggestions"): any {
     const value = business[key];
+    if (categoryWasOverridden) return businessDefaults[key];
     if (key === "suggestions") {
       const list = stringList(value, 4);
       const repeated = list.length > 0 && prior.some((finding) => normalizeIssueText(finding.businessAnalysis.suggestions.join(" ")) === normalizeIssueText(list.join(" ")));
@@ -231,7 +238,7 @@ function normalizeFinding(raw: unknown, observation: VisualObservation, index: n
   }
   return {
     id: textValue(item.id, "finding-" + (index + 1)),
-    severity: severityFor(item.severity),
+    severity: accessibilityUiIssue && severityFor(item.severity) === "low" ? "medium" : severityFor(item.severity),
     category, title, description, recommendation,
     // Keep good model-generated UX research as-is; only fill missing fields.
     uxPerspective: {
