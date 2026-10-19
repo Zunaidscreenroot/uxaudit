@@ -44,8 +44,102 @@ function fixPriorities(report:Report|undefined){
 function recurringCategories(reports:Report[]){const groups=new Map<string,{sites:Set<string>;examples:string[]}>();for(const report of reports){if(report.error||report.qualityStatus!=="ready")continue;for(const finding of report.findings){const category=finding.category||"Uncategorized";const group=groups.get(category)||{sites:new Set<string>(),examples:[]};group.sites.add(report.name);if(group.examples.length<4)group.examples.push(report.name+": "+finding.title);groups.set(category,group);}}return Array.from(groups.entries()).filter(([,group])=>group.sites.size>=2).map(([category,group])=>({category,sites:Array.from(group.sites),examples:group.examples})).sort((a,b)=>b.sites.length-a.sites.length);}
 
 export default function BenchmarkPage(){
- const [connection,setConnection]=useState<{connected:boolean;error?:string}|null>(null);const [clientName,setClientName]=useState("Ujjivan Small Finance Bank");const [clientUrl,setClientUrl]=useState("https://www.ujjivansfb.bank.in/");const [auditMode,setAuditMode]=useState<"desktop"|"mobile">("desktop");const [competitors,setCompetitors]=useState(initial);const [busy,setBusy]=useState(false);const [status,setStatus]=useState("");const [error,setError]=useState("");const [reports,setReports]=useState<Report[]>([]);const [activeReportUrl,setActiveReportUrl]=useState("");
+ const [connection,setConnection]=useState<{connected:boolean;error?:string}|null>(null);const [clientName,setClientName]=useState("Ujjivan Small Finance Bank");const [clientUrl,setClientUrl]=useState("https://www.ujjivansfb.bank.in/");const [auditMode,setAuditMode]=useState<"desktop"|"mobile">("desktop");const [competitors,setCompetitors]=useState(initial);const [busy,setBusy]=useState(false);const [status,setStatus]=useState("");const [error,setError]=useState("");const [reports,setReports]=useState<Report[]>([]);const [activeReportUrl,setActiveReportUrl]=useState("");const [uploadingReportUrl,setUploadingReportUrl]=useState("");
  useEffect(()=>{let cancelled=false;fetch("/api/openrouter-status",{cache:"no-store"}).then(r=>r.json()).then(d=>{if(!cancelled)setConnection(d)}).catch(()=>{if(!cancelled)setConnection({connected:false,error:"Could not check OpenRouter connection"})});return()=>{cancelled=true}},[]);
+ async function analyzeUploadedScreenshot(report:Report,file:File){
+  if(uploadingReportUrl)return;
+  if(!["image/png","image/jpeg","image/webp"].includes(file.type)){
+   setError("Please upload a PNG, JPEG or WebP screenshot of the actual "+report.name+" homepage.");
+   return;
+  }
+  if(file.size>15*1024*1024){
+   setError("The screenshot must be smaller than 15 MB. Export a compressed PNG, JPEG or WebP and retry.");
+   return;
+  }
+  setError("");
+  setUploadingReportUrl(report.url);
+  setStatus("Preparing actual-page screenshot for "+report.name+"…");
+  setReports(previous=>previous.map(item=>item.url===report.url?{...item,status:"running",error:undefined,qualityStatus:undefined,qualityWarnings:[],findings:[],screenshot:undefined,screenshotWidth:0,screenshotHeight:0,captureMethod:"manual upload"}:item));
+  try{
+   const screenshot=await new Promise<string>((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onerror=()=>reject(new Error("The selected screenshot could not be read. Try exporting it as PNG or JPEG."));
+    reader.onload=()=>typeof reader.result==="string"?resolve(reader.result):reject(new Error("The selected screenshot could not be converted to an image."));
+    reader.readAsDataURL(file);
+   });
+   setStatus("Analyzing the uploaded "+report.name+" homepage with the UX audit pipeline…");
+   const response=await fetch("/api/audit-screenshot",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+     url:report.url,
+     title:"Homepage",
+     projectName:report.name+" · manual screenshot",
+     screenshot,
+     auditMode:report.mode||auditMode,
+     viewport:(report.mode||auditMode)==="mobile"?{width:393,height:852}:{width:1440,height:900}
+    })
+   });
+   if(!response.ok){
+    const data=await response.json().catch(()=>({}));
+    throw new Error(data.error||"The uploaded screenshot audit request failed.");
+   }
+   if(!response.body)throw new Error("The screenshot audit stream was unavailable.");
+   const reader=response.body.getReader();
+   const decoder=new TextDecoder();
+   let buffer="";
+   let result:any=null;
+   let streamError="";
+   const processFrame=(frame:string)=>{
+    const line=frame.split("\n").find(value=>value.startsWith("data: "));
+    if(!line)return;
+    try{
+     const event=JSON.parse(line.slice(6));
+     if(event.type==="stage")setStatus(report.name+": "+(event.stage?.detail||event.stage?.label||"Analyzing screenshot…"));
+     else if(event.type==="result")result=event.payload;
+     else if(event.type==="error")streamError=typeof event.error==="string"?event.error:"Screenshot analysis failed.";
+    }catch{
+     // Ignore malformed SSE frames while allowing later result frames to be processed.
+    }
+   };
+   while(true){
+    const chunk=await reader.read();
+    if(chunk.done)break;
+    buffer+=decoder.decode(chunk.value,{stream:true});
+    const frames=buffer.split("\n\n");
+    buffer=frames.pop()||"";
+    for(const frame of frames)processFrame(frame);
+   }
+   if(buffer.trim())processFrame(buffer);
+   if(streamError)throw new Error(streamError);
+   if(!result?.page)throw new Error("Screenshot analysis finished without a saved report.");
+   const findings:Finding[]=Array.isArray(result.page.findings)?result.page.findings:[];
+   const quality=assessReportQuality(findings);
+   const completed:Report={
+    ...report,
+    error:undefined,
+    mode:report.mode||auditMode,
+    auditId:typeof result.auditId==="string"?result.auditId:undefined,
+    findings,
+    screenshot:typeof result.page.screenshot==="string"?result.page.screenshot:screenshot,
+    screenshotWidth:Number(result.page.screenshotWidth)||0,
+    screenshotHeight:Number(result.page.screenshotHeight)||0,
+    captureMethod:"manual upload",
+    status:quality.qualityStatus==="review"?"review":"complete",
+    ...quality
+   };
+   setReports(previous=>previous.map(item=>item.url===report.url?completed:item));
+   setActiveReportUrl(report.url);
+   setStatus("Manual screenshot audit finished for "+report.name+": "+findings.length+" finding(s). "+(quality.qualityStatus==="review"?"The result still needs capture-quality review.":"Screenshot analysis and report save completed."));
+  }catch(cause){
+   const message=cause instanceof Error?cause.message:"Could not analyze the uploaded screenshot.";
+   setReports(previous=>previous.map(item=>item.url===report.url?{...item,status:"failed",qualityStatus:"review",qualityWarnings:["Manual screenshot analysis did not complete. Verify that the image shows the actual website homepage."],screenshot:undefined,findings:[],error:message,captureMethod:"manual upload"}:item));
+   setError(report.name+": "+message);
+   setStatus("Manual screenshot analysis failed for "+report.name+".");
+  }finally{
+   setUploadingReportUrl("");
+  }
+ }
  async function run(){
   setError("");setReports([]);setBusy(true);
   try{
@@ -109,6 +203,12 @@ export default function BenchmarkPage(){
       <strong>{activeReport.error||activeReport.status==="failed"?"Screenshot capture unavailable":activeReport.status==="running"?"Capturing and auditing this website…":"No screenshot was included in the audit response."}</strong>
       <p>{activeReport.error||activeReport.qualityWarnings?.join(" ")||"This page does not have a usable screenshot preview. Do not draw a visual benchmark conclusion from this report."} A live embed may also be blocked by the bank’s frame policy.</p>
       <a href={activeReport.url} target="_blank" rel="noreferrer">Open the site directly ↗</a>
+      <label className="bm-upload-fallback">
+       <span>{uploadingReportUrl===activeReport.url?"Analyzing uploaded screenshot…":"Upload actual homepage screenshot"}</span>
+       <small>PNG, JPEG or WebP · maximum 15 MB</small>
+       <input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy||Boolean(uploadingReportUrl)} onChange={event=>{const selectedFile=event.currentTarget.files?.[0];event.currentTarget.value="";if(selectedFile)void analyzeUploadedScreenshot(activeReport,selectedFile);}}/>
+      </label>
+      <p className="bm-upload-help">Open the official site in your normal browser, capture the real homepage at the selected viewport, then upload it here. Do not upload an access-denied or verification screen.</p>
      </div>
     </>}
    <div className="bm-iframe-footnote">The iframe shows the actual screenshot used for the audit, in a scrollable frame. Use “Open live site” to inspect interactive behaviour; some banking websites block live embedding.</div>
