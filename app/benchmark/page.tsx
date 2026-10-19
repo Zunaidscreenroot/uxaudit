@@ -53,7 +53,7 @@ export default function BenchmarkPage(){
    if(!entries[0].url)throw new Error("Enter the client website URL.");
    if(entries.length<2)throw new Error("Add at least one competitor URL to compare against the client.");
    if(new Set(entries.map(x=>x.url)).size!==entries.length)throw new Error("Each website must have a unique URL.");
-   const pendingReports:Report[]=entries.map(entry=>({name:entry.name,url:entry.url,findings:[],mode:auditMode,status:"running"}));setReports(pendingReports);setActiveReportUrl(entries[0].url);
+   const pendingReports:Report[]=entries.map(entry=>({name:entry.name,url:entry.url,findings:[],mode:auditMode,status:"running"}));
    setStatus("Checking paid vision models…");
    const modelCheck=await fetch("/api/model-health/scan",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}",cache:"no-store"});
    const modelData=await modelCheck.json().catch(()=>({}));
@@ -61,6 +61,7 @@ export default function BenchmarkPage(){
     ? modelData.selectedModels.filter((m:any)=>m?.provider==="OpenRouter"&&m?.tier==="paid"&&typeof m.model==="string"&&!m.model.endsWith(":free")&&m.model!=="openrouter/auto").slice(0,2).map((m:any)=>({provider:"OpenRouter",model:m.model,tier:"paid"}))
     : [];
    if(!modelCheck.ok||!verifiedModels.length)throw new Error(modelData.error||"No paid image-capable model was verified. Refresh model health and try again.");
+   setReports(pendingReports);setActiveReportUrl(entries[0].url);
    const output:Report[]=new Array(entries.length);let nextIndex=0;
    await Promise.all(Array.from({length:Math.min(2,entries.length)},async()=>{
     while(true){
