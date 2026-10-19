@@ -74,7 +74,7 @@ function normalizeResult(raw: any): InsightResult {
     captureReason: text(raw?.captureReason, "The screenshot could not be confidently verified."),
     summary: text(raw?.summary, "Review the screenshot and validate the visible patterns before making a design decision."),
     patterns,
-    watchouts: Array.isArray(raw?.watchouts) ? raw.watchouts.filter((x: unknown): x is string => typeof x === "string" && x.trim()).slice(0, 5).map((x: string) => x.trim().slice(0, 500)) : []
+    watchouts: Array.isArray(raw?.watchouts) ? raw.watchouts.filter((x: unknown): x is string => typeof x === "string" && Boolean(x.trim())).slice(0, 5).map((x: string) => x.trim().slice(0, 500)) : []
   };
 }
 
