@@ -35,6 +35,7 @@ type Report = {
   findings: Finding[];
   error?: string;
   screenshot?: string;
+  auditMode: AuditMode;
 };
 
 const initialSites: Site[] = [
@@ -142,7 +143,7 @@ export default function CompetitorPageAudit() {
         search: "",
         discovered: true,
         discovering: false,
-        error: pages.length ? "" : "No public linked pages were found. You can still enter a direct page URL by adding it to the website URL and trying discovery again.",
+        error: pages.length ? "" : "No public linked pages were found. Try another public site root or check whether this website exposes navigation links or a sitemap.",
       }));
     } catch (error) {
       updateSite(id, (current) => ({
@@ -244,6 +245,7 @@ export default function CompetitorPageAudit() {
             status,
             findings,
             screenshot: typeof data.page.screenshot === "string" ? data.page.screenshot : undefined,
+            auditMode,
           };
           setReports((previous) => [report, ...previous.filter((item) => item.key !== report.key)]);
           setPageStatuses((previous) => ({ ...previous, [target.key]: status }));
@@ -427,7 +429,7 @@ export default function CompetitorPageAudit() {
                     <div className="ca-report-error">{report.error || "The audit could not be completed."}</div>
                   ) : (
                     <>
-                      <div className="ca-report-stats"><strong>{report.findings.length}</strong><span>finding(s)</span><span>·</span><span>{auditMode === "mobile" ? "Mobile" : "Desktop"} audit</span></div>
+                      <div className="ca-report-stats"><strong>{report.findings.length}</strong><span>finding(s)</span><span>·</span><span>{report.auditMode === "mobile" ? "Mobile" : "Desktop"} audit</span></div>
                       {report.status === "review" && <p className="ca-review-note">No findings were returned. Review the captured page and audit evidence before treating this as a clean result.</p>}
                       {report.findings.map((finding, index) => (
                         <div className="ca-finding" key={finding.id || report.key + "-" + index}>
