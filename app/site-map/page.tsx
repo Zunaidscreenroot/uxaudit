@@ -6,7 +6,7 @@ type Page={url:string;title:string;category:string;depth:number;source:string};
 type IANode={key:string;label:string;url:string;depth:number;page?:Page;children:IANode[]};
 type Discovery={root:string;title:string;pages:Page[];note:string};type AuditMode="desktop"|"mobile";type Viewport={width:number;height:number};
 type AuditFinding={id:string;severity:string;category:string;title:string;description:string;recommendation:string;evidence?:Array<{section?:string;element?:string;detail?:string;marker?:{x:number;y:number}}>;uxPerspective?:{law:string;definition:string;assessment:string;researchContext:string};businessAnalysis?:{funnelStage:string;impact:string;kpi:string;mechanism:string;suggestions:string[]}};
-type AuditedPage={url:string;title:string;screenshot:string;screenshotWidth:number;screenshotHeight:number;findings:AuditFinding[];auditMode?:AuditMode;viewportWidth?:number;viewportHeight?:number};
+type AuditedPage={url:string;title:string;screenshot:string;screenshotWidth:number;screenshotHeight:number;findings:AuditFinding[];auditMode?:AuditMode;viewportWidth?:number;viewportHeight?:number;status?:"running"|"complete"|"review"|"failed";error?:string};
 const markerColors=["#e11d48","#7c3aed","#ea580c","#2563eb","#059669","#ca8a04","#9333ea","#0d9488"];
 function escapeDoc(value:string){return value.replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
 function exportAuditMarkdown(page:AuditedPage,projectName:string){
@@ -69,7 +69,7 @@ export default function SiteMapPage(){
  const [loading,setLoading]=useState(false);const [error,setError]=useState("");const [manualCaptureNeeded,setManualCaptureNeeded]=useState(false);const [manualUploadBusy,setManualUploadBusy]=useState(false);const [manualCaptureTarget,setManualCaptureTarget]=useState("");const [activeCategory,setActiveCategory]=useState("Home");const [stage,setStage]=useState<"discover"|"select"|"results">("discover");const [running,setRunning]=useState(false);const [runStatus,setRunStatus]=useState("");const [audited,setAudited]=useState<AuditedPage[]>([]);const [activeAudit,setActiveAudit]=useState("");const [sessionId,setSessionId]=useState("");const [projectName,setProjectName]=useState("");const [restoring,setRestoring]=useState(false);const [reportTab,setReportTab]=useState<"findings"|"business"|"summary">("findings");const [activeFinding,setActiveFinding]=useState(0);const [previewScreenshot,setPreviewScreenshot]=useState("");const [activeRunUrl,setActiveRunUrl]=useState("");const [timeline,setTimeline]=useState<Array<{id:string;label:string;detail:string;status:"active"|"complete"|"failed"}>>([]);
  async function discoverUrl(target:string){setLoading(true);setError("");setData(null);setAudited([]);setActiveAudit("");setStage("discover");const sid=crypto.randomUUID();setSessionId(sid);try{const r=await fetch("/api/discover",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:target})});const d=await r.json();if(!r.ok)throw new Error(d.error||"Page discovery failed");const chosen=d.pages.filter((p:Page)=>p.depth<=1).slice(0,8).map((p:Page)=>p.url);const host=new URL(d.root).hostname;const project=host.includes("ujjivan")?"Ujjivan Small Finance Bank":host;setData(d);setUrl(d.root);setProjectName(project);setSelected(chosen);setActiveCategory(Object.keys(d.pages.reduce((a:Record<string,Page[]>,p:Page)=>{(a[p.category]??=[]).push(p);return a;},{}))[0]||"Home");setStage("select");window.history.replaceState({}, "", "/site-map?session="+encodeURIComponent(sid));try{localStorage.setItem("uxaudit-current-ia-session",sid);}catch{}const save=await fetch("/api/ia-session",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:sid,root:d.root,title:d.title||d.root,discovery:d,selected_urls:chosen,audited_pages:[],stage:"select",project_name:project})});if(!save.ok)throw new Error("IA was created but could not be saved for resume.");}catch(e){setError(e instanceof Error?e.message:"Could not discover pages.");}finally{setLoading(false);}}
  useEffect(()=>{const onMarker=(event:MessageEvent)=>{if(event.data?.type==="uxaudit-marker"&&Number.isInteger(event.data.index)){setActiveFinding(event.data.index);setReportTab("findings");}};window.addEventListener("message",onMarker);return()=>window.removeEventListener("message",onMarker);},[]);
-useEffect(()=>{let cancelled=false;const q=new URLSearchParams(window.location.search);const existing=q.get("session");if(existing){setSessionId(existing);setRestoring(true);fetch("/api/ia-session?id="+encodeURIComponent(existing),{cache:"no-store"}).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||"Saved IA session expired.");const v=d.session;if(cancelled)return;setUrl(v.root);setProjectName(v.project_name||new URL(v.root).hostname);setData(v.discovery||null);setSelected(Array.isArray(v.selected_urls)?v.selected_urls:[]);const restoredAudits:AuditedPage[]=Array.isArray(v.audited_pages)?v.audited_pages.map((p:any)=>({...p,title:auditPageTitle(p.url,Array.isArray(v.discovery?.pages)?v.discovery.pages:[],p.title)})):[];setAudited(restoredAudits);setActiveAudit(restoredAudits[0]?.url||"");setStage(v.stage==="results"?"results":v.discovery?"select":"discover");setRunStatus((v.audited_pages||[]).length?"Restored saved screenshots and audit results.":"Restored saved IA session.");}).catch(e=>{if(!cancelled)setError(e instanceof Error?e.message:"Could not restore saved session.");}).finally(()=>{if(!cancelled)setRestoring(false);});}else{const initial=q.get("url");if(initial){setUrl(initial);void discoverUrl(initial);}}return()=>{cancelled=true}},[]);
+useEffect(()=>{let cancelled=false;const q=new URLSearchParams(window.location.search);const existing=q.get("session");if(existing){setSessionId(existing);setRestoring(true);fetch("/api/ia-session?id="+encodeURIComponent(existing),{cache:"no-store"}).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||"Saved IA session expired.");const v=d.session;if(cancelled)return;setUrl(v.root);setProjectName(v.project_name||new URL(v.root).hostname);setData(v.discovery||null);setSelected(Array.isArray(v.selected_urls)?v.selected_urls:[]);const restoredAudits:AuditedPage[]=Array.isArray(v.audited_pages)?v.audited_pages.map((p:any)=>({...p,title:auditPageTitle(p.url,Array.isArray(v.discovery?.pages)?v.discovery.pages:[],p.title),status:p.status||(Array.isArray(p.findings)&&p.findings.length?"complete":"review")})):[];setAudited(restoredAudits);setActiveAudit(restoredAudits[0]?.url||"");setStage(v.stage==="results"?"results":v.discovery?"select":"discover");setRunStatus((v.audited_pages||[]).length?"Restored saved screenshots and audit results.":"Restored saved IA session.");}).catch(e=>{if(!cancelled)setError(e instanceof Error?e.message:"Could not restore saved session.");}).finally(()=>{if(!cancelled)setRestoring(false);});}else{const initial=q.get("url");if(initial){setUrl(initial);void discoverUrl(initial);}}return()=>{cancelled=true}},[]);
 async function saveSession(patch:Record<string,any>={}){if(!sessionId||!url)return;const root=data?.root||url;const r=await fetch("/api/ia-session",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:sessionId,root,title:data?.title||root,discovery:data,selected_urls:selected,audited_pages:audited,stage,project_name:projectName||new URL(root).hostname,...patch})});if(!r.ok)throw new Error("Could not save IA session.");try{localStorage.setItem("uxaudit-current-ia-session",sessionId);}catch{}}
 async function patchSession(patch:Record<string,any>={}) {
  if(!sessionId)return;
@@ -96,37 +96,96 @@ async function patchSession(patch:Record<string,any>={}) {
 }
  const runSelectedAudits = async (force=false) => {
   if (!selected.length || running) return;
-  setRunning(true); setError(""); setManualCaptureNeeded(false); setManualCaptureTarget(""); setStage("results");setActiveAudit(selected[0]||"");
-  try {
-   setRunStatus("OpenRouter Auto Router will select low-cost models for each audit stage.");
-   for (let i = 0; i < selected.length; i++) {
-    const target = selected[i];
-    if (!force && audited.some((p:any) => p.url === target)) continue;
-    setActiveRunUrl(target);setPreviewScreenshot("");setTimeline([{id:"capture",label:"Capture screenshot",detail:"Launching server-side Chromium and waiting for the rendered page.",status:"active"}]);
-    setRunStatus("Capturing screenshot " + (i + 1) + " of " + selected.length + ": " + target);
-    const captureResponse = await fetch("/api/capture-url", { method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:target,root:data?.root,auditMode,viewport}) });
-    const captureResult = await captureResponse.json().catch(()=>({}));
-    if(!captureResponse.ok) {if(captureResult.requiresManualScreenshot){setManualCaptureNeeded(true);setManualCaptureTarget(target);}throw new Error(captureResult.error || "Screenshot capture failed.");}
-    setPreviewScreenshot(captureResult.screenshot);
-    setTimeline([{id:"capture",label:"Screenshot captured",detail:"Server-side Chromium captured a "+captureResult.width+" × "+captureResult.height+"px rendered "+(captureResult.fullPage?"full-page":"viewport")+" screenshot at a "+(auditMode==="mobile"?"393 × 852":"1440 × 900")+" CSS-pixel viewport.",status:"complete"},{id:"analyse",label:"Image → text",detail:"OpenRouter Auto Router is selecting a vision-capable model.",status:"active"}]);
-    setRunStatus("Screenshot ready. AI analysis is running for " + target);
-    const auditResponse = await fetch("/api/audit-screenshot", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:target,title:auditPageTitle(target,data?.pages||[],captureResult.title||""),projectName,screenshot:captureResult.screenshot,auditMode,viewport:captureResult.viewport||viewport})});
-    if(!auditResponse.ok){const d=await auditResponse.json().catch(()=>({}));throw new Error(d.error||"AI audit request failed.");}
-    if(!auditResponse.body) throw new Error("The audit stream was unavailable.");
-    const reader=auditResponse.body.getReader();const decoder=new TextDecoder();let buffer="";let result:any=null;
-    while(true){const chunk=await reader.read();if(chunk.done)break;buffer+=decoder.decode(chunk.value,{stream:true});const frames=buffer.split("\n\n");buffer=frames.pop()||"";for(const frame of frames){const line=frame.split("\n").find(x=>x.startsWith("data: "));if(!line)continue;const event=JSON.parse(line.slice(6));if(event.type==="stage"){setTimeline(prev=>{const next=prev.filter(s=>s.id!==event.stage.id);return [...next,{...event.stage}];});setRunStatus(event.stage.detail);}else if(event.type==="result"){result=event.payload;}else if(event.type==="error"){throw new Error(event.error||"AI analysis failed.");}}}
-    if(!result?.page)throw new Error("AI audit ended without a report. Check the timeline for the last completed stage.");
-    setTimeline(prev=>prev.map(s=>s.status==="active"?{...s,status:"complete" as const}:s));
-    const auditedPage:AuditedPage={...result.page,url:target,title:auditPageTitle(target,data?.pages||[],captureResult.title||result.page.title||""),auditMode};setAudited(prev => [...prev.filter((p:any)=>p.url!==target),auditedPage]);
-    void patchSession({audited_page:auditedPage,stage:"results",selected_urls:selected,project_name:projectName}).catch(e=>setError(e instanceof Error?e.message:"Could not save audit result."));
+  const targets=[...selected];
+  const titleFor=(target:string)=>auditPageTitle(target,data?.pages||[]);
+  const putPage=(page:AuditedPage)=>setAudited(previous=>{
+   const index=previous.findIndex((item:any)=>item.url===page.url);
+   return index<0?[...previous,page]:previous.map((item:any,i:number)=>i===index?page:item);
+  });
+  setRunning(true);setError("");setManualCaptureNeeded(false);setManualCaptureTarget("");setStage("results");setActiveAudit(targets[0]||"");
+  setAudited(previous=>{
+   const next=[...previous];
+   for(const target of targets){
+    const index=next.findIndex((page:any)=>page.url===target);
+    if(index>=0&&!force&&next[index].status!=="failed")continue;
+    const pending:AuditedPage={url:target,title:titleFor(target),screenshot:"",screenshotWidth:0,screenshotHeight:0,findings:[],auditMode,status:"running"};
+    if(index>=0)next[index]=pending;else next.push(pending);
    }
-   setRunStatus("Completed selected page audits. Saved results are reused on resume; use Re-run to refresh them.");void patchSession({stage:"results",selected_urls:selected,project_name:projectName}).catch(e=>setError(e instanceof Error?e.message:"Could not save audit status."));
-  } catch (e) {
-   const message=e instanceof Error ? e.message : "Selected-page audit failed.";
-   setTimeline(prev=>prev.map(s=>s.status==="active"?{...s,status:"failed" as const,detail:message}:s));
-   setError(message);
-   setRunStatus("Audit stopped. Completed page results remain available.");void patchSession({stage:"results",selected_urls:selected,project_name:projectName}).catch(e=>setError(e instanceof Error?e.message:"Could not save audit status."));
-  } finally {
+   return next;
+  });
+  let completed=0;let review=0;let failed=0;let skipped=0;
+  try{
+   setRunStatus("OpenRouter Auto Router will select low-cost models for each audit stage.");
+   for(let i=0;i<targets.length;i++){
+    const target=targets[i];
+    const existing=audited.find((page:any)=>page.url===target);
+    if(!force&&existing&&existing.status!=="failed"){skipped++;continue;}
+    setActiveAudit(target);
+    setActiveRunUrl(target);setPreviewScreenshot("");
+    setTimeline([{id:"capture",label:"Capture screenshot",detail:"Launching server-side Chromium and waiting for the rendered page.",status:"active"}]);
+    setRunStatus("Capturing screenshot "+(i+1)+" of "+targets.length+": "+target);
+    putPage({url:target,title:titleFor(target),screenshot:"",screenshotWidth:0,screenshotHeight:0,findings:[],auditMode,status:"running"});
+    let captureResult:any=null;
+    try{
+     const captureResponse=await fetch("/api/capture-url",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:target,root:data?.root,auditMode,viewport})});
+     captureResult=await captureResponse.json().catch(()=>({}));
+     if(!captureResponse.ok){
+      if(captureResult.requiresManualScreenshot){setManualCaptureNeeded(true);setManualCaptureTarget(target);}
+      throw new Error(captureResult.error||"Screenshot capture failed.");
+     }
+     setPreviewScreenshot(captureResult.screenshot);
+     setTimeline([{id:"capture",label:"Screenshot captured",detail:"Server-side Chromium captured a "+captureResult.width+" × "+captureResult.height+"px rendered "+(captureResult.fullPage?"full-page":"viewport")+" screenshot at a "+(auditMode==="mobile"?"393 × 852":"1440 × 900")+" CSS-pixel viewport.",status:"complete"},{id:"analyse",label:"Image → text",detail:"OpenRouter Auto Router is selecting a vision-capable model.",status:"active"}]);
+     setRunStatus("Screenshot ready. AI analysis is running for "+target);
+     const auditResponse=await fetch("/api/audit-screenshot",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:target,title:titleFor(target),projectName,screenshot:captureResult.screenshot,auditMode,viewport:captureResult.viewport||viewport})});
+     if(!auditResponse.ok){const d=await auditResponse.json().catch(()=>({}));throw new Error(d.error||"AI audit request failed.");}
+     if(!auditResponse.body)throw new Error("The audit stream was unavailable.");
+     const reader=auditResponse.body.getReader();const decoder=new TextDecoder();let buffer="";let result:any=null;
+     while(true){
+      const chunk=await reader.read();if(chunk.done)break;
+      buffer+=decoder.decode(chunk.value,{stream:true});
+      const frames=buffer.split("\n\n");buffer=frames.pop()||"";
+      for(const frame of frames){
+       const line=frame.split("\n").find(x=>x.startsWith("data: "));if(!line)continue;
+       const event=JSON.parse(line.slice(6));
+       if(event.type==="stage"){
+        setTimeline(prev=>[...prev.filter(stage=>stage.id!==event.stage.id),{...event.stage}]);
+        setRunStatus(event.stage.detail);
+       }else if(event.type==="result")result=event.payload;
+       else if(event.type==="error")throw new Error(event.error||"AI analysis failed.");
+      }
+     }
+     if(!result?.page)throw new Error("AI audit ended without a report. Check the timeline for the last completed stage.");
+     setTimeline(prev=>prev.map(stage=>stage.status==="active"?{...stage,status:"complete" as const}:stage));
+     const findings=Array.isArray(result.page.findings)?result.page.findings:[];
+     const auditedPage:AuditedPage={...result.page,url:target,title:titleFor(target),auditMode,status:findings.length?"complete":"review"};
+     putPage(auditedPage);
+     if(findings.length)completed++;else review++;
+     void patchSession({audited_page:auditedPage,stage:"results",selected_urls:selected,project_name:projectName}).catch(e=>setError(e instanceof Error?e.message:"Could not save audit result."));
+    }catch(error){
+     const message=error instanceof Error?error.message:"Selected-page audit failed.";
+     failed++;
+     if(/capture|screenshot|timeout|timed out|abort/i.test(message)&&!captureResult?.screenshot){setManualCaptureNeeded(true);setManualCaptureTarget(target);}
+     setTimeline(prev=>prev.map(stage=>stage.status==="active"?{...stage,status:"failed" as const,detail:message}:stage));
+     putPage({
+      url:target,title:titleFor(target),
+      screenshot:typeof captureResult?.screenshot==="string"?captureResult.screenshot:"",
+      screenshotWidth:Number(captureResult?.width)||0,
+      screenshotHeight:Number(captureResult?.height)||0,
+      findings:[],auditMode,status:"failed",error:message,
+      ...(captureResult?.screenshot?{}:{})
+     });
+     setRunStatus("Page "+(i+1)+" failed: "+message+" Continuing with the remaining selected pages.");
+    }
+   }
+   const summary=["Finished selected-page audits",completed+" page(s) with findings",review+" requiring review",failed+" failed"];
+   if(skipped)summary.push(skipped+" previously saved page(s) reused");
+   setRunStatus(summary.join(" · ")+".");
+   void patchSession({stage:"results",selected_urls:selected,project_name:projectName}).catch(e=>setError(e instanceof Error?e.message:"Could not save audit status."));
+  }catch(error){
+   const message=error instanceof Error?error.message:"Selected-page audit failed.";
+   setError(message);setRunStatus("Audit stopped. Completed page results remain available.");
+   void patchSession({stage:"results",selected_urls:selected,project_name:projectName}).catch(e=>setError(e instanceof Error?e.message:"Could not save audit status."));
+  }finally{
    setRunning(false);
   }
  };
@@ -159,7 +218,7 @@ async function patchSession(patch:Record<string,any>={}) {
    while(true){const chunk=await reader.read();if(chunk.done)break;buffer+=decoder.decode(chunk.value,{stream:true});const frames=buffer.split("\n\n");buffer=frames.pop()||"";for(const frame of frames){const line=frame.split("\n").find(x=>x.startsWith("data: "));if(!line)continue;const event=JSON.parse(line.slice(6));if(event.type==="stage"){setTimeline(prev=>[...prev.filter(x=>x.id!==event.stage.id),{...event.stage}]);setRunStatus(event.stage.detail);}else if(event.type==="result"){result=event.payload;}else if(event.type==="error"){throw new Error(event.error||"AI analysis failed.");}}}
    if(!result?.page)throw new Error("AI audit ended without a report. Check the timeline for the last completed stage.");
    setTimeline(prev=>prev.map(x=>x.status==="active"?{...x,status:"complete" as const}:x));
-   const manualAuditedPage:AuditedPage={...result.page,url:manualCaptureTarget,title:auditPageTitle(manualCaptureTarget,data?.pages||[],pagePath(manualCaptureTarget)),auditMode:mode};setAudited(prev=>[...prev.filter((p:any)=>p.url!==manualCaptureTarget),manualAuditedPage]);setActiveAudit(manualCaptureTarget);
+   const manualFindings=Array.isArray(result.page.findings)?result.page.findings:[];const manualAuditedPage:AuditedPage={...result.page,url:manualCaptureTarget,title:auditPageTitle(manualCaptureTarget,data?.pages||[],pagePath(manualCaptureTarget)),auditMode:mode,status:manualFindings.length?"complete":"review",error:undefined};setAudited(prev=>[...prev.filter((p:any)=>p.url!==manualCaptureTarget),manualAuditedPage]);setActiveAudit(manualCaptureTarget);
    void patchSession({audited_page:manualAuditedPage,stage:"results",selected_urls:selected,project_name:projectName}).catch(e=>setError(e instanceof Error?e.message:"Could not save audit result."));
    setManualCaptureNeeded(false);setRunStatus("Desktop screenshot analysed successfully. The report uses the screenshot you uploaded.");void patchSession({stage:"results",selected_urls:selected,project_name:projectName}).catch(e=>setError(e instanceof Error?e.message:"Could not save audit status."));
   }catch(error){const message=error instanceof Error?error.message:"Manual screenshot audit failed.";setError(message);setTimeline(prev=>prev.map(x=>x.status==="active"?{...x,status:"failed" as const,detail:message}:x));setRunStatus("Manual screenshot audit stopped.");}
@@ -227,8 +286,8 @@ async function patchSession(patch:Record<string,any>={}) {
    {error && <p className="iaError">{error}</p>}
    {manualCaptureNeeded && manualCaptureTarget && <article style={{marginTop:14,padding:18,border:"1px solid #e8c36e",borderRadius:12,background:"#fffaf0"}}>
     <div className="iaEyebrow">MANUAL SCREENSHOT FALLBACK</div>
-    <h3 style={{margin:"8px 0",fontSize:17}}>The site is blocking automated capture</h3>
-    <p style={{fontSize:13,lineHeight:1.6,color:"#695b42",maxWidth:840}}>Open this URL in your normal browser and capture the actual website page (not the CDN/security error). You can upload a file or copy the screenshot and press Ctrl/⌘+V here. Use a {auditMode==="mobile"?"mobile viewport around 393 × 852 CSS pixels":"desktop viewport around 1440 CSS pixels wide"} and capture the full page where possible. Upload the screenshot here and UX Audit will run the same AI analysis on it.</p>
+    <h3 style={{margin:"8px 0",fontSize:17}}>Automated screenshot capture could not complete</h3>
+    <p style={{fontSize:13,lineHeight:1.6,color:"#695b42",maxWidth:840}}>The capture providers may have timed out or been blocked. Open this URL in your normal browser and capture the actual website page (not a CDN/security error). Upload the file or copy the screenshot and press Ctrl/⌘+V here. Use a {auditMode==="mobile"?"mobile viewport around 393 × 852 CSS pixels":"desktop viewport around 1440 CSS pixels wide"} and capture the full page where possible. Upload the screenshot here and UX Audit will run the same AI analysis on it.</p>
     <div style={{fontSize:12,color:"#6b7280",overflowWrap:"anywhere",marginBottom:12}}>{manualCaptureTarget}</div>
     <label style={{display:"inline-flex",flexDirection:"column",gap:8,fontSize:12,fontWeight:750,color:"#334155"}}>{manualUploadBusy?"Analysing uploaded screenshot…":`Upload actual ${auditMode==="mobile"?"mobile 393 × 852":"desktop 1440"} page screenshot (PNG, JPEG or WebP)`}
      <input type="file" accept="image/png,image/jpeg,image/webp" disabled={manualUploadBusy} onChange={e=>{const file=e.currentTarget.files?.[0];if(file)void auditManualScreenshot(file);e.currentTarget.value="";}} style={{maxWidth:"100%",padding:10,border:"1px solid #d8dee7",borderRadius:8,background:"#fff"}}/>
@@ -250,17 +309,17 @@ async function patchSession(patch:Record<string,any>={}) {
    </div>}
    {audited.length > 0 && (
     <>
-     <div className="iaTabs" role="tablist" aria-label="Audited pages">{audited.map((p) => <button type="button" role="tab" aria-selected={activeAuditPage?.url===p.url} key={p.url} className={"iaTab " + (activeAuditPage?.url===p.url ? "on" : "")} onClick={() => {setActiveAudit(p.url);setActiveFinding(0);}}>{p.title} · {p.findings.length} findings</button>)}</div>
+     <div className="iaTabs" role="tablist" aria-label="Audited pages">{audited.map((p) => <button type="button" role="tab" aria-selected={activeAuditPage?.url===p.url} key={p.url} className={"iaTab " + (activeAuditPage?.url===p.url ? "on" : "")} onClick={() => {setActiveAudit(p.url);setActiveFinding(0);}}>{p.title} · {p.status==="failed"?"Failed":p.status==="running"?"Auditing…":p.status==="review"?"Review required":p.findings.length+" findings"}</button>)}</div>
      {activeAuditPage && (
       <div style={{display:"grid",gridTemplateColumns:"minmax(0,1.15fr) minmax(340px,.85fr)",gap:16,alignItems:"start"}}>
        <section style={{border:"1px solid #dce2ea",borderRadius:12,overflow:"hidden",background:"#fff",position:"sticky",top:12}}>
-        <div style={{padding:14,borderBottom:"1px solid #e5e7eb",display:"flex",justifyContent:"space-between",gap:10,alignItems:"center"}}><div><div className="iaEyebrow">ORIGINAL FULL-PAGE SCREENSHOT</div><strong style={{display:"block",fontSize:13,marginTop:5}}>{activeAuditPage.title}</strong><span className="iaMuted">{activeAuditPage.screenshotWidth} × {activeAuditPage.screenshotHeight}px · {activeAuditPage.findings.length} findings · {(activeAuditPage.auditMode||auditMode)==="mobile"?"Mobile viewport 393 × 852 CSS px":"Desktop full-page capture"}</span></div><span className="iaStat">Scrollable iframe</span></div>
-        <img src={activeAuditPage.screenshot} alt={activeAuditPage.title+" full-page screenshot without overlays"} style={{width:"100%",height:"auto",display:"block",background:"#171b17"}}/>
+        <div style={{padding:14,borderBottom:"1px solid #e5e7eb",display:"flex",justifyContent:"space-between",gap:10,alignItems:"center"}}><div><div className="iaEyebrow">ORIGINAL FULL-PAGE SCREENSHOT</div><strong style={{display:"block",fontSize:13,marginTop:5}}>{activeAuditPage.title}</strong><span className="iaMuted">{activeAuditPage.status==="failed"?"Screenshot unavailable":activeAuditPage.screenshot?(activeAuditPage.screenshotWidth+" × "+activeAuditPage.screenshotHeight+"px · "+activeAuditPage.findings.length+" findings · "+((activeAuditPage.auditMode||auditMode)==="mobile"?"Mobile viewport 393 × 852 CSS px":"Desktop full-page capture")):"Waiting for screenshot capture"}</span></div><span className="iaStat">Scrollable iframe</span></div>
+        {activeAuditPage.status==="failed"?<div role="alert" style={{padding:18,background:"#291b18",color:"#ffc0b6",lineHeight:1.6,fontSize:12}}><strong>Audit could not complete for this page</strong><p style={{marginBottom:0}}>{activeAuditPage.error||"The screenshot or AI audit failed. Retry this page or upload a screenshot of the actual page."}</p></div>:activeAuditPage.screenshot?<img src={activeAuditPage.screenshot} alt={activeAuditPage.title+" full-page screenshot without overlays"} style={{width:"100%",height:"auto",display:"block",background:"#171b17"}}/>:<div style={{padding:24,color:"#a3ada0",fontSize:12}}>Capturing this page screenshot…</div>}
        </section>
        <section style={{border:"1px solid #dce2ea",borderRadius:12,background:"#f8fafc",overflow:"hidden"}}>
         <div style={{padding:"12px 12px 0",display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",borderBottom:"1px solid #e2e8f0",background:"#fff"}}>{(["findings","business","summary"] as const).map(t=><button key={t} onClick={()=>setReportTab(t)} className={"iaTab "+(reportTab===t?"on":"")}>{t==="findings"?"UX Findings":t==="business"?"Business Analysis":"Summary"}</button>)}<button onClick={()=>exportAuditMarkdown(activeAuditPage,projectName)} style={{marginLeft:"auto",border:"1px solid #cbd5e1",borderRadius:8,padding:"8px 10px",background:"#fff",fontSize:11,fontWeight:800,cursor:"pointer"}}>Export Markdown ↓</button></div>
         <div style={{padding:14,maxHeight:"min(78vh,900px)",minHeight:620,overflowY:"auto"}}>
-         {reportTab==="findings"&&<><div style={{marginBottom:12}}><div className="iaEyebrow">EVIDENCE-LINKED UX REVIEW</div><h3 style={{margin:"6px 0",fontSize:17}}>{activeAuditPage.findings.length} findings</h3><div className="iaMuted">Select a finding below to review its evidence and recommendation.</div></div>
+         {reportTab==="findings"&&<><div style={{marginBottom:12}}><div className="iaEyebrow">EVIDENCE-LINKED UX REVIEW</div><h3 style={{margin:"6px 0",fontSize:17}}>{activeAuditPage.status==="failed"?"Audit did not complete":activeAuditPage.findings.length+" findings"}</h3><div className="iaMuted">{activeAuditPage.status==="failed"?(activeAuditPage.error||"Retry this page or upload a screenshot of the actual page."):"Select a finding below to review its evidence and recommendation."}</div></div>
           {activeAuditPage.findings.map((f,i)=><article key={f.id||i} onClick={()=>setActiveFinding(i)} style={{border:"1px solid "+(activeFinding===i?"#7895c8":"#e0e5ec"),boxShadow:activeFinding===i?"0 0 0 2px #e8eef9":"none",borderRadius:10,padding:13,background:"#fff",marginBottom:10,cursor:"pointer"}}>
            <div style={{display:"flex",gap:8,alignItems:"center"}}><span style={{width:26,height:26,flex:"0 0 26px",display:"grid",placeItems:"center",borderRadius:"50%",background:markerColors[i%markerColors.length],color:"#fff",fontSize:12,fontWeight:800}}>{i+1}</span><div style={{flex:1}}><div style={{fontSize:10,fontWeight:800,color:f.severity==="high"?"#b42318":f.severity==="medium"?"#9a6700":"#64748b"}}>{f.severity.toUpperCase()} · {f.category}</div><strong style={{display:"block",marginTop:3,fontSize:14}}>{f.title}</strong></div></div>
            <p style={{fontSize:12,lineHeight:1.55,color:"#596579",margin:"9px 0"}}>{f.description}</p><div style={{fontSize:12,lineHeight:1.5,background:"#1d241a",padding:10,borderRadius:8,color:"#e9eee7"}}><b>{f.evidence?.[0]?.element||"Visible evidence"}</b><br/>{f.evidence?.[0]?.detail||"Finding linked to the original screenshot."}</div>{f.evidence?.[0]?.marker&&<div style={{marginTop:9,border:"1px solid #2d352b",borderRadius:8,overflow:"hidden",background:"#171b17"}}><div style={{fontSize:10,fontWeight:800,padding:"7px 9px",color:"#a3ada0"}}>SCREENSHOT EVIDENCE · APPROXIMATE REGION CROP</div><div style={{height:150,overflow:"hidden",position:"relative"}}><img src={activeAuditPage.screenshot} alt={"Screenshot evidence for "+f.title} style={{position:"absolute",width:"300%",height:"300%",maxWidth:"none",objectFit:"fill",left:(50-Math.max(0,Math.min(1,f.evidence[0].marker.x))*300)+"%",top:(50-Math.max(0,Math.min(1,f.evidence[0].marker.y))*300)+"%"}}/></div></div>}<div style={{fontSize:12,lineHeight:1.5,marginTop:9}}><b>Recommended redesign</b><br/>{f.recommendation}</div>
