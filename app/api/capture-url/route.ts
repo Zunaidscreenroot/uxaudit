@@ -68,8 +68,10 @@ export async function POST(req: Request) {
     console.error("[uxaudit] screenshot_capture_error", JSON.stringify({ message: message.slice(0, 700) }));
     const timeout = /timeout|timed out|abort/i.test(message);
     return Response.json({
-      error: timeout ? "Screenshot capture timed out. The site may be slow or blocking automated browsers; retry or upload a screenshot of the actual page." : message,
-      code: timeout ? "CAPTURE_TIMEOUT" : "CAPTURE_FAILED"
+      error: timeout ? "Screenshot capture timed out after trying the configured providers. Retry once; if it happens again, upload a screenshot of the actual page." : message,
+      code: timeout ? "CAPTURE_TIMEOUT" : "CAPTURE_FAILED",
+      requiresManualScreenshot: true,
+      captureDetails: message.slice(0, 900)
     }, { status: timeout ? 504 : 502, headers: { "Cache-Control": "no-store" } });
   }
 }
