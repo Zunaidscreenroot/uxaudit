@@ -261,6 +261,7 @@ export default function CompetitorPageAudit() {
             status: "failed",
             findings: [],
             error: message,
+            auditMode,
           };
           setReports((previous) => [report, ...previous.filter((item) => item.key !== report.key)]);
           setPageStatuses((previous) => ({ ...previous, [target.key]: "failed" }));
