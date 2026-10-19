@@ -211,7 +211,7 @@ async function patchSession(patch:Record<string,any>={}) {
    const mode=auditMode;
    setTimeline([{id:"capture",label:"Browser screenshot supplied",detail:"Using your screenshot of the actual page at "+(mode==="mobile"?"393 × 852":"1440 × 900")+" CSS pixels.",status:"complete"},{id:"analyse",label:"Analyse screenshot",detail:"Sending the uploaded screenshot to OpenRouter for UX analysis.",status:"active"}]);
    setActiveRunUrl(manualCaptureTarget);setRunStatus("Analysing the screenshot you supplied for "+manualCaptureTarget);
-   const auditResponse=await fetch("/api/audit-screenshot",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:manualCaptureTarget,title:auditPageTitle(manualCaptureTarget,data?.pages||[],pagePath(manualCaptureTarget)),projectName,screenshot,auditMode:mode,viewport:mode==="mobile"?{width:393,height:852}:{width:1440,height:900}})});
+   const auditResponse=await fetch("/api/audit-screenshot",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:manualCaptureTarget,title:auditPageTitle(manualCaptureTarget,data?.pages||[]),projectName,screenshot,auditMode:mode,viewport:mode==="mobile"?{width:393,height:852}:{width:1440,height:900}})});
    if(!auditResponse.ok){const d=await auditResponse.json().catch(()=>({}));throw new Error(d.error||"AI audit request failed.");}
    if(!auditResponse.body)throw new Error("The audit stream was unavailable.");
    const reader=auditResponse.body.getReader();const decoder=new TextDecoder();let buffer="";let result:any=null;
