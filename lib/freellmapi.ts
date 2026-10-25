@@ -18,27 +18,11 @@ export function freeLlmApiModel(): FreeLLMAPIModel {
 }
 
 export async function assertFreeLLMAPIModel(modelId: string): Promise<void> {
-  const { baseUrl, apiKey } = config();
+  config();
   const allowed = (process.env.FREELLMAPI_MODELS?.trim() || "auto")
     .split(",").map((item) => item.trim()).filter(Boolean);
   if (!allowed.includes(modelId)) {
     throw new Error("The selected FreeLLMAPI route is not in FREELLMAPI_MODELS: " + modelId);
-  }
-  const response = await fetch(baseUrl + "/models", {
-    headers: { Authorization: "Bearer " + apiKey, Accept: "application/json" },
-    cache: "no-store",
-    signal: AbortSignal.timeout(8_000),
-  });
-  const payload = await response.json().catch(() => ({})) as { data?: Array<{ id?: unknown }>; models?: Array<{ id?: unknown; name?: unknown }> };
-  if (!response.ok) {
-    throw new Error("FreeLLMAPI model catalogue returned HTTP " + response.status + ".");
-  }
-  const ids = [
-    ...(Array.isArray(payload.data) ? payload.data : []),
-    ...(Array.isArray(payload.models) ? payload.models : []),
-  ].flatMap((item) => [item.id, item.name].filter((value): value is string => typeof value === "string"));
-  if (!ids.includes(modelId)) {
-    throw new Error("The configured FreeLLMAPI model route is not listed by the gateway: " + modelId);
   }
 }
 
