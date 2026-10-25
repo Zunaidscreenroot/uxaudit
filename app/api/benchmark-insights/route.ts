@@ -1,11 +1,11 @@
-import { assertPaidOpenRouterModel } from "@/lib/openrouter-paid";
+import { freeLLMAPIChatCompletion, freeLlmApiModel } from "@/lib/freellmapi";
 import { inspectImage } from "@/lib/image-utils";
 import { privateHost, resolvesToPrivateAddress } from "@/lib/public-url";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-type VerifiedModel = { provider: "OpenRouter"; model: string; tier: "paid" };
+type VerifiedModel = ReturnType<typeof freeLlmApiModel>;
 type Pattern = {
   title: string;
   observedPattern: string;
@@ -96,23 +96,7 @@ export async function POST(req: Request) {
 
     const comparison = parseScreenshot(body?.comparisonScreenshot, "Side-by-side comparison");
 
-    const models: VerifiedModel[] = Array.isArray(body?.verifiedModels)
-      ? body.verifiedModels.filter((item: any) =>
-          item?.provider === "OpenRouter" &&
-          item?.tier === "paid" &&
-          typeof item?.model === "string" &&
-          !item.model.endsWith(":free") &&
-          item.model !== "openrouter/auto"
-        ).slice(0, 2)
-      : [];
-    const model = models[0] || {
-      provider: "OpenRouter" as const,
-      model: process.env.UX_AUDIT_VISION_MODEL?.trim() || "deepseek/deepseek-v4.1-flash-1017",
-      tier: "paid" as const
-    };
-    await assertPaidOpenRouterModel(model.model);
-    const key = process.env.OPENROUTER_API_KEY?.trim();
-    if (!key) throw new Error("Configure OPENROUTER_API_KEY before running benchmark analysis.");
+    const model: VerifiedModel = freeLlmApiModel();
 
     const baselineFindings = Array.isArray(body?.baselineFindings)
       ? body.baselineFindings.slice(0, 8).map((f: any) => ({
@@ -135,39 +119,22 @@ export async function POST(req: Request) {
       "Return one JSON object only, schema: {captureValid:boolean,captureReason:string,summary:string,patterns:[{title:string,observedPattern:string,screenshotEvidence:string,userBenefitHypothesis:string,ujjivanAdaptation:string,targetArea:string,priority:'High'|'Medium'|'Explore',effort:'Low'|'Medium'|'High',validation:string,tradeoffs:string}],watchouts:string[]}. No markdown, no invented metrics, no unverified competitor claims."
     ].join("\n\n");
 
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer " + key,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://uxaudit.zunaid-cb7.workers.dev",
-        "X-Title": "UX Audit Competitor Benchmark"
-      },
-      body: JSON.stringify({
-        model: model.model,
-        messages: [{
-          role: "user",
-          content: [
-            { type: "text", text: prompt },
-            { type: "text", text: "Attached image layout: left panel = " + baselineName + " baseline; right panel = " + competitorName + " (" + competitorUrl.origin + "). Each panel has its bank label above the screenshot." },
-            { type: "image_url", image_url: { url: comparison.url } }
-          ]
-        }],
-        temperature: 0.1,
-        max_tokens: 3000,
-        response_format: { type: "json_object" },
-        provider: { allow_fallbacks: false, max_price: { prompt: 0.5, completion: 2 } }
-      }),
-      signal: AbortSignal.timeout(30000),
-      cache: "no-store"
+    const completion = await freeLLMAPIChatCompletion({
+      model: model.model,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: prompt },
+          { type: "text", text: "Attached image layout: left panel = " + baselineName + " baseline; right panel = " + competitorName + " (" + competitorUrl.origin + "). Each panel has its bank label above the screenshot." },
+          { type: "image_url", image_url: { url: comparison.url } }
+        ]
+      }],
+      temperature: 0.1,
+      max_tokens: 3000,
+      response_format: { type: "json_object" },
+      timeoutMs: 30000
     });
-    const rawBody = await response.text();
-    let payload: any = {};
-    try { payload = rawBody ? JSON.parse(rawBody) : {}; }
-    catch { throw new Error("OpenRouter returned invalid JSON (HTTP " + response.status + ")."); }
-    if (!response.ok) {
-      throw new Error("Benchmark insights model returned HTTP " + response.status + ": " + text(payload?.error?.message, rawBody.slice(0, 220)));
-    }
+    const payload: any = completion.payload;
     const answer = payload?.choices?.[0]?.message?.content;
     const output = typeof answer === "string" ? answer : Array.isArray(answer) ? answer.map((part: any) => part?.text || "").join("") : "";
     if (!output.trim()) throw new Error("Benchmark insights model returned no final text.");
