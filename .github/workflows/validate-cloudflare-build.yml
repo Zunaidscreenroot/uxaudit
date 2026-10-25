@@ -26,6 +26,9 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci
+      # 1.20.13 fixes the current Next.js 15.5.28 compatibility guard; keep this explicit until the lockfile is refreshed.
+      - name: Update OpenNext Cloudflare builder for Next.js 15 compatibility
+        run: npm install --no-save --package-lock=false @opennextjs/cloudflare@1.20.13
       - name: Type-check server and client code
         run: npx tsc --noEmit
       - name: Build and bundle for Cloudflare Workers
