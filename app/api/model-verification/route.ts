@@ -1,6 +1,83 @@
-export const runtime="nodejs";export const maxDuration=35;
-const FIXED=[{provider:"OpenRouter",model:"deepseek/deepseek-v4.1-flash-1017",label:"DeepSeek V4.1 Flash 1017"},{provider:"OpenRouter",model:"openai/gpt-6-luna",label:"OpenAI GPT-6 Luna"},{provider:"OpenRouter",model:"qwen/qwen3-vl-8b-instruct",label:"Qwen3 VL 8B Instruct"}];
-let cache:{until:number;data:any}|null=null;
-export async function POST(){try{if(cache&&cache.until>Date.now())return Response.json({...cache.data,cacheHit:true});const key=process.env.OPENROUTER_API_KEY;if(!key)return Response.json({error:"OPENROUTER_API_KEY is not configured."},{status:503});const cr=await fetch("https://openrouter.ai/api/v1/models",{headers:{Authorization:"Bearer "+key},signal:AbortSignal.timeout(8000),cache:"no-store"});const cd=await cr.json().catch(()=>({}));if(!cr.ok||!Array.isArray(cd.data))throw new Error("Could not load OpenRouter model catalogue.");const map=new Map(cd.data.map((m:any)=>[m.id,m]));const models:any[]=[];for(const m of FIXED){const cat:any=map.get(m.model);if(!cat){models.push({...m,ok:false,status:"not_listed",latencyMs:0,totalTokens:null,costUsd:0,promptPrice:null,completionPrice:null,error:"Exact ID not listed; no inference request sent."});continue;}const pi=Number(cat.pricing?.prompt??0),po=Number(cat.pricing?.completion??0),start=Date.now();try{const r=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:"Bearer "+key,"Content-Type":"application/json","HTTP-Referer":"https://uxaudit-kqqaxvo59-screenroot.vercel.app","X-Title":"UX Audit Model Verification"},body:JSON.stringify({model:m.model,messages:[{role:"user",content:"Reply with exactly OK. Do not explain."}],max_tokens:64,temperature:0,reasoning:{effort:"minimal"},provider:{allow_fallbacks:true,sort:"latency",max_price:{prompt:0.5,completion:2}}}),signal:AbortSignal.timeout(9000),cache:"no-store"});const d=await r.json().catch(()=>({})),raw=d?.choices?.[0]?.message?.content,answer=typeof raw==="string"?raw:Array.isArray(raw)?raw.map((x:any)=>x?.text??"").join(""):"",v=d?.usage??{},pt=Number(v.prompt_tokens??0),ct=Number(v.completion_tokens??0),tokens=Number(v.total_tokens??pt+ct),cost=typeof v.cost==="number"?v.cost:pt*pi+ct*po,finishReason=d?.choices?.[0]?.finish_reason;const ok=r.ok&&!!answer.trim();models.push({...m,ok,status:ok?"verified":"failed",latencyMs:Date.now()-start,promptTokens:pt,completionTokens:ct,totalTokens:tokens,costUsd:cost,promptPrice:pi,completionPrice:po,finishReason,error:!r.ok?"HTTP "+r.status+": "+(d?.error?.message??"Model failed"):ok?undefined:("Empty visible response"+(finishReason?"; finish_reason="+finishReason:""))});}catch(e){models.push({...m,ok:false,status:"failed",latencyMs:Date.now()-start,totalTokens:null,costUsd:null,promptPrice:pi,completionPrice:po,error:e instanceof Error?e.message:"Failed"});}}
-const ranked=models.filter(m=>m.ok).sort((a,b)=>(a.promptPrice+a.completionPrice)-(b.promptPrice+b.completionPrice)||a.latencyMs-b.latencyMs);const primary=ranked[0]??null,fallbacks=ranked.slice(1,3);const data={checkedAt:new Date().toISOString(),models,selectedModel:primary,fallbackModels:fallbacks,verificationRunCostUsd:models.reduce((s,m)=>s+(m.costUsd??0),0),verificationRunTokens:models.reduce((s,m)=>s+(m.totalTokens??0),0),connectionStatus:primary&&fallbacks.length>0?"connected":"degraded",selectionReason:"Cheapest verified model is primary; other verified models are fallbacks. Minimal text-only checks only.",cacheHit:false};cache={until:Date.now()+1800000,data};return Response.json(data,{headers:{"Cache-Control":"no-store"}})}catch(e){return Response.json({error:e instanceof Error?e.message:"Model verification failed."},{status:503})}}
-export async function GET(){if(cache&&cache.until>Date.now())return Response.json({...cache.data,cacheHit:true},{headers:{"Cache-Control":"no-store"}});return Response.json({error:"No saved model verification is available in this server instance. Open the UX Audit landing page to run the configured check."},{status:404,headers:{"Cache-Control":"no-store"}})}
+import { freeLLMAPIChatCompletion, freeLlmApiModel } from "@/lib/freellmapi";
+
+export const runtime = "nodejs";
+export const maxDuration = 30;
+
+let lastVerification: { expiresAt: number; payload: any } | null = null;
+
+export async function GET() {
+  if (lastVerification && lastVerification.expiresAt > Date.now()) {
+    return Response.json({ ...lastVerification.payload, cacheHit: true }, { headers: { "Cache-Control": "no-store" } });
+  }
+  const model = freeLlmApiModel();
+  return Response.json({
+    checkedAt: new Date().toISOString(),
+    models: [{ model: model.model, label: "FreeLLMAPI Auto", ok: false, status: "not_tested", latencyMs: 0, totalTokens: null, costUsd: null, promptPrice: null, completionPrice: null }],
+    selectedModel: null,
+    fallbackModels: [],
+    verificationRunCostUsd: null,
+    verificationRunTokens: null,
+    selectionReason: "No inference test has been run. Use Verify now to send one small test request. Upstream selection is managed by FreeLLMAPI.",
+    cacheHit: false,
+  }, { headers: { "Cache-Control": "no-store" } });
+}
+
+export async function POST() {
+  const model = freeLlmApiModel();
+  const started = Date.now();
+  try {
+    const result = await freeLLMAPIChatCompletion({
+      model: model.model,
+      messages: [{ role: "user", content: "Reply with exactly OK. Do not explain." }],
+      max_tokens: 8,
+      temperature: 0,
+      timeoutMs: 20000,
+    });
+    const payload = result.payload as any;
+    const raw = payload?.choices?.[0]?.message?.content;
+    const answer = typeof raw === "string" ? raw : Array.isArray(raw) ? raw.map((item: any) => typeof item === "string" ? item : item?.text ?? "").join("") : "";
+    const usage = payload?.usage ?? {};
+    const modelResult = {
+      model: typeof payload?.model === "string" ? payload.model : model.model,
+      label: "FreeLLMAPI Auto",
+      ok: Boolean(answer.trim()),
+      status: answer.trim() ? "verified" : "no_response",
+      latencyMs: Date.now() - started,
+      totalTokens: typeof usage.total_tokens === "number" ? usage.total_tokens : null,
+      promptTokens: typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : null,
+      completionTokens: typeof usage.completion_tokens === "number" ? usage.completion_tokens : null,
+      costUsd: typeof usage.cost === "number" ? usage.cost : null,
+      promptPrice: null,
+      completionPrice: null,
+      responsePreview: answer.slice(0, 80),
+    };
+    const data = {
+      checkedAt: new Date().toISOString(),
+      models: [modelResult],
+      selectedModel: modelResult.ok ? modelResult : null,
+      fallbackModels: [],
+      verificationRunCostUsd: modelResult.costUsd,
+      verificationRunTokens: modelResult.totalTokens,
+      selectionReason: modelResult.ok
+        ? "FreeLLMAPI Auto returned a visible response. The selected upstream model is shown when supplied by the gateway; cost is known only if usage.cost was returned."
+        : "The gateway returned no visible response. Check its routing profile and model logs.",
+      cacheHit: false,
+      note: "This test deliberately sends one short inference request. It may incur upstream usage. No screenshot or client content was sent.",
+    };
+    lastVerification = { expiresAt: Date.now() + 5 * 60 * 1000, payload: data };
+    return Response.json(data, { status: modelResult.ok ? 200 : 502, headers: { "Cache-Control": "no-store" } });
+  } catch (error) {
+    const data = {
+      checkedAt: new Date().toISOString(),
+      models: [{ model: model.model, label: "FreeLLMAPI Auto", ok: false, status: "failed", latencyMs: Date.now() - started, totalTokens: null, costUsd: null, promptPrice: null, completionPrice: null, error: error instanceof Error ? error.message : "FreeLLMAPI test failed." }],
+      selectedModel: null,
+      fallbackModels: [],
+      verificationRunCostUsd: null,
+      verificationRunTokens: null,
+      selectionReason: "FreeLLMAPI inference failed. Check endpoint, key, model alias and upstream gateway logs.",
+      cacheHit: false,
+    };
+    lastVerification = { expiresAt: Date.now() + 60 * 1000, payload: data };
+    return Response.json(data, { status: 502, headers: { "Cache-Control": "no-store" } });
+  }
+}
