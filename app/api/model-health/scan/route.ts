@@ -25,7 +25,7 @@ export async function POST() {
     const route = {
       provider: "FreeLLMAPI", model: model.model, tier: "router", ok: false, latencyMs: 0,
       promptPrice: null, completionPrice: null, estimatedCostUsd: null, totalTokens: null,
-      status: "configured_not_tested", catalogReachable: true, catalogReachable: true,
+      status: "configured_not_tested", catalogReachable: true,
     };
     return Response.json({
       checkedAt, modelCount: catalog.length, auditCandidateCount: 1, working: [], failed: [],
