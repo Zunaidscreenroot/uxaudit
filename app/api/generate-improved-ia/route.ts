@@ -1,4 +1,4 @@
-import { assertPaidOpenRouterModel } from "@/lib/openrouter-paid";
+import { freeLLMAPIChatCompletion, freeLlmApiModel } from "@/lib/freellmapi";
 export const runtime="nodejs";
 export const maxDuration=60;
 function canon(raw:string){try{const u=new URL(raw);u.hash="";u.pathname=u.pathname.replace(/\/+$/,"")||"/";return u.origin+(u.pathname==="/"? "":u.pathname)+u.search;}catch{return "";}}
@@ -49,12 +49,7 @@ export async function POST(req:Request){try{
  const warnings=(Array.isArray(body.iaWarnings)?body.iaWarnings:[]).slice(0,20).map((w:any,i:number)=>({id:txt(w.id,"warning-"+i,100),title:txt(w.title,"IA warning",160),detail:txt(w.detail,"",500),urls:(Array.isArray(w.urls)?w.urls:[]).filter((u:any)=>typeof u==="string").map(canon).filter((u:string)=>pageMap.has(u)).slice(0,40)}));
  const target=typeof body.targetUrl==="string"?canon(body.targetUrl):"",sourceId=txt(body.focusFindingId,"",120),issueTitle=txt(body.focusIssueTitle,"",160);
  const focusFinding=findings.find((f:any)=>f.url===target&&f.sourceId===sourceId),focusWarning=warnings.find((w:any)=>w.title===issueTitle);
- const key=process.env.OPENROUTER_API_KEY;if(!key)return Response.json({error:"OPENROUTER_API_KEY is not configured; the IA proposal cannot be generated."},{status:503});
- const selectedTextModel=process.env.UX_AUDIT_TEXT_MODEL?.trim()||"deepseek/deepseek-v4-flash-0731";
- try { await assertPaidOpenRouterModel(selectedTextModel); } catch (error) {
-  const message=error instanceof Error?error.message:"The configured IA model is not verified as paid.";
-  return Response.json({error:message},{status:503});
- }
+ const selectedModel=freeLlmApiModel();
  const source={websiteTitle,root,pages:pages.map(p=>({url:p.url,title:p.title,currentCategory:p.category,currentDepth:p.depth})),findings,iaWarnings:warnings,focus:focusFinding?{type:"finding",...focusFinding}:focusWarning?{type:"IA warning",...focusWarning}:target?{type:"page",url:target}:{type:"whole site"}};
  const prompt=[
  "Act as a senior information architect and UX lead. Return valid JSON only with this shape: {\"summary\":\"...\",\"principles\":[\"...\"],\"tree\":{\"label\":\"website name\",\"url\":\"EXACT ROOT URL\",\"rationale\":\"...\",\"findingIds\":[],\"children\":[{\"label\":\"group or page\",\"url\":null,\"rationale\":\"...\",\"findingIds\":[],\"children\":[]}]},\"fixes\":[{\"findingId\":\"exact supplied id\",\"url\":\"exact URL\",\"status\":\"addressed|partially_addressed|outside_ia_scope\",\"resolution\":\"...\",\"rationale\":\"...\",\"affectedUrls\":[\"exact URL\"]}],\"warningFixes\":[{\"warningId\":\"exact warning id\",\"status\":\"addressed|partially_addressed|outside_ia_scope\",\"resolution\":\"...\",\"rationale\":\"...\",\"affectedUrls\":[\"exact URL\"]}],\"globalChanges\":[{\"title\":\"...\",\"change\":\"...\",\"reason\":\"...\"}]}",
@@ -68,13 +63,16 @@ export async function POST(req:Request){try{
  let lastModelIssue="The model did not return valid JSON.";
  for(let attempt=0;attempt<2&&!parsed;attempt++){
   const requestPrompt=attempt===0?prompt:prompt+"\n\nREPAIR: Your previous response was not valid JSON. Return one compact, syntactically valid JSON object only. No Markdown, no comments, no trailing commas, no extra prose. Keep every required top-level key. Keep each resolution/rationale to one concise sentence and preserve every supplied URL.";
-  const requestBody:any={model:selectedTextModel,messages:[{role:"user",content:requestPrompt}],max_tokens:attempt===0?5000:2800,temperature:0.1,reasoning:{effort:"low"},provider:{allow_fallbacks:false,max_price:{prompt:0.5,completion:2}}};
-  if(attempt===0)requestBody.response_format={type:"json_object"};
   try{
-   const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:"Bearer "+key,"Content-Type":"application/json","HTTP-Referer":"https://uxaudit.vercel.app","X-Title":"UX Audit improved IA proposal"},body:JSON.stringify(requestBody),signal:AbortSignal.timeout(22000),cache:"no-store"});
-   const responseTextBody=await response.text();
-   let result:any={};try{result=JSON.parse(responseTextBody);}catch{result={rawText:responseTextBody};}
-   if(!response.ok){lastModelIssue=txt(result?.error?.message,"OpenRouter returned HTTP "+response.status,450);console.warn("[uxaudit] improved_ia_model_http_error",JSON.stringify({attempt,status:response.status,reason:lastModelIssue}));continue;}
+   const completion=await freeLLMAPIChatCompletion({
+    model:selectedModel.model,
+    messages:[{role:"user",content:requestPrompt}],
+    max_tokens:attempt===0?5000:2800,
+    temperature:0.1,
+    ...(attempt===0?{response_format:{type:"json_object" as const}}:{}),
+    timeoutMs:22000
+   });
+   const result:any=completion.payload;
    const choice=result?.choices?.[0], message=choice?.message;
    for(const candidate of [message?.content,message?.parsed,message?.output_text,result?.output_text]){
     const candidateParsed=parse(candidate);
@@ -83,10 +81,10 @@ export async function POST(req:Request){try{
    if(!parsed){
     const candidateText=responseText(message?.content)||responseText(message?.reasoning)||responseText(result?.output_text);
     lastModelIssue="finish_reason="+String(choice?.finish_reason||"unknown")+", content_chars="+candidateText.length;
-    console.warn("[uxaudit] improved_ia_invalid_model_json",JSON.stringify({attempt,model:result?.model||"openrouter/auto",finishReason:choice?.finish_reason||null,contentChars:candidateText.length,contentPreview:candidateText.slice(0,160)}));
+    console.warn("[uxaudit] improved_ia_invalid_model_json",JSON.stringify({attempt,model:result?.model||"auto",finishReason:choice?.finish_reason||null,contentChars:candidateText.length,contentPreview:candidateText.slice(0,160)}));
    }
   }catch(error){
-   lastModelIssue=error instanceof Error?error.message:"OpenRouter request failed.";
+   lastModelIssue=error instanceof Error?error.message:"FreeLLMAPI request failed.";
    console.warn("[uxaudit] improved_ia_model_request_failed",JSON.stringify({attempt,reason:lastModelIssue}));
   }
  }
