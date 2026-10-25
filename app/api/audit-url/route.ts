@@ -1,5 +1,5 @@
 import { privateHost, resolvesToPrivateAddress } from "@/lib/public-url";
-import { assertPaidOpenRouterModel } from "@/lib/openrouter-paid";
+import { freeLlmApiModel } from "@/lib/freellmapi";
 import { createAuditFromScreenshot } from "@/lib/audit";
 import { captureWebsiteScreenshot } from "@/lib/capture-screenshot";
 import { saveAudit } from "@/lib/knowledge-base";
@@ -34,26 +34,8 @@ export async function POST(req: Request) {
     }
 
 
-    const models: Array<{ provider: "OpenRouter"; model: string; tier: "paid" }> = Array.isArray(body?.verifiedModels)
-      ? body.verifiedModels.filter((m: any) =>
-          m?.provider === "OpenRouter" &&
-          m?.tier === "paid" &&
-          typeof m.model === "string" &&
-          !m.model.endsWith(":free") &&
-          m.model !== "openrouter/auto"
-        ).slice(0, 2)
-      : [];
-
-    // MCP callers do not have the browser's verifiedModels list. Use the configured,
-    // explicit paid vision model on the server; lib/openrouter-paid verifies actual
-    // catalogue pricing before any model inference is allowed.
-    if (!models.length) {
-      models.push({
-        provider: "OpenRouter",
-        model: process.env.UX_AUDIT_VISION_MODEL?.trim() || "deepseek/deepseek-v4.1-flash-1017",
-        tier: "paid",
-      });
-    }
+    // Ignore browser-supplied upstream model IDs. The server-side FreeLLMAPI profile is authoritative.
+    const models = [freeLlmApiModel()];
 
     const auditMode = body?.auditMode === "mobile" ? "mobile" : "desktop";
     const viewport = auditMode === "mobile" ? { width: 393, height: 852 } : { width: 1440, height: 900 };
@@ -65,9 +47,6 @@ export async function POST(req: Request) {
 
     const [captured] = await Promise.all([
       captureWebsiteScreenshot({ url: u.href, width: viewport.width, height: viewport.height }),
-      // Run the paid-pricing check alongside capture instead of serially delaying the next stage.
-      assertPaidOpenRouterModel(models[0].model),
-      ...models.slice(1).map((model) => assertPaidOpenRouterModel(model.model)),
     ]);
     const bytes = captured.bytes;
     console.info("[uxaudit] screenshot_provider_selected", JSON.stringify({
