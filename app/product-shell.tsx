@@ -48,11 +48,11 @@ export default function ProductShell({ children }: { children: ReactNode }) {
   const refreshConnection = useCallback(async (force = false) => {
     setChecking(true);
     try {
-      const response = await fetch("/api/openrouter-status" + (force ? "?force=1" : ""), { cache: "no-store" });
+      const response = await fetch("/api/freellmapi-status" + (force ? "?force=1" : ""), { cache: "no-store" });
       const payload = await response.json();
-      setConnection(response.ok ? payload : { connected: false, provider: "OpenRouter", error: payload?.error || "Status endpoint unavailable" });
+      setConnection(response.ok ? payload : { connected: false, provider: "FreeLLMAPI", error: payload?.error || "Status endpoint unavailable" });
     } catch (error) {
-      setConnection({ connected: false, provider: "OpenRouter", error: error instanceof Error ? error.message : "Connection check failed" });
+      setConnection({ connected: false, provider: "FreeLLMAPI", error: error instanceof Error ? error.message : "Connection check failed" });
     } finally {
       setChecking(false);
     }
@@ -112,10 +112,10 @@ export default function ProductShell({ children }: { children: ReactNode }) {
           <button type="button" className="uxd-mobile-menu-toggle" aria-controls="uxd-sidebar" aria-expanded={mobileNavOpen} aria-label={mobileNavOpen ? "Close navigation" : "Open navigation"} onClick={() => setMobileNavOpen(open => !open)}><span aria-hidden="true">☰</span></button>
           <div className="uxd-breadcrumb"><span>Workspace</span><i>/</i><strong>{title}</strong></div>
           <div className="uxd-topbar-actions">
-            <button type="button" className="uxd-status-button" onClick={() => void refreshConnection(true)} title={connection?.error || "Click to refresh OpenRouter status"} aria-label="Refresh OpenRouter connection status">
+            <button type="button" className="uxd-status-button" onClick={() => void refreshConnection(true)} title={connection?.error || "Click to refresh FreeLLMAPI status"} aria-label="Refresh FreeLLMAPI connection status">
               <Badge tone={connection?.connected ? "success" : connection ? "danger" : "neutral"} className="uxd-status-chip">
                 <span className="uxd-status-dot" />
-                <span>{checking ? "Checking provider…" : connection?.connected ? "OpenRouter connected" : connection ? "Provider unavailable" : "Connecting provider"}</span>
+                <span>{checking ? "Checking provider…" : connection?.connected ? "FreeLLMAPI connected" : connection ? "Provider unavailable" : "Connecting provider"}</span>
                 <span className={"uxd-refresh-icon" + (checking ? " is-spinning" : "")}>↻</span>
               </Badge>
             </button>

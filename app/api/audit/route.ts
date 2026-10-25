@@ -1,5 +1,6 @@
 import { createAuditFromScreenshot, type AuditStage } from "@/lib/audit";
 import { saveAudit } from "@/lib/knowledge-base";
+import { freeLlmApiModel } from "@/lib/freellmapi";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -12,20 +13,8 @@ export async function POST(request: Request) {
     if (!file.type.startsWith("image/")) return Response.json({ error: "Please upload a PNG, JPG, JPEG, or WebP screenshot." }, { status: 400 });
     if (file.size > 15 * 1024 * 1024) return Response.json({ error: "Screenshot is too large. Please upload an image smaller than 15 MB." }, { status: 400 });
 
-    const verifiedRaw=formData.get("verifiedModels");
-    let parsedModels: unknown = [];
-    try { parsedModels=JSON.parse(typeof verifiedRaw==="string"?verifiedRaw:"[]"); } catch { parsedModels=[]; }
-    const verifiedModels: Array<{provider:"OpenRouter";model:string;tier:"paid"}> = Array.isArray(parsedModels)
-      ? parsedModels.filter((model): model is {provider:"OpenRouter";model:string;tier:"paid"} =>
-          Boolean(model) && typeof model === "object" &&
-          (model as Record<string,unknown>).provider === "OpenRouter" &&
-          (model as Record<string,unknown>).tier === "paid" &&
-          typeof (model as Record<string,unknown>).model === "string" &&
-          !(model as {model:string}).model.endsWith(":free") &&
-          (model as {model:string}).model !== "openrouter/auto"
-        ).slice(0, 2)
-      : [];
-    if(!verifiedModels.length) return Response.json({error:"No verified paid image-capable OpenRouter model was supplied. Refresh model verification; free and auto-routed models are disabled for audits."},{status:503});
+    // Upstream model selection is controlled by the FreeLLMAPI server profile.
+    const verifiedModels = [freeLlmApiModel()];
     const buffer = Buffer.from(await file.arrayBuffer());
     const encoder = new TextEncoder();
     const stream = new ReadableStream({

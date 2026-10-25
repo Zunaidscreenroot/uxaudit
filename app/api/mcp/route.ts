@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { getMcpIssuer, verifyMcpPayload } from "../../../lib/mcp-oauth";
 import { listCoachingLessons, reviewCoachingLesson, saveCoachingLesson } from "@/lib/coach-learning";
+import { freeLLMAPIModelCatalog, freeLlmApiModel } from "@/lib/freellmapi";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,13 +14,13 @@ type Session = { id: string; root: string; title?: string; discovery: {root:stri
 
 const toolDefinitions = [
   { name: "uxaudit_get_connection_status", title: "Get UX Audit connection status", requiredScope: "audit:read", annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-    description: "Check whether the MCP service and OpenRouter API key are configured and reachable. Does not run model inference or spend generation tokens.",
+    description: "Check whether the MCP service and FreeLLMAPI model catalogue are configured and reachable. Does not run model inference or spend generation tokens.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
   { name: "uxaudit_discover_site", title: "Discover website IA", requiredScope: "audit:read", annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
     description: "Discover a public website's linked pages, sitemap URLs, page labels, categories and URL depth. Does not run AI screenshot analysis.",
     inputSchema: { type: "object", properties: { url: { type: "string", description: "Website root URL." } }, required: ["url"], additionalProperties: false } },
   { name: "uxaudit_run_page_audit", title: "Run desktop or mobile UX audit", requiredScope: "audit:run", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-    description: "Capture a public page and run evidence-led AI UX analysis. mode is desktop or mobile (393×852 CSS px). Uses the configured OpenRouter key and may incur model charges. If CDN/security blocks capture, the tool stops without treating the denial page as UX evidence.",
+    description: "Capture a public page and run evidence-led AI UX analysis. mode is desktop or mobile (393×852 CSS px). Uses the configured FreeLLMAPI route; upstream usage costs depend on its routing profile. If CDN/security blocks capture, the tool stops without treating the denial page as UX evidence.",
     inputSchema: { type: "object", properties: {
       url: { type: "string", description: "Exact page URL to audit." },
       mode: { type: "string", enum: ["desktop", "mobile"], description: "Desktop (1440 px wide) or mobile (393×852 CSS px)." },
@@ -166,20 +167,38 @@ async function runTool(name: string, args: any, request: Request) {
   const origin = new URL(request.url).origin;
 
   if (name === "uxaudit_get_connection_status") {
-    const key = process.env.OPENROUTER_API_KEY?.trim();
-    if (!key) return { service: "UX Audit", mcpServer: "connected", openRouterKeyConfigured: false, openRouterConnected: false, checkedAt: new Date().toISOString() };
+    const model = freeLlmApiModel();
     try {
-      const response = await fetch("https://openrouter.ai/api/v1/key", {
-        headers: { Authorization: "Bearer " + key },
-        signal: AbortSignal.timeout(8000),
-        cache: "no-store",
-      });
-      return { service: "UX Audit", mcpServer: "connected", openRouterKeyConfigured: true, openRouterConnected: response.ok, ...(response.ok ? {} : { providerHttpStatus: response.status }), checkedAt: new Date().toISOString() };
-    } catch {
-      return { service: "UX Audit", mcpServer: "connected", openRouterKeyConfigured: true, openRouterConnected: false, note: "OpenRouter status endpoint could not be reached.", checkedAt: new Date().toISOString() };
+      const { response, payload } = await freeLLMAPIModelCatalog();
+      const models = [
+        ...(Array.isArray(payload.data) ? payload.data : []),
+        ...(Array.isArray(payload.models) ? payload.models : []),
+      ];
+      return {
+        service: "UX Audit",
+        mcpServer: "connected",
+        provider: "FreeLLMAPI",
+        freeLlmApiKeyConfigured: true,
+        freeLlmApiConnected: response.ok,
+        configuredModel: model.model,
+        catalogModelCount: models.length,
+        ...(response.ok ? {} : { providerHttpStatus: response.status }),
+        checkedAt: new Date().toISOString(),
+        note: "Catalogue reachability does not verify inference, vision support, or upstream pricing.",
+      };
+    } catch (error) {
+      return {
+        service: "UX Audit",
+        mcpServer: "connected",
+        provider: "FreeLLMAPI",
+        freeLlmApiKeyConfigured: Boolean(process.env.FREELLMAPI_API_KEY && process.env.FREELLMAPI_BASE_URL),
+        freeLlmApiConnected: false,
+        configuredModel: model.model,
+        note: error instanceof Error ? error.message : "FreeLLMAPI status check failed.",
+        checkedAt: new Date().toISOString(),
+      };
     }
   }
-
 
   if (name === "uxaudit_save_coaching_lesson") {
     const saved = await saveCoachingLesson({
@@ -358,7 +377,7 @@ export async function POST(request: Request) {
       protocolVersion: typeof rpc.params?.protocolVersion === "string" ? rpc.params.protocolVersion : "2025-06-18",
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: "uxaudit", title: "UX Audit", version: "1.0.0", websiteUrl: "https://github.com/Zunaidscreenroot/uxaudit" },
-      instructions: "Discover public websites, run evidence-led desktop/mobile screenshot audits, retrieve findings, generate improved IA proposals, and coach UX Audit using reusable learning rules. When the owner gives Hindi/Hinglish feedback, preserve it, distil a concise scoped rule, save it as a draft by default, and activate it only with explicit approval. Approved rules guide later audits but never override screenshot evidence. AI audits and IA generation may incur OpenRouter costs.",
+      instructions: "Discover public websites, run evidence-led desktop/mobile screenshot audits, retrieve findings, generate improved IA proposals, and coach UX Audit using reusable learning rules. When the owner gives Hindi/Hinglish feedback, preserve it, distil a concise scoped rule, save it as a draft by default, and activate it only with explicit approval. Approved rules guide later audits but never override screenshot evidence. AI audits and IA generation may incur upstream costs depending on the configured FreeLLMAPI profile.",
     });
   }
   if (rpc.method === "tools/list") {

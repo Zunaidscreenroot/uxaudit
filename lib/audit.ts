@@ -1,4 +1,4 @@
-import { assertPaidOpenRouterModel } from "@/lib/openrouter-paid";
+import { assertFreeLLMAPIModel, freeLLMAPIChatCompletion, freeLlmApiModel, type FreeLLMAPIModel } from "@/lib/freellmapi";
 import { retrieveRelevantAuditKnowledge } from "@/lib/knowledge-base";
 import { inspectImage } from "@/lib/image-utils";
 
@@ -16,8 +16,6 @@ type Capture = { buffer: Buffer; width: number; height: number; analysisBuffer: 
 type VisualObservation = { id: string; section: string; element: string; issue: string; whyItMatters: string; marker: MarkerPoint };
 type VisualPass = { clientName: string; pageSummary: string; observations: VisualObservation[] };
 
-const DEFAULT_VISION_MODEL = "deepseek/deepseek-v4.1-flash-1017";
-const DEFAULT_TEXT_MODEL = "deepseek/deepseek-v4.1-flash-1017";
 const GEMINI_TIMEOUT_MS = 30000;
 const MAX_SCREENSHOT_BYTES = 15 * 1024 * 1024;
 const CATEGORIES = ["Navigation", "Information hierarchy", "Usability & interaction", "Content & tone", "Visual design", "Responsiveness", "Web performance"] as const;
@@ -40,27 +38,47 @@ function extractJson(text: string): unknown | null {
   return null;
 }
 
-type VerifiedModel = {provider:"OpenRouter";model:string;tier:"paid"};
+type VerifiedModel = FreeLLMAPIModel;
 async function modelGenerate(model: VerifiedModel, parts: Array<Record<string, unknown>>, maxOutputTokens = 4500, timeoutMs = 12000) {
- if (model.provider !== "OpenRouter" || model.tier !== "paid") throw new Error("UX Audit requires a paid OpenRouter model.");
- await assertPaidOpenRouterModel(model.model);
- const key=process.env.OPENROUTER_API_KEY;if(!key)throw new Error("Configure OPENROUTER_API_KEY before running an audit.");
- const content:any[]=[];for(const part of parts){if(typeof part.text==="string")content.push({type:"text",text:part.text});else if(part.inline_data&&typeof part.inline_data==="object"){const im=part.inline_data as {mime_type?:string;data?:string};if(im.data)content.push({type:"image_url",image_url:{url:"data:"+(im.mime_type||"image/jpeg")+";base64,"+im.data}});}}
- let lastError="OpenRouter model request failed.";const started=Date.now();
+ if (model.provider !== "FreeLLMAPI" || model.tier !== "router") throw new Error("UX Audit requires the configured FreeLLMAPI route.");
+ await assertFreeLLMAPIModel(model.model);
+ const content:any[]=[];
+ for(const part of parts){
+  if(typeof part.text==="string")content.push({type:"text",text:part.text});
+  else if(part.inline_data&&typeof part.inline_data==="object"){
+   const im=part.inline_data as {mime_type?:string;data?:string};
+   if(im.data)content.push({type:"image_url",image_url:{url:"data:"+(im.mime_type||"image/jpeg")+";base64,"+im.data}});
+  }
+ }
+ let lastError="FreeLLMAPI model request failed.";
+ const started=Date.now();
  try{
   const stage=parts.some(p=>typeof p.text==="string"&&/IMAGE-TO-TEXT stage/.test(String(p.text)))?"visual":"text";
-  console.info("[uxaudit] model_request_start",JSON.stringify({model:model.model,stage,timeoutMs,maxOutputTokens}));
-  const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:"Bearer "+key,"Content-Type":"application/json","HTTP-Referer":"https://uxauditscreenroot.vercel.app","X-Title":"UX Audit","X-OpenRouter-Metadata":"enabled"},body:JSON.stringify({model:model.model,messages:[{role:"user",content}],max_tokens:maxOutputTokens,temperature:0.1,reasoning_effort:"none",response_format:{type:"json_object"},provider:{allow_fallbacks:true,sort:"latency",max_price:{prompt:0.5,completion:2}}}),signal:AbortSignal.timeout(timeoutMs),cache:"no-store"});
-  const rawBody=await response.text();let payload:any={};try{payload=rawBody?JSON.parse(rawBody):{};}catch{throw new Error("OpenRouter returned invalid JSON (HTTP "+response.status+"): "+rawBody.slice(0,180));}
-  if(response.ok){
-   const message=payload?.choices?.[0]?.message;const raw=message?.content;
-   const text=typeof raw==="string"?raw:Array.isArray(raw)?raw.map((x:any)=>x?.text??x?.content??"").join(""):"";
-   if(text.trim()){console.info("[uxaudit] model_request_ok",JSON.stringify({requestedModel:model.model,actualModel:payload?.model??null,stage,elapsedMs:Date.now()-started,finishReason:payload?.choices?.[0]?.finish_reason??null,usage:payload?.usage??null,routerMetadata:payload?.openrouter_metadata??null}));return text;}
-   const finish=payload?.choices?.[0]?.finish_reason??"unknown";const usage=payload?.usage??{};const messageKeys=message&&typeof message==="object"?Object.keys(message):[];
-   console.warn("[uxaudit] openrouter_empty_response",JSON.stringify({requestedModel:model.model,actualModel:payload?.model??null,requestId:payload?.id??null,stage,finishReason:finish,usage,messageFields:messageKeys,contentType:Array.isArray(raw)?"array":typeof raw,contentLength:typeof raw==="string"?raw.length:Array.isArray(raw)?raw.length:0,reasoningLength:typeof message?.reasoning==="string"?message.reasoning.length:0}));lastError="HTTP 200 but no final text (finish_reason="+finish+", prompt_tokens="+(usage.prompt_tokens??"?")+", completion_tokens="+(usage.completion_tokens??"?")+", message_fields="+messageKeys.join(",")+")";
-  }else lastError="OpenRouter "+model.model+" returned HTTP "+response.status+": "+(payload?.error?.message??rawBody.slice(0,180)??"Provider request failed");
- }catch(e){lastError=e instanceof Error?(e.name==="TimeoutError"||e.name==="AbortError"?"Timed out after "+timeoutMs+"ms waiting for "+model.model+".":e.message):"OpenRouter request failed";}
- console.warn("[uxaudit] model_request_failed",JSON.stringify({model:model.model,elapsedMs:Date.now()-started,error:lastError}));throw new Error(lastError);
+  console.info("[uxaudit] model_request_start",JSON.stringify({provider:"FreeLLMAPI",model:model.model,stage,timeoutMs,maxOutputTokens}));
+  const result=await freeLLMAPIChatCompletion({
+   model:model.model,
+   messages:[{role:"user",content}],
+   max_tokens:maxOutputTokens,
+   temperature:0.1,
+   response_format:{type:"json_object"},
+   timeoutMs
+  });
+  const payload=result.payload as any;
+  const message=payload?.choices?.[0]?.message;
+  const raw=message?.content;
+  const text=typeof raw==="string"?raw:Array.isArray(raw)?raw.map((x:any)=>x?.text??x?.content??"").join(""):"";
+  if(text.trim()){
+   console.info("[uxaudit] model_request_ok",JSON.stringify({provider:"FreeLLMAPI",requestedModel:model.model,actualModel:payload?.model??null,stage,elapsedMs:Date.now()-started,finishReason:payload?.choices?.[0]?.finish_reason??null,usage:payload?.usage??null}));
+   return text;
+  }
+  const finish=payload?.choices?.[0]?.finish_reason??"unknown";
+  const usage=payload?.usage??{};
+  const messageKeys=message&&typeof message==="object"?Object.keys(message):[];
+  console.warn("[uxaudit] freellmapi_empty_response",JSON.stringify({requestedModel:model.model,actualModel:payload?.model??null,requestId:payload?.id??null,stage,finishReason:finish,usage,messageFields:messageKeys,contentType:Array.isArray(raw)?"array":typeof raw,contentLength:typeof raw==="string"?raw.length:Array.isArray(raw)?raw.length:0,reasoningLength:typeof message?.reasoning==="string"?message.reasoning.length:0}));
+  lastError="HTTP 200 but no final text (finish_reason="+finish+", prompt_tokens="+(usage.prompt_tokens??"?")+", completion_tokens="+(usage.completion_tokens??"?")+", message_fields="+messageKeys.join(",")+")";
+ }catch(e){lastError=e instanceof Error?(e.name==="TimeoutError"||e.name==="AbortError"?"Timed out after "+timeoutMs+"ms waiting for FreeLLMAPI "+model.model+".":e.message):"FreeLLMAPI request failed";}
+ console.warn("[uxaudit] model_request_failed",JSON.stringify({provider:"FreeLLMAPI",model:model.model,elapsedMs:Date.now()-started,error:lastError}));
+ throw new Error(lastError);
 }
 
 function normalizeMarker(value: unknown): MarkerPoint {
@@ -341,20 +359,18 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   // Cloudflare Workers cannot run Sharp’s native libvips binary; keep validated image bytes intact.
   const analysisBuffer = buffer;
   const capture: Capture = { buffer, width, height, analysisBuffer, mimeType: metadata.mimeType, title: filename.replace(/\.[^.]+$/, "") || "Uploaded screenshot" };
-  const allowedModels=verifiedModels.filter(m=>m&&m.provider==="OpenRouter"&&m.tier==="paid"&&typeof m.model==="string"&&m.model.length>0&&!m.model.endsWith(":free")&&m.model!=="openrouter/auto").slice(0,2);
-  // The connection layer owns model selection: the first verified model is the primary; later entries are ordered fallbacks.
-  const fastModelId = process.env.UX_AUDIT_VISION_MODEL?.trim() || DEFAULT_VISION_MODEL;
-  const textModelId = process.env.UX_AUDIT_TEXT_MODEL?.trim() || DEFAULT_TEXT_MODEL;
-  const visionModel: VerifiedModel = { provider: "OpenRouter", model: fastModelId, tier: "paid" };
-  const textModel: VerifiedModel = { provider: "OpenRouter", model: textModelId, tier: "paid" };
-  if(!visionModel||!textModel)throw new Error("At least one verified OpenRouter model is required; refresh model availability and retry.");
+  void verifiedModels; // The FreeLLMAPI gateway owns upstream model selection; caller-supplied upstream IDs are intentionally ignored.
+  const allowedModels: VerifiedModel[] = [];
+  const visionModel: VerifiedModel = freeLlmApiModel();
+  const textModel: VerifiedModel = freeLlmApiModel();
+  if(!visionModel||!textModel)throw new Error("FreeLLMAPI model routing is not configured.");
 
   onStage?.({ id: "capture", label: "Preparing screenshot", detail: auditMode === "mobile" ? `Using a mobile capture with a 393 × 852 CSS-pixel reference viewport; captured image size is ${width} × ${height}px.` : `Using the original ${width} × ${height}px desktop full-page screenshot; no visual crops will be generated.`, status: "complete" });
-  onStage?.({ id: "analyse", label: "OpenRouter screenshot analysis", detail: "Explicit paid vision model · image input enabled · verified non-zero pricing · provider price ceiling applied. Automatic routing and free models are disabled.", status: "active" });
+  onStage?.({ id: "analyse", label: "FreeLLMAPI screenshot analysis", detail: "FreeLLMAPI Auto route · image input requested. The upstream model and cost depend on the configured gateway profile.", status: "active" });
   let visualPass: VisualPass | null = null;let visualErrors:string[]=[];
   const visionCandidates=[visionModel,...allowedModels.filter(m=>m.model!==visionModel.model)];
   for(let i=0;i<visionCandidates.length;i++){const candidate=visionCandidates[i];const timeoutMs=i===0?9000:i===1?6500:5000;try{visualPass=await createVisualPass(candidate,capture,timeoutMs,auditMode);break;}catch(e){visualErrors.push(candidate.model+": "+(e instanceof Error?e.message:"failed"));}}
-  if(!visualPass)throw new Error("OpenRouter Auto Router could not analyze the screenshot. "+visualErrors.join(" | "));
+  if(!visualPass)throw new Error("FreeLLMAPI could not analyze the screenshot. "+visualErrors.join(" | "));
   // Deduplicate near-identical model observations before review and marker generation.
   const distinctObservations: VisualObservation[] = [];
   const tokenSet = (value: string) => new Set(normalizeIssueText(value).split(" ").filter((token) => token.length > 2));
@@ -377,11 +393,11 @@ export async function createAuditFromScreenshot(buffer: Buffer, filename: string
   const knowledgeContext=await retrieveRelevantAuditKnowledge(knowledgeQuery,6);
   if(knowledgeContext)onStage?.({id:"knowledge",label:"Retrieve prior audit evidence",detail:"Retrieved approved guidance from the shared Knowledge Base and relevant examples from Past Findings; current findings still require screenshot evidence.",status:"complete"});
 
-  onStage?.({ id: "quality", label: "OpenRouter UX reasoning", detail: "Explicit paid text model · verified non-zero pricing · provider price ceiling applied. Automatic routing and free models are disabled.", status: "active" });
+  onStage?.({ id: "quality", label: "FreeLLMAPI UX reasoning", detail: "FreeLLMAPI Auto route · structured UX reasoning. The upstream model and cost depend on the configured gateway profile.", status: "active" });
   let review: unknown[]=[];let reviewOk=visualPass.observations.length===0;let reviewErrors:string[]=[];
   const textCandidates=[textModel,...allowedModels.filter(m=>m.model!==textModel.model)];
   if (visualPass.observations.length > 0) for(let i=0;i<textCandidates.length;i++){const candidate=textCandidates[i];const timeoutMs=i===0?8500:i===1?6000:5000;try{review=await createTextReview(candidate,visualPass,timeoutMs,knowledgeContext);if(review.length){reviewOk=true;break;}reviewErrors.push(candidate.model+": empty findings");}catch(e){reviewErrors.push(candidate.model+": "+(e instanceof Error?e.message:"failed"));}}
-  if(!reviewOk){console.warn("[uxaudit] text_review_degraded",JSON.stringify({errors:reviewErrors,observations:visualPass.observations.length}));onStage?.({id:"quality",label:"OpenRouter UX reasoning",detail:"OpenRouter did not return valid structured research findings; preserving screenshot evidence and using conservative evidence-linked fallback recommendations. "+reviewErrors.join(" | "),status:"complete"});review=[];}else{onStage?.({id:"quality",label:"OpenRouter UX reasoning",detail:"OpenRouter returned structured UX laws, research context and business-funnel hypotheses.",status:"complete"});}
+  if(!reviewOk){console.warn("[uxaudit] text_review_degraded",JSON.stringify({errors:reviewErrors,observations:visualPass.observations.length}));onStage?.({id:"quality",label:"FreeLLMAPI UX reasoning",detail:"FreeLLMAPI did not return valid structured research findings; preserving screenshot evidence and using conservative evidence-linked fallback recommendations. "+reviewErrors.join(" | "),status:"complete"});review=[];}else{onStage?.({id:"quality",label:"FreeLLMAPI UX reasoning",detail:"FreeLLMAPI returned structured UX laws, research context and business-funnel hypotheses.",status:"complete"});}
 
   onStage?.({ id: "markers", label: "Place evidence markers", detail: "Linking each finding to its exact region on the original screenshot; no crops are created.", status: "active" });
   const reviewByObservation = new Map<string, unknown>();

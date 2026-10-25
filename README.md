@@ -7,7 +7,7 @@ AI-assisted UX auditing platform for turning website experiences into prioritize
 - Website information-architecture discovery from public navigation and sitemap files
 - Desktop and mobile screenshot capture with server-side Chromium
 - Evidence-led UX findings, severity, recommendations and screenshot markers
-- OpenRouter model connection and cost status
+- FreeLLMAPI model connection and usage transparency
 - Saved IA sessions, findings, and improved IA proposals
 - Remote MCP server with OAuth authorization for ChatGPT-compatible clients
 
@@ -24,7 +24,7 @@ OAuth discovery endpoints (rewritten by Vercel/Next.js to registered API routes)
 
 Available MCP tools include:
 
-- `uxaudit_get_connection_status` — verify server and OpenRouter connectivity without model inference
+- `uxaudit_get_connection_status` — verify server and FreeLLMAPI catalogue reachability without model inference
 - `uxaudit_discover_site` — discover public pages and information architecture
 - `uxaudit_run_page_audit` — run a desktop or mobile page audit; may incur model API costs
 - `uxaudit_get_session_report` and `uxaudit_get_findings` — retrieve saved session results
@@ -38,7 +38,12 @@ For a preview test, use that preview deployment's host and append `/api/mcp`.
 
 - `UXAUDIT_MCP_OAUTH_SECRET`: a secret value of at least 32 characters, available to the target deployment.
 - `UXAUDIT_MCP_LOGIN_PASSWORD`: the private password entered on the OAuth consent screen. For branch-isolated testing, scope it to the intended Preview git branch.
-- `OPENROUTER_API_KEY`: the server-side OpenRouter inference key.
+- `FREELLMAPI_BASE_URL`: the server-side FreeLLMAPI OpenAI-compatible API root, including `/v1`.
+- `FREELLMAPI_API_KEY`: the server-side FreeLLMAPI gateway key.
+- `FREELLMAPI_MODEL`: optional route alias; defaults to `auto`.
+- `FREELLMAPI_MODELS`: configured route allowlist; defaults to `auto`.
+
+A Cloudflare Worker cannot call your laptop's `127.0.0.1`; production needs a reachable authenticated HTTPS endpoint. Upstream spend and credits remain unknown unless FreeLLMAPI returns auditable usage/cost metadata.
 
 `UXAUDIT_MCP_ISSUER_URL` is optional. When unset, the server derives the issuer from the request origin. Do not set it to the production hostname on a preview deployment.
 
