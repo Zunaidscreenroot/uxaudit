@@ -26,6 +26,20 @@ export async function assertFreeLLMAPIModel(modelId: string): Promise<void> {
   }
 }
 
+export async function freeLLMAPIModelCatalog(timeoutMs = 8_000) {
+  const { baseUrl, apiKey } = config();
+  const response = await fetch(baseUrl + "/models", {
+    headers: { Authorization: "Bearer " + apiKey, Accept: "application/json" },
+    cache: "no-store",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const payload = await response.json().catch(() => ({})) as {
+    data?: Array<{ id?: unknown; name?: unknown }>;
+    models?: Array<{ id?: unknown; name?: unknown }>;
+  };
+  return { response, payload, baseUrl };
+}
+
 export async function freeLLMAPIChatCompletion(input: {
   model?: string;
   messages: Array<{ role: "system" | "user" | "assistant"; content: unknown }>;
